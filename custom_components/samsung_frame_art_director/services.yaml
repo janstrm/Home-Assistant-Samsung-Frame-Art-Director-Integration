@@ -1,0 +1,124 @@
+set_artmode:
+  name: Set Art Mode
+  description: Enable or disable Art Mode on the Samsung Frame TV.
+  target:
+    entity:
+      domain: media_player
+  fields:
+    enabled:
+      description: Whether Art Mode should be enabled.
+      example: true
+      required: true
+      selector:
+        boolean:
+
+rotate_art_now:
+  name: Rotate Art
+  description: Selects a new piece of art based on tags or source folder.
+  fields:
+    tags:
+      name: Tags
+      description: Comma-separated list of tags to filter by (e.g. "summer, nature"). Used if source is "library".
+      example: "winter, blue"
+      selector:
+        text:
+    match_all:
+      name: Match All Tags
+      description: If true, art must match ALL provided tags.
+      example: true
+      default: false
+      selector:
+        boolean:
+    source:
+      name: Source
+      description: Where to pick art from. "library" uses the database/tags. "folder" picks a random file from a directory.
+      example: "library"
+      default: "library"
+      selector:
+        select:
+          options:
+            - library
+            - folder
+    path:
+      name: Folder Path
+      description: Source directory for "folder" mode. Defaults to integration configuration.
+      example: "/media/frame/library"
+      selector:
+        text:
+
+toggle_favorite:
+  name: Toggle Favorite
+  description: Toggle favorite for the currently displayed artwork in the AI library.
+
+cleanup_storage:
+  name: Cleanup Storage
+  description: Delete non-favorite images uploaded by the integration from the TV.
+  target:
+    entity:
+      domain: media_player
+  fields:
+    max_items:
+      description: Keep at most this many integration-managed items on the TV
+      example: 50
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box
+          step: 1
+    max_age_days:
+      description: Delete items older than this many days (optional)
+      example: 30
+      selector:
+        number:
+          min: 1
+          max: 3650
+          mode: box
+          step: 1
+    preserve_current:
+      description: Do not delete currently displayed artwork
+      example: true
+      selector:
+        boolean:
+    only_integration_managed:
+      description: Only delete items tracked by the integration DB
+      example: true
+      selector:
+        boolean:
+    dry_run:
+      description: Only report what would be deleted (no deletion)
+      example: false
+      selector:
+        boolean:
+
+upload_art:
+  name: Upload Art
+  description: >-
+    Upload an image and display it on the Frame. The integration preprocesses to
+    3840x2160 (center-crop). Uses the async Art API when available for reliability;
+    falls back to the sync path otherwise. Matte is currently disabled for stability.
+  target:
+    entity:
+      domain: media_player
+  fields:
+    path:
+      description: >-
+        Path to the image. Use absolute /media paths (e.g. /media/frame/library/example.jpg).
+        You may also pass just a filename and it will assume /media/frame/library/<filename>.
+      example: /media/frame/library/example.jpg
+      required: true
+      selector:
+        text:
+          type: text
+
+art_diagnostics:
+  name: Art Diagnostics
+  description: Log Art Mode support, status, current and a sample of available IDs.
+  target:
+    entity:
+      domain: media_player
+
+process_inbox:
+  name: "Process Inbox"
+  description: "Scans the inbox folder, analyzes images with AI, and moves them to the library."
+

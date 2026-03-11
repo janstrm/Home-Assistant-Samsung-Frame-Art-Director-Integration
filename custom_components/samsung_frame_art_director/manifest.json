@@ -1,0 +1,17 @@
+{
+  "domain": "samsung_frame_art_director",
+  "name": "Samsung Frame Art Director",
+  "version": "1.4.0",
+  "config_flow": true,
+  "documentation": "https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration",
+  "iot_class": "local_polling",
+  "loggers": [
+    "samsungtvws"
+  ],
+  "codeowners": [
+    "@janstrm"
+  ],
+  "requirements": [
+    "samsungtvws@git+https://github.com/NickWaterton/samsung-tv-ws-api.git"
+  ]
+}

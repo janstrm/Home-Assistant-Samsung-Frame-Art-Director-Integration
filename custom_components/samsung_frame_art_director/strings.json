@@ -1,0 +1,63 @@
+{
+  "config": {
+    "flow_title": "{device}",
+    "step": {
+      "user": {
+        "description": "Enter your Samsung Frame TV IP address. If this is the first connection you should see a popup on your TV asking for authorization.",
+        "data": {
+          "host": "Host",
+          "name": "Name"
+        },
+        "data_description": {
+          "host": "The IP or hostname of your TV.",
+          "name": "The display name for the device in Home Assistant."
+        }
+      },
+      "pairing": {
+        "description": "Accept the authorization popup on {device}. After accepting, click Submit to finish pairing."
+      },
+      "encrypted_pairing": {
+        "description": "Please enter the PIN displayed on {device}.",
+        "data": {
+          "pin": "PIN"
+        },
+        "data_description": {
+          "pin": "The PIN displayed on your TV."
+        }
+      }
+    },
+    "error": {
+      "auth_missing": "Authorization is required. Accept the popup on your TV, then submit again.",
+      "cannot_connect": "Cannot connect to the TV. Verify the IP, network, and that the TV is awake.",
+      "invalid_pin": "PIN is invalid, please try again.",
+      "not_supported": "This Samsung device is currently not supported."
+    },
+    "abort": {
+      "already_in_progress": "A configuration flow is already in progress.",
+      "already_configured": "This device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Art Director Options",
+        "data": {
+          "gemini_api_key": "Gemini API Key",
+          "slideshow_enabled": "Enable Slideshow",
+          "slideshow_interval": "Rotation Interval (minutes)",
+          "slideshow_source_type": "Rotation Source",
+          "slideshow_filter": "Slideshow Filter (Tags or Folders)",
+          "slideshow_source_path": "Local Media Path (Legacy)",
+          "mac_address": "MAC Address (for WoL)",
+          "use_wol_before_on": "Send WoL before Art ON",
+          "use_power_key_on_off": "Use Power Key as OFF fallback",
+          "cleanup_max_items": "Cleanup: Max items on TV",
+          "cleanup_max_age_days": "Cleanup: Max age (days)",
+          "cleanup_preserve_current": "Cleanup: Keep current image",
+          "cleanup_only_integration_managed": "Cleanup: Only track integration images",
+          "diagnostics_verbose": "Enable Verbose Logging"
+        }
+      }
+    }
+  }
+}

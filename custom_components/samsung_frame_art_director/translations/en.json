@@ -1,0 +1,67 @@
+{
+  "config": {
+    "flow_title": "{device}",
+    "step": {
+      "user": {
+        "title": "Connect to your Samsung Frame TV",
+        "description": "Enter your TV's IP address. If this is the first connection, a prompt will appear on your TV asking for authorization.",
+        "data": {
+          "host": "Your TV's IP",
+          "name": "Name"
+        },
+        "data_description": {
+          "host": "The IP or hostname of your TV (e.g., 192.168.1.50).",
+          "name": "Display name for the device in Home Assistant."
+        }
+      },
+      "pairing": {
+        "title": "Authorize on your TV",
+        "description": "A pairing prompt should be visible on {device}. Select Allow (prefer 'Always allow'). After accepting, click Submit here to finish pairing. If no prompt appears, make sure the TV is awake and check Device Connection Manager > Access Notifications.",
+        "data": {}
+      },
+      "encrypted_pairing": {
+        "title": "Enter PIN from TV",
+        "description": "Please enter the PIN displayed on {device}.",
+        "data": {
+          "pin": "PIN"
+        },
+        "data_description": {
+          "pin": "The PIN shown on your TV screen."
+        }
+      }
+    },
+    "error": {
+      "auth_missing": "Authorization required. Accept the popup on your TV, then submit again.",
+      "cannot_connect": "Cannot connect to the TV. Verify the IP, network, and that the TV is awake.",
+      "invalid_pin": "PIN is invalid, please try again.",
+      "not_supported": "This Samsung device is currently not supported."
+    },
+    "abort": {
+      "already_in_progress": "A configuration flow is already in progress.",
+      "already_configured": "This device is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Samsung Frame Art Director Options",
+        "data": {
+          "gemini_api_key": "Gemini AI API Key",
+          "slideshow_enabled": "Enable Automated Slideshow",
+          "slideshow_interval": "Rotation Interval (minutes)",
+          "slideshow_source_type": "Source Type (Tags / Folders / Library)",
+          "slideshow_filter": "Source Selection (Folder Path or Tag List)",
+          "slideshow_source_path": "Root Media Path",
+          "mac_address": "TV MAC Address",
+          "use_wol_before_on": "Wake on LAN before switching Art ON",
+          "use_power_key_on_off": "Use Power Remote keys for OFF if Art mode fails",
+          "cleanup_max_items": "Cleanup: Max images to keep on TV",
+          "cleanup_max_age_days": "Cleanup: Max age of images (0 for no limit)",
+          "cleanup_preserve_current": "Do not delete the currently displayed artwork",
+          "cleanup_only_integration_managed": "Only delete images uploaded by this integration",
+          "diagnostics_verbose": "Debug: Enable verbose logging"
+        }
+      }
+    }
+  }
+}
