@@ -29,8 +29,11 @@ class ContentCurator:
         """Process all images in the inbox."""
         api_key = self.entry.options.get("gemini_api_key")
         if not api_key:
-            _LOGGER.warning("No Gemini API key configured. Skipping AI processing.")
-            return {"count": 0, "error": "No API Key"}
+            _LOGGER.warning(
+                "Process Inbox: No Gemini API key configured. "
+                "Please add your API key in the integration options (Settings > Devices > Samsung Frame Art Director > Configure)."
+            )
+            return {"count": 0, "error": "No Gemini API key configured. Add it in integration options."}
 
         analyzer = GeminiAnalyzer(api_key)
         
@@ -48,15 +51,17 @@ class ContentCurator:
         try:
             files = await self.hass.async_add_executor_job(_list_files)
         except Exception as e:
-             return {"count": 0, "error": f"Inbox scan failed: {e}"}
+            _LOGGER.error("Process Inbox: Failed to scan inbox folder '%s': %s", self._inbox_dir, e)
+            return {"count": 0, "error": f"Inbox scan failed: {e}"}
 
         if not files:
-            _LOGGER.info("Inbox is empty.")
+            _LOGGER.info("Process Inbox: Inbox folder '%s' is empty. Nothing to process.", self._inbox_dir)
             return {"count": 0}
 
-        _LOGGER.info(f"Found {len(files)} images in inbox. Starting AI analysis...")
+        _LOGGER.info("Process Inbox: Found %d images in '%s'. Starting AI analysis...", len(files), self._inbox_dir)
         
         processed_count = 0
+        skipped_count = 0
         
         for filename in files:
             source_path = os.path.join(self._inbox_dir, filename)
@@ -71,17 +76,25 @@ class ContentCurator:
                 result = await analyzer.analyze_image(data, prompt="Describe this image")
                 
                 if "error" in result:
-                    _LOGGER.error(f"AI Error for {filename}: {result['error']}")
-                    if "429" in str(result['error']):
+                    error_str = str(result['error'])
+                    if "429" in error_str:
+                        _LOGGER.warning(
+                            "Process Inbox: Gemini API rate limit hit (429) while processing '%s'. "
+                            "Stopping. %d images processed so far, %d remaining.",
+                            filename, processed_count, len(files) - processed_count - skipped_count
+                        )
                         break
+                    _LOGGER.warning(
+                        "Process Inbox: Gemini AI analysis failed for '%s': %s. Skipping this image.",
+                        filename, error_str
+                    )
+                    skipped_count += 1
                     continue
                 
                 tags = ",".join(result.get("tags", []))
                 description = result.get("description", "")
                 
-                _LOGGER.info(f"AI Analysis for {filename}:")
-                _LOGGER.info(f"  Tags: {tags}")
-                _LOGGER.info(f"  Context: {description}")
+                _LOGGER.info("Process Inbox: AI tagged '%s' -> Tags: %s", filename, tags)
 
                 # 2. Probe Metadata (Executor)
                 def _probe():
@@ -109,7 +122,8 @@ class ContentCurator:
                 dest_path = await self.hass.async_add_executor_job(_move)
 
             except Exception as e:
-                _LOGGER.error(f"Failed to analyze or prepare {filename}: {e}")
+                _LOGGER.error("Process Inbox: Failed to analyze/move '%s': %s", filename, e)
+                skipped_count += 1
                 continue
 
             # 4. Update Database (Now file is moved, record it)
@@ -125,17 +139,28 @@ class ContentCurator:
                 processed_count += 1
                 
             except Exception as e:
-                _LOGGER.error(f"Failed to save metadata for {os.path.basename(dest_path)}: {e}")
-                # Optional: Move back to inbox if DB fails? 
-                # For now, Sync Library will handle it if it's in the folder but not DB.
+                _LOGGER.error(
+                    "Process Inbox: File moved to '%s' but failed to save metadata to DB: %s. "
+                    "Run 'Sync Library' to recover this image.",
+                    dest_path, e
+                )
+                skipped_count += 1
 
-        return {"count": processed_count}
+        _LOGGER.info(
+            "Process Inbox: Finished. Processed: %d, Skipped: %d, Total: %d",
+            processed_count, skipped_count, len(files)
+        )
+        return {"count": processed_count, "skipped": skipped_count}
 
     async def async_sync_library(self):
         """Scan the library folder for untracked images and add them to the database."""
         api_key = self.entry.options.get("gemini_api_key")
         if not api_key:
-             return {"count": 0, "error": "No API Key"}
+            _LOGGER.warning(
+                "Sync Library: No Gemini API key configured. "
+                "Please add your API key in the integration options."
+            )
+            return {"count": 0, "error": "No Gemini API key configured. Add it in integration options."}
 
         analyzer = GeminiAnalyzer(api_key)
         db_paths = await self.api.async_get_local_art_paths()
@@ -154,7 +179,7 @@ class ContentCurator:
         if not missing_files:
             return {"count": 0}
 
-        _LOGGER.info(f"Sync: found {len(missing_files)} untracked images in library. Starting recovery...")
+        _LOGGER.info("Sync Library: Found %d untracked images in '%s'. Starting AI analysis...", len(missing_files), self._library_dir)
         
         count = 0
         for path in missing_files:
@@ -170,7 +195,13 @@ class ContentCurator:
                 
                 result = await analyzer.analyze_image(data, prompt="Describe this image")
                 if "error" in result:
-                    _LOGGER.error(f"Sync: AI Error for {os.path.basename(path)}: {result['error']}")
+                    error_str = str(result['error'])
+                    if "429" in error_str:
+                        _LOGGER.warning(
+                            "Sync Library: Gemini API rate limit hit (429). Stopping. %d images synced so far.", count
+                        )
+                        break
+                    _LOGGER.warning("Sync Library: Gemini AI failed for '%s': %s", os.path.basename(path), error_str)
                     continue
 
                 tags = ",".join(result.get("tags", []))
@@ -186,6 +217,7 @@ class ContentCurator:
                 )
                 count += 1
             except Exception as e:
-                _LOGGER.error(f"Sync: Failed to recover {os.path.basename(path)}: {e}")
+                _LOGGER.error("Sync Library: Failed to process '%s': %s", os.path.basename(path), e)
 
+        _LOGGER.info("Sync Library: Finished. Synced %d images.", count)
         return {"count": count}
