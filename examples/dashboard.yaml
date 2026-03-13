@@ -177,7 +177,7 @@ views:
                   - type: toggle
 
               - type: button
-                name: Clean Storage
+                name: Clean TV Storage
                 icon: mdi:delete-sweep
                 tap_action:
                   action: perform-action
