@@ -603,6 +603,16 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if not client:
         return
 
+    # Check if TV is in Art Mode. Do not interrupt movies or wake a fully powered off TV.
+    try:
+        status = await client.async_get_artmode_status()
+        if status not in ("on", "true", "1"):
+            _LOGGER.debug("Slideshow skipped: TV is not in Art Mode (status=%s)", status)
+            return
+    except Exception as e:
+        _LOGGER.debug("Slideshow skipped: Could not determine Art Mode status: %s", e)
+        return
+
     source_type = entry.options.get(CONF_SLIDESHOW_SOURCE_TYPE, SLIDESHOW_SOURCE_FOLDER)
     filter_val = entry.options.get(CONF_SLIDESHOW_FILTER)
     matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)

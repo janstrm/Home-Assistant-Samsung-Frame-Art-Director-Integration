@@ -14,14 +14,6 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. This cust
 
 ---
 
-> [!NOTE] 
-> **Custom Integration vs. Add-on**
-> This project is a Home Assistant **Custom Integration** (Custom Component), *not* an Add-on. 
-> - **Add-ons** (like AdGuard or Node-RED) are separate Docker containers, which is why they list supported architectures (aarch64, amd64, etc.).
-> - **Integrations** run natively inside Python in HA Core. Therefore, this project naturally supports **all HA architectures** (Raspberry Pi, x86, NAS, etc.) out-of-the-box!
-
----
-
 ## 📋 Prerequisites
 
 - **Home Assistant** (Core, Supervised, or OS)
