@@ -12,10 +12,10 @@
 
 views:
   - title: Art Director
-    type: sidebar
+    # type: sidebar (Removed to allow Masonry 3-column layout)
     cards:
       # ==========================================
-      # SIDEBAR (LEFT COLUMN)
+      # COLUMN 1: MAIN CONTROLS
       # ==========================================
       - type: vertical-stack
         cards:
@@ -58,6 +58,11 @@ views:
                   data:
                     enabled: false
 
+      # ==========================================
+      # COLUMN 2: AUTOMATION & MAINTENANCE
+      # ==========================================
+      - type: vertical-stack
+        cards:
           - type: markdown
             content: "### ⚙️ Automation"
             
@@ -139,7 +144,7 @@ views:
                     entity_id: media_player.samsung_frame
 
       # ==========================================
-      # MAIN CONTENT (RIGHT COLUMN)
+      # COLUMN 3: AI ART GALLERY
       # ==========================================
       - type: vertical-stack
         cards:
