@@ -429,42 +429,51 @@ class SamsungFrameClient:
              _LOGGER.info("Rotate: no art matches tags: %s (checked %s items)", tags, len(all_candidates))
              return False
 
-        # 3. Select Winner
+        # 3. Select Winner (with retry for stale local entries)
         import random
-        winner = random.choice(filtered)
-        _LOGGER.info("Rotate: selected %s (%s)", winner.get('path') or winner.get('id'), winner['type'])
+        max_attempts = min(10, len(filtered))
+        for attempt in range(max_attempts):
+            winner = random.choice(filtered)
+            _LOGGER.info("Rotate: selected %s (%s)", winner.get('path') or winner.get('id'), winner['type'])
 
-        # 4. Act (Select or Upload+Select)
-        try:
-            if winner['type'] == 'tv':
-                async with self._art_lock:
-                    await self._async_select_image_id(winner['id'], matte=matte)
-                return True
-            
-            elif winner['type'] == 'local':
-                # Upload first
-                path = winner['path']
-                try:
-                    def _read():
-                        with open(path, "rb") as f:
-                            return f.read()
-                    img_data = await asyncio.to_thread(_read)
-                except FileNotFoundError:
-                     _LOGGER.error("Rotate: Local file missing: %s", path)
-                     return False
+            # 4. Act (Select or Upload+Select)
+            try:
+                if winner['type'] == 'tv':
+                    async with self._art_lock:
+                        await self._async_select_image_id(winner['id'], matte=matte)
+                    return True
+                
+                elif winner['type'] == 'local':
+                    # Upload first
+                    path = winner['path']
+                    try:
+                        def _read():
+                            with open(path, "rb") as f:
+                                return f.read()
+                        img_data = await asyncio.to_thread(_read)
+                    except FileNotFoundError:
+                        _LOGGER.warning(
+                            "Rotate: Local file missing (stale DB entry), skipping: %s", path
+                        )
+                        filtered.remove(winner)
+                        if not filtered:
+                            _LOGGER.warning("Rotate: No valid candidates left after removing stale entries")
+                            return False
+                        continue
 
-                _LOGGER.debug("Rotate: uploading local item: %s", path)
-                await self.async_upload_image(img_data, matte=matte, source_file=path)
-                
-                # Note: async_upload_image does not return ID easily in all paths, 
-                # but it DOES select the image after upload.
-                # So we are done!
-                return True
-                
-        except Exception as e:
-            _LOGGER.error("Rotate: Action failed: %s", e)
-            return False
+                    _LOGGER.debug("Rotate: uploading local item: %s", path)
+                    await self.async_upload_image(img_data, matte=matte, source_file=path)
+                    
+                    # Note: async_upload_image does not return ID easily in all paths, 
+                    # but it DOES select the image after upload.
+                    # So we are done!
+                    return True
+                    
+            except Exception as e:
+                _LOGGER.error("Rotate: Action failed: %s", e)
+                return False
         
+        _LOGGER.warning("Rotate: Could not find a valid image after %d attempts", max_attempts)
         return False
         
     async def _async_select_image_id(self, content_id: str, matte: str = "none") -> None:
