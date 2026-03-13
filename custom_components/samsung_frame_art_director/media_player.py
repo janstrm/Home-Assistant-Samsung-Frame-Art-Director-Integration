@@ -159,7 +159,9 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         
         # Track and cleanup
         await self._client.async_track_art(remote_filename, tags=tags)
-        await self._client.async_cleanup_storage(max_items=DEFAULT_CLEANUP_MAX_ITEMS)
+        
+        cleanup_max = self._entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
+        await self._client.async_cleanup_storage(max_items=cleanup_max)
 
     async def async_rotate_art_service(self, tags: str | None = None, match_all: bool = False, source: str = "library", path: str | None = None) -> None:
         """Rotate art using optional tag filters or folder source."""

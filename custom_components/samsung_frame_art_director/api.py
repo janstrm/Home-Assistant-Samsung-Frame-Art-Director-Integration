@@ -565,9 +565,6 @@ class SamsungFrameClient:
         try:
             _LOGGER.debug("Rotate(folder): uploading %s", file_path)
             await self.async_upload_image(image_bytes, matte=matte, source_file=file_path)
-            
-            from .const import DEFAULT_CLEANUP_MAX_ITEMS
-            await self.async_cleanup_storage(max_items=DEFAULT_CLEANUP_MAX_ITEMS)
             return True
         except Exception as e:
             _LOGGER.error("Rotate(folder): failed to set art from %s: %s", file_path, e)

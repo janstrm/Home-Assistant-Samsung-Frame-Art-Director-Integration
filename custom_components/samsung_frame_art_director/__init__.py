@@ -637,8 +637,9 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
             matte=matte
         )
         # Cleanup and exit early (skip default logic)
+        cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
         try:
-            await client.async_cleanup_storage(max_items=10, only_integration_managed=False)
+            await client.async_cleanup_storage(max_items=cleanup_max, only_integration_managed=False)
         except Exception: 
             pass
         return
@@ -661,10 +662,11 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # All Library
         await client.async_rotate_art(match_all=True, matte=matte)
 
-    # Force cleanup to keep only the last 10 images (User requested)
+    # Force cleanup to keep only the configured max images (default 50)
     # We disable "only_integration_managed" to allow cleaning up old/untracked images
+    cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
     try:
-        await client.async_cleanup_storage(max_items=10, only_integration_managed=False)
+        await client.async_cleanup_storage(max_items=cleanup_max, only_integration_managed=False)
     except Exception as e:
         _LOGGER.warning("Slideshow cleanup failed: %s", e)
 
