@@ -143,6 +143,19 @@ views:
                   target:
                     entity_id: media_player.samsung_frame
 
+          - type: grid
+            columns: 1
+            square: false
+            cards:
+              - type: button
+                name: Reset Database
+                icon: mdi:database-remove
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.purge_database
+                  confirmation:
+                    text: "Are you sure? This will permanently wipe the local art database and all AI tags."
+
       # ==========================================
       # COLUMN 3: AI ART GALLERY
       # ==========================================
