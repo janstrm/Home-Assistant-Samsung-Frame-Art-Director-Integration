@@ -1,0 +1,304 @@
+# ==============================================================================
+# 🎨 Samsung Frame Art Director - Basic Dashboard Example
+# ==============================================================================
+# This is a sample dashboard configuration that combines the control panel 
+# and the AI Art Gallery into a single, clean view.
+#
+# IMPORTANT PREREQUISITES:
+# - To use the Gallery view, you must install `auto-entities` via HACS Frontend.
+# - To use the Image Popups, you must install `browser_mod` via HACS.
+# All other buttons and controls use native Home Assistant cards.
+# ==============================================================================
+
+views:
+  - title: Art Director
+    type: sidebar
+    cards:
+      # ==========================================
+      # SIDEBAR (LEFT COLUMN)
+      # ==========================================
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            content: >
+              ## 🖼️ Frame Controls
+              Manage your TV's Art Mode
+          
+          # Now Playing Preview
+          - type: picture-entity
+            entity: image.samsung_frame_art_preview
+            name: "Now Playing"
+            show_name: true
+            show_state: false
+            camera_view: live
+
+          # Art Mode Power Toggles
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: button
+                name: Art ON
+                icon: mdi:projector-screen-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.set_artmode
+                  target:
+                    entity_id: media_player.samsung_frame
+                  data:
+                    enabled: true
+              - type: button
+                name: Art OFF
+                icon: mdi:projector-screen-off-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.set_artmode
+                  target:
+                    entity_id: media_player.samsung_frame
+                  data:
+                    enabled: false
+
+          - type: markdown
+            content: "### ⚙️ Automation"
+            
+          - type: tile
+            entity: switch.samsung_frame_slideshow_enabled
+            name: Slideshow
+            icon: mdi:play-circle-outline
+            vertical: false
+            hide_state: true
+            features_position: inline
+            features:
+              - type: toggle
+              
+          - type: tile
+            entity: switch.samsung_frame_matte_enabled
+            name: Matte (Polar)
+            icon: mdi:picture-in-picture-bottom-right-outline
+            vertical: false
+            hide_state: true
+            features_position: inline
+            features:
+              - type: toggle
+
+          - type: tile
+            entity: select.samsung_frame_slideshow_source
+            name: Rotation Source
+            icon: mdi:source-branch
+            
+          - type: horizontal-stack
+            cards:
+              - type: tile
+                entity: select.samsung_frame_slideshow_interval
+                name: Interval
+                icon: mdi:timer-cog
+              - type: tile
+                entity: number.samsung_frame_slideshow_interval
+                name: Custom
+                icon: mdi:timer-edit
+
+          - type: markdown
+            content: "### 🛠️ Maintenance Tools"
+            
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: button
+                name: Process Inbox
+                icon: mdi:tray-arrow-down
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.process_inbox
+              - type: button
+                name: Sync Library
+                icon: mdi:database-sync
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.sync_library
+
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: button
+                name: Rotate Now
+                icon: mdi:shuffle-variant
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.rotate_art_now
+                  target:
+                    entity_id: media_player.samsung_frame
+              - type: button
+                name: Diagnostics
+                icon: mdi:clipboard-list-outline
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.art_diagnostics
+                  target:
+                    entity_id: media_player.samsung_frame
+
+      # ==========================================
+      # MAIN CONTENT (RIGHT COLUMN)
+      # ==========================================
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            content: "## 🎨 AI Art Gallery"
+            card_mod:
+              style: |
+                ha-card { background: none; border: none; box-shadow: none; padding-bottom: 0px !important; }
+
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: text.samsung_frame_slideshow_filter
+                name: Search Tags
+                icon: mdi:magnify
+                
+              # Favorites Filter Toggle
+              - type: tile
+                entity: switch.samsung_frame_gallery_favorites_only
+                name: Favorites
+                icon: mdi:heart-multiple
+                hide_state: true
+                vertical: false
+                features_position: inline
+                features:
+                  - type: toggle
+
+              - type: button
+                name: Clean Storage
+                icon: mdi:delete-sweep
+                tap_action:
+                  action: perform-action
+                  perform_action: samsung_frame_art_director.cleanup_storage
+                  target:
+                    entity_id: media_player.samsung_frame
+
+          # Gallery Grid (Requires auto-entities)
+          - type: custom:auto-entities
+            card:
+              type: grid
+              columns: 4
+              square: false
+            card_param: cards
+            filter:
+              template: |
+                {% set items = state_attr('sensor.samsung_frame_art_library', 'items') %}
+                {% set ns = namespace(cards=[]) %}
+                {% if items %}
+                  {% for item in items %}
+                    {% if item.id %}
+                      {% set card_config = {
+                          "type": "picture",
+                          "image": "/api/samsung_frame_art_director/thumbnail/" ~ (item.id | urlencode),
+                          "card_mod": {
+                            "style": "ha-card { border: " ~ ("4px solid #ff4444" if item.is_favorite else "none") ~ "; border-radius: 8px; transition: all 0.2s ease; cursor: pointer; position: relative; } " ~ ("ha-card::after { content: '❤'; position: absolute; top: 2px; right: 8px; font-size: 28px; color: #ff4444; filter: drop-shadow(0 0 2px black); }" if item.is_favorite else "")
+                          },
+                          "tap_action": {
+                            "action": "fire-dom-event",
+                            "browser_mod": {
+                              "service": "browser_mod.popup",
+                              "data": {
+                                "title": "Art Details",
+                                "style": "--popup-min-width: 450px;",
+                                "content": {
+                                  "type": "vertical-stack",
+                                  "cards": [
+                                    {
+                                      "type": "picture",
+                                      "image": "/api/samsung_frame_art_director/thumbnail/" ~ (item.id | urlencode),
+                                      "card_mod": {
+                                        "style": "ha-card { border-radius: 12px; }"
+                                      }
+                                    },
+                                    {
+                                      "type": "markdown",
+                                      "content": "**Category:** " ~ (item.category | default('Unknown') | replace('MY-C0002', 'My Photos') | title) ~ "\n**Tags:** " ~ (item.tags | default('None') | title)
+                                    },
+                                    {
+                                      "type": "horizontal-stack",
+                                      "cards": [
+                                        {
+                                          "type": "button",
+                                          "name": "Push to Frame",
+                                          "icon": "mdi:television-shimmer",
+                                          "tap_action": {
+                                            "action": "call-service",
+                                            "service": "samsung_frame_art_director.upload_art",
+                                            "target": { "entity_id": "media_player.samsung_frame" },
+                                            "data": { "path": item.source }
+                                          }
+                                        },
+                                        {
+                                          "type": "button",
+                                          "name": ("Unfavorite" if item.is_favorite else "Favorite"),
+                                          "icon": "mdi:heart",
+                                          "card_mod": {
+                                            "style": "ha-card { color: " ~ ("red" if item.is_favorite else "inherit") ~ " !important; --paper-item-icon-color: " ~ ("red" if item.is_favorite else "inherit") ~ " !important; }"
+                                          },
+                                          "tap_action": {
+                                            "action": "call-service",
+                                            "service": "samsung_frame_art_director.toggle_favorite",
+                                            "data": { "content_id": item.id }
+                                          }
+                                        },
+                                        {
+                                          "type": "button",
+                                          "name": "Delete",
+                                          "icon": "mdi:trash-can-outline",
+                                          "card_mod": {
+                                            "style": "ha-card { color: red !important; --paper-item-icon-color: red !important; }"
+                                          },
+                                          "tap_action": {
+                                            "action": "call-service",
+                                            "service": "samsung_frame_art_director.delete_art",
+                                            "data": { "content_id": item.id },
+                                            "confirmation": {
+                                              "text": "Are you sure you want to permanently delete this image?"
+                                            }
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                      } %}
+                      {% set ns.cards = ns.cards + [card_config] %}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+                {{ ns.cards | to_json }}
+
+          # Pagination Row
+          - type: horizontal-stack
+            cards:
+              - type: button
+                icon: mdi:chevron-left
+                name: Prev
+                tap_action:
+                  action: call-service
+                  service: samsung_frame_art_director.change_gallery_page
+                  data:
+                    step: -1
+              - type: markdown
+                content: >
+                  <center>
+                    <div style="margin-top: 10px; font-weight: bold;">
+                      Page {{ state_attr('sensor.samsung_frame_art_library', 'current_page') | default(1) }} of {{ state_attr('sensor.samsung_frame_art_library', 'total_pages') | default(1) }}
+                    </div>
+                  </center>
+              - type: button
+                icon: mdi:chevron-right
+                name: Next
+                tap_action:
+                  action: call-service
+                  service: samsung_frame_art_director.change_gallery_page
+                  data:
+                    step: 1
