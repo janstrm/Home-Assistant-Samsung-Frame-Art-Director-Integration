@@ -120,5 +120,31 @@ art_diagnostics:
 
 process_inbox:
   name: "Process Inbox"
-  description: "Scans the inbox folder, analyzes images with AI, and moves them to the library."
+  description: "Scans the inbox folder (/media/frame/inbox), analyzes images with Gemini AI, tags them, and moves them to the library folder (/media/frame/library)."
+
+sync_library:
+  name: "Sync Library"
+  description: "Scans the library folder for untracked images and registers them in the database with AI-generated tags. Useful after manually adding files or after a database reset."
+
+purge_database:
+  name: "Purge Database"
+  description: "Wipes the local SQLite database (art history, AI tags, and favorites). Does NOT delete image files from the library folder. Run Sync Library afterwards to re-register existing images."
+
+delete_art:
+  name: "Delete Art"
+  description: "Delete a specific artwork from the library database."
+  fields:
+    content_id:
+      name: Content ID
+      description: "The content ID of the artwork to delete."
+      required: true
+      selector:
+        text:
+
+rotate_favorites:
+  name: "Rotate Favorites"
+  description: "Rotate art but only pick from images marked as favorites."
+  target:
+    entity:
+      domain: media_player
 

@@ -28,8 +28,9 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. This cust
 - **State Verification:** Toggles Art Mode ON/OFF and verifies the state to ensure the screen displays art rather than just being powered down.
 - **Local Uploads:** Upload local images directly to the TV. Images are programmatically center-cropped and resized to 3840×2160 pixels before upload.
 - **Gemini AI Auto-Tagging:** Monitors an "inbox" folder; when images are detected, Google's Gemini AI analyzes, tags, and describes the art before cataloging it to the local library.
-- **Gallery Sensor:** Exposes a paginated database of your local art via WebSockets, allowing you to build dashboard views.
-- **Auto-Rotation:** Rotates art from local storage or limits selection based on assigned tags and filters.
+- **Gallery Sensor:** Exposes a database of your local art, allowing you to build dashboard views with the provided example YAML.
+- **Auto-Rotation:** Rotates art from local storage or limits selection based on assigned tags, favorites, and filters.
+- **Favorites:** Mark individual artworks as favorites. Filter the gallery or rotation to only use your favorite pieces.
 - **Storage Management:** Detects and deletes orphaned or un-favorited artworks from the TV memory to manage limited storage capacity.
 
 ---
@@ -51,7 +52,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. This cust
 
 ## ⚙️ Configuration
 
-Add the integration from **Settings → Devices & Services → Add Integration** and search for “Samsung Frame Art Director”.
+Add the integration from **Settings → Devices & Services → Add Integration** and search for "Samsung Frame Art Director".
 
 ### Initial Setup
 - You will be asked for the TV's IP address and a Name.
@@ -59,24 +60,43 @@ Add the integration from **Settings → Devices & Services → Add Integration**
 
 ### Options Flow (Configure)
 Once installed, click **Configure** on the integration page to access advanced settings:
-- **Gemini API Key:** Required for AI Auto-Tagging.
-- **Slideshow Settings:** Enable rotation, set interval (minutes), and filter by tags.
+- **Gemini API Key:** Required for AI Auto-Tagging (Process Inbox & Sync Library).
+- **Slideshow Settings:** Enable rotation, set interval (minutes), and select source type (Library / Folder / Tags).
+- **Matte:** Enable/disable a polar matte border around displayed art.
 - **Wake-on-LAN:** Enter the TV's MAC address to wake it before sending commands.
 - **Cleanup Settings:** Define max items on TV, max storage age, and whether to preserve favorites.
 
 ---
 
+## 📂 Folder Structure
+
+The integration uses two folders on your HA filesystem:
+
+| Folder | Purpose |
+|---|---|
+| `/media/frame/inbox` | Drop new images here. **Process Inbox** will analyze, tag, and move them to the library. |
+| `/media/frame/library` | Permanent storage for processed images. Used by rotation and the gallery sensor. |
+
+### Workflow
+1. Drop images into `/media/frame/inbox/`
+2. Run **Process Inbox** → Gemini AI tags each image, then moves it to `/media/frame/library/`
+3. Images appear in the Gallery sensor and are available for rotation
+4. If you add images directly to `/media/frame/library/`, run **Sync Library** to tag and register them
+
+---
+
 ## 🖥️ Dashboard Example (UI)
 
-We provide a **ready-to-use Dashboard YAML** that combines the TV controls and the AI Art Gallery into a beautiful frontend view. 
+We provide a **ready-to-use Dashboard YAML** that combines the TV controls and the AI Art Gallery into a beautiful 3-column frontend view.
 
 You can find the code here: [`examples/dashboard.yaml`](examples/dashboard.yaml)
 
-To use the AI Art Gallery with popups, you will need two common HACS frontend plugins:
+To use the AI Art Gallery with popups, you will need these HACS frontend plugins:
 1. **[auto-entities](https://github.com/thomasloven/lovelace-auto-entities)** (For the dynamic image gallery grid)
 2. **[browser_mod](https://github.com/thomasloven/hass-browser_mod)** (For clicking an image to open the Push/Favorite/Delete popup)
+3. **[card-mod](https://github.com/thomasloven/lovelace-card-mod)** *(Optional)* (For visual enhancements like favorite indicators)
 
-Simply create a new Dashboard View in Home Assistant, click **Edit (Raw Configuration)**, and paste the contents of the example file! (Home Assistant will automatically arrange the 3 columns on wide screens).
+Simply create a new Dashboard View in Home Assistant, click **Edit (Raw Configuration)**, and paste the contents of the example file! Home Assistant will automatically arrange the 3 columns on wide screens.
 
 ---
 
@@ -84,7 +104,9 @@ Simply create a new Dashboard View in Home Assistant, click **Edit (Raw Configur
 
 Domain: `samsung_frame_art_director`
 
-### 1. set_artmode
+### Core Services
+
+#### set_artmode
 Toggle Art Mode on or off.
 ```yaml
 service: samsung_frame_art_director.set_artmode
@@ -94,7 +116,7 @@ data:
   enabled: true
 ```
 
-### 2. upload_art
+#### upload_art
 Upload and immediately display an image from your HA filesystem.
 ```yaml
 service: samsung_frame_art_director.upload_art
@@ -105,8 +127,8 @@ data:
 ```
 *(Paths must reside in `/media` or `/config` for security).*
 
-### 3. rotate_art_now
-Force an immediate rotation of the displayed art.
+#### rotate_art_now
+Force an immediate rotation of the displayed art. Picks a random image from the library (optionally filtered by tags). Automatically retries if a selected image no longer exists on disk.
 ```yaml
 service: samsung_frame_art_director.rotate_art_now
 target:
@@ -114,42 +136,138 @@ target:
 data:
   source: library       # library | folder
   tags: "nature, ocean" # Optional: only rotate images matching these tags
+  match_all: false      # Optional: require ALL tags to match (default: any)
 ```
 
-### 4. process_inbox
-Trigger the Gemini AI to scan the `/media/frame/inbox` folder, analyze new images, tag them, and add them to your local library database.
+#### rotate_favorites
+Rotate art but only pick from images marked as favorites.
 ```yaml
-service: samsung_frame_art_director.process_inbox
+service: samsung_frame_art_director.rotate_favorites
 target:
   entity_id: media_player.samsung_frame
 ```
 
-### 5. cleanup_storage
-Safely remove non‑favorite artworks from the TV to free up space.
+### AI & Library Services
+
+#### process_inbox
+Scan `/media/frame/inbox`, analyze each image with Gemini AI, move to `/media/frame/library`, and register in the database with tags.
+```yaml
+service: samsung_frame_art_director.process_inbox
+```
+> **Note:** Requires a Gemini API key in the integration options. If rate-limited (HTTP 429), processing pauses and logs how many images were completed.
+
+#### sync_library
+Scan `/media/frame/library` for any untracked images (e.g. manually added files) and register them in the database with AI tags.
+```yaml
+service: samsung_frame_art_director.sync_library
+```
+
+#### purge_database
+Wipe the local SQLite database (art history, AI tags, favorites). **Does NOT delete image files** from `/media/frame/library/`.
+```yaml
+service: samsung_frame_art_director.purge_database
+```
+> **Tip:** After purging, run **Sync Library** to re-scan and re-tag your existing images.
+
+### Gallery Management Services
+
+#### toggle_favorite
+Toggle the favorite status of an artwork in the library database.
+```yaml
+service: samsung_frame_art_director.toggle_favorite
+data:
+  content_id: "MY-C0002_xxxxxxxx"
+```
+
+#### delete_art
+Delete an artwork from the library database.
+```yaml
+service: samsung_frame_art_director.delete_art
+data:
+  content_id: "MY-C0002_xxxxxxxx"
+```
+
+#### cleanup_storage
+Remove non-favorite artworks from the **TV's internal storage** to free up space.
 ```yaml
 service: samsung_frame_art_director.cleanup_storage
+target:
+  entity_id: media_player.samsung_frame
+data:
+  max_items: 50                  # Optional: keep at most N items
+  max_age_days: 30               # Optional: delete items older than N days
+  preserve_current: true         # Optional: don't delete the currently displayed artwork
+  only_integration_managed: true # Optional: only delete items tracked by this integration
+  dry_run: false                 # Optional: preview what would be deleted without actually deleting
+```
+
+### Diagnostics
+
+#### art_diagnostics
+Log Art Mode support status, current artwork, and a sample of available content IDs (useful for debugging).
+```yaml
+service: samsung_frame_art_director.art_diagnostics
 target:
   entity_id: media_player.samsung_frame
 ```
 
 ---
 
-## 📊 Useful Entities
+## 📊 Entities
 
-When configured, the integration provides several entities:
-- `media_player.samsung_frame_art_director`: The main control entity (turn ON to enter Art Mode).
-- `sensor.samsung_frame_art_director_library`: Reports the total number of processed artworks and provides paginated views via WebSocket.
-- `switch.samsung_frame_art_director_slideshow`: Easily pause/resume the background rotator.
-- `switch.samsung_frame_art_director_gallery_favorites_only`: Toggle this to restrict the dashboard gallery or rotation strictly to favorited images.
+When configured, the integration creates the following entities (where `samsung_frame` is your configured device name):
+
+### Media Player
+| Entity | Description |
+|---|---|
+| `media_player.samsung_frame` | Main control entity. State reflects TV power. Attributes include `art_mode_status`. |
+
+### Image
+| Entity | Description |
+|---|---|
+| `image.samsung_frame_art_preview` | Live preview of the currently displayed artwork on the Frame TV. |
+
+### Switches
+| Entity | Description |
+|---|---|
+| `switch.samsung_frame_slideshow_enabled` | Enable/disable automatic art rotation. |
+| `switch.samsung_frame_matte_enabled` | Enable/disable the polar matte border around displayed art. |
+| `switch.samsung_frame_gallery_favorites_only` | Restrict the gallery and rotation to only favorited images. |
+
+### Select Entities
+| Entity | Description |
+|---|---|
+| `select.samsung_frame_slideshow_source` | Choose rotation source: `Library`, `Folder`, or `Tags`. |
+| `select.samsung_frame_slideshow_interval` | Quick-pick rotation interval (1, 2, 5, 10, 15, 30, 60, 120, 240 min). |
+
+### Number Entities
+| Entity | Description |
+|---|---|
+| `number.samsung_frame_slideshow_interval` | Custom rotation interval in minutes (0–1440). |
+
+### Text Entities
+| Entity | Description |
+|---|---|
+| `text.samsung_frame_slideshow_filter` | Free-text filter for tags or folder path used by rotation. |
+
+### Sensors
+| Entity | Description |
+|---|---|
+| `sensor.samsung_frame_art_library` | Reports total tracked artworks. Attributes include the full `items` list for dashboard gallery rendering. |
 
 ---
 
 ## 🛠️ Troubleshooting
 
-If Art Uploads stall or fail:
-- Ensure the TV is securely paired. Try turning the TV on manually and checking for popups.
-- Check standard HA Logs for `samsung_frame_art_director` errors.
-- Ensure your Image paths actually exist and are accessible within Home Assistant's `/media` directory.
+| Problem | Solution |
+|---|---|
+| Art uploads stall or fail | Ensure the TV is paired. Try turning on manually and watching for permission popups. |
+| "No Gemini API key" warning | Add your API key in **Settings → Devices → Samsung Frame Art Director → Configure**. |
+| "Local file missing" warnings during rotation | Run **Reset Database** then **Sync Library** to clean up stale entries. |
+| Gallery shows no images | Ensure images exist in `/media/frame/library/` and run **Sync Library**. |
+| Rate limit (429) during inbox processing | Gemini free tier has request limits. Wait a few minutes and try again. |
+
+Check HA logs filtered by `samsung_frame_art_director` for detailed error messages.
 
 ---
 

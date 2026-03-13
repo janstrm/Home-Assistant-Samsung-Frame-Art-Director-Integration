@@ -157,6 +157,7 @@ class SamsungFrameLibrarySensor(CoordinatorEntity, SensorEntity):
             return {}
         
         return {
+            "items": self.coordinator.data.get("items", []),
             "filtered_count": self.coordinator.data.get("filtered_count", 0),
             "total_pages": self.coordinator.data.get("total_pages", 1),
             "current_page": self.coordinator.data.get("current_page", 1),
