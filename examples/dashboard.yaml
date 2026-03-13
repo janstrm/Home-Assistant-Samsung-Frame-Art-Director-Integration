@@ -32,6 +32,22 @@ views:
             show_state: false
             camera_view: live
 
+          # Status Indicators
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: media_player.samsung_frame
+                name: TV Power
+                icon: mdi:television
+                hide_state: false
+              - type: tile
+                entity: binary_sensor.samsung_frame_art_mode
+                name: Art Mode
+                icon: mdi:palette
+                hide_state: false
+
           # Art Mode Power Toggles
           - type: grid
             columns: 2
