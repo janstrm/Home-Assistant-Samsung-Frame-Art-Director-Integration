@@ -1093,7 +1093,10 @@ class SamsungFrameClient:
                         kwargs["token_file"] = self._token_file_path
 
                     def _build_async_client():
-                        from samsungtvws import SamsungTVAsyncArt  # type: ignore
+                        try:
+                            from samsungtvws import SamsungTVAsyncArt  # type: ignore
+                        except ImportError:
+                            from samsungtvws.async_art import SamsungTVAsyncArt  # type: ignore
                         return SamsungTVAsyncArt(**kwargs)  # type: ignore[arg-type]
 
                     async_client = await asyncio.to_thread(_build_async_client)
@@ -1147,8 +1150,8 @@ class SamsungFrameClient:
                 try:
                     new_content_id, final_client = await _attempt_upload(8001)
                 except Exception as e2:
-                    _LOGGER.error("Upload(async): Both ports failed for %s: %r", self._host, e2)
-                    raise ConnectionError(f"TV unreachable or feature not supported on both 8002/8001: {e2}") from e2
+                    _LOGGER.debug("Upload(async): Both ports failed for %s: %r", self._host, e2)
+                    return None
 
             try:
                 # Track and finish
