@@ -135,19 +135,6 @@ views:
                   target:
                     entity_id: media_player.samsung_frame
               - type: button
-                name: Diagnostics
-                icon: mdi:clipboard-list-outline
-                tap_action:
-                  action: perform-action
-                  perform_action: samsung_frame_art_director.art_diagnostics
-                  target:
-                    entity_id: media_player.samsung_frame
-
-          - type: grid
-            columns: 1
-            square: false
-            cards:
-              - type: button
                 name: Reset Database
                 icon: mdi:database-remove
                 tap_action:
