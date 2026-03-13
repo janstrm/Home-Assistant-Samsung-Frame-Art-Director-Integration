@@ -42,11 +42,11 @@ views:
                 name: TV Power
                 icon: mdi:television
                 hide_state: false
-              - type: tile
-                entity: binary_sensor.samsung_frame_art_mode
-                name: Art Mode
-                icon: mdi:palette
-                hide_state: false
+              - type: markdown
+                content: >
+                  **Art Mode**
+
+                  {{ state_attr('media_player.samsung_frame', 'art_mode_status') | default('unknown') | title }}
 
           # Art Mode Power Toggles
           - type: grid
