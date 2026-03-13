@@ -282,30 +282,3 @@ views:
                   {% endfor %}
                 {% endif %}
                 {{ ns.cards | to_json }}
-
-          # Pagination Row
-          - type: horizontal-stack
-            cards:
-              - type: button
-                icon: mdi:chevron-left
-                name: Prev
-                tap_action:
-                  action: call-service
-                  service: samsung_frame_art_director.change_gallery_page
-                  data:
-                    step: -1
-              - type: markdown
-                content: >
-                  <center>
-                    <div style="margin-top: 10px; font-weight: bold;">
-                      Page {{ state_attr('sensor.samsung_frame_art_library', 'current_page') | default(1) }} of {{ state_attr('sensor.samsung_frame_art_library', 'total_pages') | default(1) }}
-                    </div>
-                  </center>
-              - type: button
-                icon: mdi:chevron-right
-                name: Next
-                tap_action:
-                  action: call-service
-                  service: samsung_frame_art_director.change_gallery_page
-                  data:
-                    step: 1
