@@ -66,6 +66,20 @@ Once installed, click **Configure** on the integration page to access advanced s
 
 ---
 
+## 🖥️ Dashboard Example (UI)
+
+We provide a **ready-to-use Dashboard YAML** that combines the TV controls and the AI Art Gallery into a beautiful frontend view. 
+
+You can find the code here: [`examples/dashboard.yaml`](examples/dashboard.yaml)
+
+To use the AI Art Gallery with popups, you will need two common HACS frontend plugins:
+1. **[auto-entities](https://github.com/thomasloven/lovelace-auto-entities)** (For the dynamic image gallery grid)
+2. **[browser_mod](https://github.com/thomasloven/hass-browser_mod)** (For clicking an image to open the Push/Favorite/Delete popup)
+
+Simply create a new Dashboard View in Home Assistant, choose the **Sidebar** layout type, click **Edit (Raw Configuration)**, and paste the contents of the example file!
+
+---
+
 ## 🎮 Services
 
 Domain: `samsung_frame_art_director`
