@@ -157,10 +157,14 @@ service: samsung_frame_art_director.process_inbox
 > **Note:** Requires a Gemini API key in the integration options. If rate-limited (HTTP 429), processing pauses and logs how many images were completed.
 
 #### sync_library
-Scan `/media/frame/library` for any untracked images (e.g. manually added files) and register them in the database with AI tags.
+Full bidirectional sync of the library database:
+1. **Deduplicates** the database (removes duplicate entries, keeps newest)
+2. **Removes stale entries** — DB records whose files no longer exist on disk
+3. **Adds untracked images** — files in `/media/frame/library/` not yet in the DB (tagged via Gemini AI)
 ```yaml
 service: samsung_frame_art_director.sync_library
 ```
+> **Note:** Phases 1 & 2 (cleanup) always run, even without a Gemini key. Phase 3 (adding new images) requires the API key.
 
 #### purge_database
 Wipe the local SQLite database (art history, AI tags, favorites). **Does NOT delete image files** from `/media/frame/library/`.

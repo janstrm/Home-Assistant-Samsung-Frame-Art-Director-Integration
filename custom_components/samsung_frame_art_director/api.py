@@ -1735,6 +1735,37 @@ class SamsungFrameClient:
                 return []
         return await asyncio.to_thread(_get)
 
+    async def async_remove_local_art_by_path(self, path: str) -> bool:
+        """Remove a local_art entry by file path (stale entry cleanup)."""
+        await self._ensure_db()
+        def _remove():
+            try:
+                with self._get_db() as conn:
+                    conn.execute("DELETE FROM local_art WHERE file_path = ?", (path,))
+                    conn.commit()
+                    return True
+            except Exception:
+                return False
+        return await asyncio.to_thread(_remove)
+
+    async def async_remove_duplicate_local_art(self) -> int:
+        """Remove duplicate local_art entries (keep newest per file_path). Returns count removed."""
+        await self._ensure_db()
+        def _dedup():
+            try:
+                with self._get_db() as conn:
+                    # Keep the row with the highest rowid for each file_path
+                    cursor = conn.execute(
+                        "DELETE FROM local_art WHERE rowid NOT IN "
+                        "(SELECT MAX(rowid) FROM local_art GROUP BY file_path)"
+                    )
+                    removed = cursor.rowcount
+                    conn.commit()
+                    return removed
+            except Exception:
+                return 0
+        return await asyncio.to_thread(_dedup)
+
     async def async_purge_database(self) -> None:
         """Wipe all library and local metadata while keeping connection tokens."""
         if not self._db_path:

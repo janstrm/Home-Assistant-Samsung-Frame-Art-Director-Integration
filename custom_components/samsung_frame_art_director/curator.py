@@ -153,19 +153,39 @@ class ContentCurator:
         return {"count": processed_count, "skipped": skipped_count}
 
     async def async_sync_library(self):
-        """Scan the library folder for untracked images and add them to the database."""
-        api_key = self.entry.options.get("gemini_api_key")
-        if not api_key:
-            _LOGGER.warning(
-                "Sync Library: No Gemini API key configured. "
-                "Please add your API key in the integration options."
-            )
-            return {"count": 0, "error": "No Gemini API key configured. Add it in integration options."}
+        """Full bidirectional sync: remove stale entries, deduplicate, and add untracked files."""
+        _LOGGER.info("Sync Library: Starting full sync...")
 
-        analyzer = GeminiAnalyzer(api_key)
+        # ── Phase 1: Remove duplicates ──────────────────────────────────
+        dupes_removed = await self.api.async_remove_duplicate_local_art()
+        if dupes_removed > 0:
+            _LOGGER.info("Sync Library: Removed %d duplicate DB entries.", dupes_removed)
+
+        # ── Phase 2: Remove stale entries (in DB but not on disk) ───────
         db_paths = await self.api.async_get_local_art_paths()
+        stale_count = 0
+
+        def _check_stale():
+            """Return list of DB paths whose files no longer exist on disk."""
+            return [p for p in db_paths if not os.path.isfile(p)]
+
+        stale_paths = await self.hass.async_add_executor_job(_check_stale)
+
+        for path in stale_paths:
+            removed = await self.api.async_remove_local_art_by_path(path)
+            if removed:
+                stale_count += 1
+                _LOGGER.info("Sync Library: Removed stale entry (file missing): %s", os.path.basename(path))
+
+        if stale_count > 0:
+            _LOGGER.info("Sync Library: Cleaned up %d stale DB entries.", stale_count)
+            # Refresh db_paths after cleanup
+            db_paths = await self.api.async_get_local_art_paths()
+
+        # ── Phase 3: Add untracked files (on disk but not in DB) ────────
+        api_key = self.entry.options.get("gemini_api_key")
         
-        def _get_missing():
+        def _get_disk_files():
             if not os.path.exists(self._library_dir):
                 return []
             return [
@@ -175,49 +195,60 @@ class ContentCurator:
                 and os.path.join(self._library_dir, f) not in db_paths
             ]
 
-        missing_files = await self.hass.async_add_executor_job(_get_missing)
-        if not missing_files:
-            return {"count": 0}
+        missing_files = await self.hass.async_add_executor_job(_get_disk_files)
+        added_count = 0
 
-        _LOGGER.info("Sync Library: Found %d untracked images in '%s'. Starting AI analysis...", len(missing_files), self._library_dir)
-        
-        count = 0
-        for path in missing_files:
-            try:
-                def _read_and_probe():
-                    with open(path, "rb") as f:
-                        data = f.read()
-                    with Image.open(path) as img:
-                        w, h = img.size
-                    return data, w, h, len(data)
+        if missing_files and not api_key:
+            _LOGGER.warning(
+                "Sync Library: Found %d untracked images but no Gemini API key configured. "
+                "Stale/duplicate cleanup was completed, but new images cannot be tagged. "
+                "Add your API key in Settings > Devices > Samsung Frame Art Director > Configure.",
+                len(missing_files)
+            )
+        elif missing_files:
+            _LOGGER.info("Sync Library: Found %d untracked images. Starting AI analysis...", len(missing_files))
+            analyzer = GeminiAnalyzer(api_key)
 
-                data, width, height, size = await self.hass.async_add_executor_job(_read_and_probe)
-                
-                result = await analyzer.analyze_image(data, prompt="Describe this image")
-                if "error" in result:
-                    error_str = str(result['error'])
-                    if "429" in error_str:
-                        _LOGGER.warning(
-                            "Sync Library: Gemini API rate limit hit (429). Stopping. %d images synced so far.", count
-                        )
-                        break
-                    _LOGGER.warning("Sync Library: Gemini AI failed for '%s': %s", os.path.basename(path), error_str)
-                    continue
+            for path in missing_files:
+                try:
+                    def _read_and_probe():
+                        with open(path, "rb") as f:
+                            data = f.read()
+                        with Image.open(path) as img:
+                            w, h = img.size
+                        return data, w, h, len(data)
 
-                tags = ",".join(result.get("tags", []))
-                description = result.get("description", "")
+                    data, width, height, size = await self.hass.async_add_executor_job(_read_and_probe)
+                    
+                    result = await analyzer.analyze_image(data, prompt="Describe this image")
+                    if "error" in result:
+                        error_str = str(result['error'])
+                        if "429" in error_str:
+                            _LOGGER.warning(
+                                "Sync Library: Gemini rate limit (429). Stopping. %d images added so far.", added_count
+                            )
+                            break
+                        _LOGGER.warning("Sync Library: AI failed for '%s': %s", os.path.basename(path), error_str)
+                        continue
 
-                await self.api.async_add_local_art(
-                    file_path=path,
-                    tags=tags,
-                    description=description,
-                    width=width,
-                    height=height,
-                    file_size=size
-                )
-                count += 1
-            except Exception as e:
-                _LOGGER.error("Sync Library: Failed to process '%s': %s", os.path.basename(path), e)
+                    tags = ",".join(result.get("tags", []))
+                    description = result.get("description", "")
 
-        _LOGGER.info("Sync Library: Finished. Synced %d images.", count)
-        return {"count": count}
+                    await self.api.async_add_local_art(
+                        file_path=path,
+                        tags=tags,
+                        description=description,
+                        width=width,
+                        height=height,
+                        file_size=size
+                    )
+                    added_count += 1
+                    _LOGGER.info("Sync Library: Added '%s' -> Tags: %s", os.path.basename(path), tags)
+                except Exception as e:
+                    _LOGGER.error("Sync Library: Failed to process '%s': %s", os.path.basename(path), e)
+
+        _LOGGER.info(
+            "Sync Library: Finished. Added: %d, Stale removed: %d, Duplicates removed: %d",
+            added_count, stale_count, dupes_removed
+        )
+        return {"added": added_count, "stale_removed": stale_count, "duplicates_removed": dupes_removed}
