@@ -2,7 +2,7 @@
 # 🎨 Samsung Frame Art Director - Basic Dashboard Example
 # ==============================================================================
 # This is a sample dashboard configuration that combines the control panel 
-# and the AI Art Gallery into a single, clean view.
+# and the Art Gallery into a single, clean view.
 #
 # IMPORTANT PREREQUISITES:
 # - To use the Gallery view, you must install `auto-entities` via HACS Frontend.
@@ -157,16 +157,16 @@ views:
                   action: perform-action
                   perform_action: samsung_frame_art_director.purge_database
                   confirmation:
-                    text: "Are you sure? This will permanently wipe the local art database and all AI tags."
+                    text: "Are you sure? This will wipe the local art database and all tags."
 
       # ==========================================
-      # COLUMN 3: AI ART GALLERY
+      # COLUMN 3: ART GALLERY
       # ==========================================
       - type: vertical-stack
         cards:
           - type: markdown
             content: >
-              ## 🎨 AI Art Gallery
+              ## 🎨 Art Gallery
               **{{ states('sensor.samsung_frame_art_library') }}** Images tracked in database
             card_mod:
               style: |
@@ -200,6 +200,58 @@ views:
                   perform_action: samsung_frame_art_director.cleanup_storage
                   target:
                     entity_id: media_player.samsung_frame
+
+          # Pagination Controls
+          - type: horizontal-stack
+            cards:
+              - type: button
+                icon: mdi:chevron-left
+                name: Prev
+                tap_action:
+                  action: call-service
+                  service: samsung_frame_art_director.change_gallery_page
+                  data:
+                    step: -1
+                card_mod:
+                  style: |
+                    ha-card {
+                      height: 45px !important;
+                      border-radius: 10px;
+                      border: 1px solid var(--divider-color);
+                      background: rgba(var(--rgb-primary-text-color), 0.03);
+                    }
+                    ha-icon { --mdc-icon-size: 22px; }
+              - type: markdown
+                content: >
+                  <center>
+                    <div style="margin-top: 10px; font-weight: bold;">
+                      Page {{ state_attr('sensor.samsung_frame_art_library', 'current_page') | default(1) }} of {{ state_attr('sensor.samsung_frame_art_library', 'total_pages') | default(1) }}
+                    </div>
+                  </center>
+                card_mod:
+                  style: |
+                    ha-card {
+                      box-shadow: none;
+                      background: none;
+                      padding: 0px !important;
+                    }
+              - type: button
+                icon: mdi:chevron-right
+                name: Next
+                tap_action:
+                  action: call-service
+                  service: samsung_frame_art_director.change_gallery_page
+                  data:
+                    step: 1
+                card_mod:
+                  style: |
+                    ha-card {
+                      height: 45px !important;
+                      border-radius: 10px;
+                      border: 1px solid var(--divider-color);
+                      background: rgba(var(--rgb-primary-text-color), 0.03);
+                    }
+                    ha-icon { --mdc-icon-size: 22px; }
 
           # Gallery Grid (Requires auto-entities)
           - type: custom:auto-entities
