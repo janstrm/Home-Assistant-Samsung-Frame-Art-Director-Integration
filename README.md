@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/main/docs/logo.png" alt="Samsung Frame Art Director" width="200" style="border-radius:20px"/>
+  <img src="https://raw.githubusercontent.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/main/custom_components/samsung_frame_art_director/icon.png" alt="Samsung Frame Art Director" width="200" style="border-radius:20px"/>
 </p>
 
 # 🖼️ Samsung Frame Art Director
@@ -10,7 +10,7 @@
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=janstrm&repository=Home-Assistant-Samsung-Frame-Art-Director-Integration&category=integration)
 
-Control your Samsung Frame TV's Art Mode directly from Home Assistant. This custom component uses the async Art API to provide reliable on/off toggles, local image uploads with automatic resizing, automated rotation, and television storage management. It also features an optional Gemini AI integration that auto-tags dropped images, and exposes a Gallery Sensor to easily build dashboards.
+Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload local images with automatic resizing, rotate art on a schedule, manage TV storage, and build gallery dashboards. Optionally integrates with Google Gemini to auto-tag images dropped into an inbox folder.
 
 ---
 
@@ -19,7 +19,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. This cust
 - **Home Assistant** (Core, Supervised, or OS)
 - **HACS** (Home Assistant Community Store) installed.
 - A **Samsung Frame TV** connected to the same local network.
-- (Optional) A **Google Gemini API Key** to enable AI Auto-Tagging capabilities.
+- (Optional) A **Google Gemini API Key** for automatic image tagging.
 
 ---
 
@@ -27,7 +27,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. This cust
 
 - **State Verification:** Toggles Art Mode ON/OFF and verifies the state to ensure the screen displays art rather than just being powered down.
 - **Local Uploads:** Upload local images directly to the TV. Images are programmatically center-cropped and resized to 3840×2160 pixels before upload.
-- **Gemini AI Auto-Tagging:** Monitors an "inbox" folder; when images are detected, Google's Gemini AI analyzes, tags, and describes the art before cataloging it to the local library.
+- **Auto-Tagging (Optional):** Drop images into an inbox folder and run Process Inbox — Gemini analyzes, tags, and catalogs them to your local library.
 - **Gallery Sensor:** Exposes a database of your local art, allowing you to build dashboard views with the provided example YAML.
 - **Auto-Rotation:** Rotates art from local storage or limits selection based on assigned tags, favorites, and filters.
 - **Favorites:** Mark individual artworks as favorites. Filter the gallery or rotation to only use your favorite pieces.
@@ -60,7 +60,7 @@ Add the integration from **Settings → Devices & Services → Add Integration**
 
 ### Options Flow (Configure)
 Once installed, click **Configure** on the integration page to access advanced settings:
-- **Gemini API Key:** Required for AI Auto-Tagging (Process Inbox & Sync Library).
+- **Gemini API Key:** Required for automatic image tagging (Process Inbox & Sync Library).
 - **Slideshow Settings:** Enable rotation, set interval (minutes), and select source type (Library / Folder / Tags).
 - **Matte:** Enable/disable a polar matte border around displayed art.
 - **Wake-on-LAN:** Enter the TV's MAC address to wake it before sending commands.
@@ -79,7 +79,7 @@ The integration uses two folders on your HA filesystem:
 
 ### Workflow
 1. Drop images into `/media/frame/inbox/`
-2. Run **Process Inbox** → Gemini AI tags each image, then moves it to `/media/frame/library/`
+2. Run **Process Inbox** → Gemini tags each image, then moves it to `/media/frame/library/`
 3. Images appear in the Gallery sensor and are available for rotation
 4. If you add images directly to `/media/frame/library/`, run **Sync Library** to tag and register them
 
@@ -87,11 +87,11 @@ The integration uses two folders on your HA filesystem:
 
 ## 🖥️ Dashboard Example (UI)
 
-We provide a **ready-to-use Dashboard YAML** that combines the TV controls and the AI Art Gallery into a beautiful 3-column frontend view.
+We provide a **ready-to-use Dashboard YAML** that combines the TV controls and the Art Gallery into a beautiful 3-column frontend view.
 
 You can find the code here: [`examples/dashboard.yaml`](examples/dashboard.yaml)
 
-To use the AI Art Gallery with popups, you will need these HACS frontend plugins:
+To use the Art Gallery with popups, you will need these HACS frontend plugins:
 1. **[auto-entities](https://github.com/thomasloven/lovelace-auto-entities)** (For the dynamic image gallery grid)
 2. **[browser_mod](https://github.com/thomasloven/hass-browser_mod)** (For clicking an image to open the Push/Favorite/Delete popup)
 3. **[card-mod](https://github.com/thomasloven/lovelace-card-mod)** *(Optional)* (For visual enhancements like favorite indicators)
@@ -147,10 +147,10 @@ target:
   entity_id: media_player.samsung_frame
 ```
 
-### AI & Library Services
+### Library Services
 
 #### process_inbox
-Scan `/media/frame/inbox`, analyze each image with Gemini AI, move to `/media/frame/library`, and register in the database with tags.
+Scan `/media/frame/inbox`, analyze each image with Gemini, move to `/media/frame/library`, and register in the database with tags.
 ```yaml
 service: samsung_frame_art_director.process_inbox
 ```
@@ -167,7 +167,7 @@ service: samsung_frame_art_director.sync_library
 > **Note:** Phases 1 & 2 (cleanup) always run, even without a Gemini key. Phase 3 (adding new images) requires the API key.
 
 #### purge_database
-Wipe the local SQLite database (art history, AI tags, favorites). **Does NOT delete image files** from `/media/frame/library/`.
+Wipe the local SQLite database (art history, tags, favorites). **Does NOT delete image files** from `/media/frame/library/`.
 ```yaml
 service: samsung_frame_art_director.purge_database
 ```
