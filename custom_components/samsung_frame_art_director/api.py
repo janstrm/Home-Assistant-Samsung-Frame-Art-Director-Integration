@@ -983,8 +983,9 @@ class SamsungFrameClient:
                 try:
                     tv_local.art().set_artmode(bool(enabled))
                 except Exception as exc:  # noqa: BLE001
-                    # Continue with verification/select fallback even if the set call fails
-                    _LOGGER.warning("ArtMode: set_artmode(%s) failed on %s: %r", bool(enabled), self._host, exc)
+                    # Note: This often fires due to the TV's clientConnect handshake event
+                    # being misinterpreted as a failure. Art Mode usually still activates.
+                    _LOGGER.debug("ArtMode: set_artmode(%s) initial call on %s: %r", bool(enabled), self._host, exc)
 
             except Exception:  # noqa: BLE001
                 pass
