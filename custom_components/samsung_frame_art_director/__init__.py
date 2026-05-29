@@ -24,6 +24,10 @@ from .const import (
     SLIDESHOW_SOURCE_TAGS, 
     SLIDESHOW_SOURCE_LIBRARY,
     CONF_GEMINI_API_KEY,
+    CONF_RESIZE_MODE,
+    DEFAULT_RESIZE_MODE,
+    CONF_LIBRARY_DIR,
+    DEFAULT_LIBRARY_DIR,
     resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
@@ -127,6 +131,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.loop.call_soon_threadsafe(_update)
 
     client.set_token_persister(_persist_token)
+    client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
@@ -584,6 +589,11 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # For now, we assume most option changes are slideshow related and can be hot-reloaded.
     # If connection-critical options were in 'options', we would check them here.
     
+    # Re-apply image preprocessing preference
+    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if data and (client := data.get(DATA_CLIENT)):
+        client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)
     
@@ -673,12 +683,14 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
         return
     # --------------------------------------------
 
+    library_dir = entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR
+
     # Fallback if filter is empty but path exists (legacy)
     if not filter_val and source_type == SLIDESHOW_SOURCE_FOLDER:
-        filter_val = entry.options.get(CONF_SLIDESHOW_SOURCE_PATH, "/media/frame/library")
-        
+        filter_val = entry.options.get(CONF_SLIDESHOW_SOURCE_PATH, library_dir)
+
     if source_type == SLIDESHOW_SOURCE_FOLDER:
-        path = filter_val or "/media/frame/library"
+        path = filter_val or library_dir
         await client.async_rotate_from_folder(path, matte=matte)
     elif source_type == SLIDESHOW_SOURCE_TAGS:
         tags = [t.strip() for t in filter_val.split(",")] if filter_val else []
