@@ -170,3 +170,37 @@ class OpenAIAnalyzer(ImageAnalyzer):
         except Exception as e:
             _LOGGER.error("OpenAI analysis failed: %s", e)
             return {"error": str(e), "provider": "OpenAI"}
+
+
+def create_analyzer(
+    provider: str,
+    gemini_api_key: str = "",
+    openai_api_key: str = "",
+) -> tuple[Optional[ImageAnalyzer], Optional[str]]:
+    """Build the configured image analyzer.
+
+    This is the single wiring point between the integration's options and the
+    concrete :class:`ImageAnalyzer` implementations. To add a new provider,
+    implement an ``ImageAnalyzer`` subclass and add a branch here.
+
+    Returns a ``(analyzer, error)`` tuple. On success ``error`` is ``None``; on
+    failure ``analyzer`` is ``None`` and ``error`` is a human-readable reason
+    suitable for logging and persistent notifications.
+    """
+    provider = (provider or "gemini").lower()
+
+    if provider == "openai":
+        if not openai_api_key:
+            return None, (
+                "OpenAI selected but no OpenAI API key configured. "
+                "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
+            )
+        return OpenAIAnalyzer(openai_api_key), None
+
+    # Default provider: Google Gemini
+    if not gemini_api_key:
+        return None, (
+            "No Gemini API key configured. "
+            "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
+        )
+    return GeminiAnalyzer(gemini_api_key), None
