@@ -68,6 +68,18 @@ SLIDESHOW_SOURCE_FOLDER = "folder"
 SLIDESHOW_SOURCE_TAGS = "Tags"
 SLIDESHOW_SOURCE_LIBRARY = "All Library"
 
+# Filesystem folders (configurable; these are the defaults)
+CONF_INBOX_DIR = "inbox_dir"
+CONF_LIBRARY_DIR = "library_dir"
+DEFAULT_INBOX_DIR = "/media/frame/inbox"
+DEFAULT_LIBRARY_DIR = "/media/frame/library"
+
+# Image preprocessing
+CONF_RESIZE_MODE = "resize_mode"
+RESIZE_MODE_CROP = "crop"   # scale-to-fill then center-crop (default; may trim edges)
+RESIZE_MODE_FIT = "fit"     # scale-to-fit then pad (letterbox; preserves whole image)
+DEFAULT_RESIZE_MODE = RESIZE_MODE_CROP
+
 # Matte (the digital passe-partout border the Frame draws around art).
 # A matte id is "{style}_{color}" (e.g. "shadowbox_polar"), or "none".
 # Values vary by model/firmware; these are the documented supersets.

@@ -36,6 +36,14 @@ from .const import (
     SLIDESHOW_SOURCE_FOLDER,
     SLIDESHOW_SOURCE_TAGS,
     SLIDESHOW_SOURCE_LIBRARY,
+    CONF_INBOX_DIR,
+    CONF_LIBRARY_DIR,
+    DEFAULT_INBOX_DIR,
+    DEFAULT_LIBRARY_DIR,
+    CONF_RESIZE_MODE,
+    RESIZE_MODE_CROP,
+    RESIZE_MODE_FIT,
+    DEFAULT_RESIZE_MODE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -288,6 +296,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(CONF_GEMINI_API_KEY, default=opts.get(CONF_GEMINI_API_KEY, "")): str,
                 vol.Optional(CONF_OPENAI_API_KEY, default=opts.get(CONF_OPENAI_API_KEY, "")): str,
                 vol.Optional(CONF_SLIDESHOW_SOURCE_PATH, default=opts.get(CONF_SLIDESHOW_SOURCE_PATH, "/media/frame/library")): str,
+                vol.Optional(CONF_INBOX_DIR, default=opts.get(CONF_INBOX_DIR, DEFAULT_INBOX_DIR)): str,
+                vol.Optional(CONF_LIBRARY_DIR, default=opts.get(CONF_LIBRARY_DIR, DEFAULT_LIBRARY_DIR)): str,
+                vol.Optional(CONF_RESIZE_MODE, default=opts.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE)): vol.In([RESIZE_MODE_CROP, RESIZE_MODE_FIT]),
                 vol.Optional("cleanup_max_items", default=opts.get("cleanup_max_items", 50)): int,
                 vol.Optional("cleanup_max_age_days", default=opts.get("cleanup_max_age_days", 0)): int,
                 vol.Optional("cleanup_preserve_current", default=opts.get("cleanup_preserve_current", True)): bool,

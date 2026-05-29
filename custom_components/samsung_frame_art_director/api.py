@@ -54,9 +54,15 @@ class SamsungFrameClient:
         self._db_path: Optional[str] = None
         # Loop-safe callback to persist a refreshed token (set by the integration)
         self._token_persister = None
+        # Image preprocessing preference: "crop" (center-crop) or "fit" (letterbox)
+        self._resize_mode = "crop"
 
     def set_db_path(self, path: str) -> None:
         self._db_path = path
+
+    def set_resize_mode(self, mode: str) -> None:
+        """Set image preprocessing mode: 'crop' (center-crop) or 'fit' (pad)."""
+        self._resize_mode = "fit" if str(mode).lower() == "fit" else "crop"
 
     def set_token_persister(self, persister) -> None:
         """Register a callback used to persist a refreshed token.
@@ -1107,47 +1113,58 @@ class SamsungFrameClient:
         await asyncio.to_thread(_set)
 
     async def async_preprocess_image(self, image_bytes: bytes) -> bytes:
-        """Resize to 3840x2160 with center-crop and return JPEG bytes."""
+        """Resize to 3840x2160 and return JPEG bytes.
+
+        Mode 'crop' scales to fill then center-crops (may trim edges); mode
+        'fit' scales to fit and pads with black (letterbox), preserving the
+        whole image — better for portraits/posters.
+        """
         try:
             from PIL import Image
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("Pillow not available: %s", err)
             raise
 
+        mode = self._resize_mode
+
         def _process() -> bytes:
             with Image.open(io.BytesIO(image_bytes)) as im:  # type: ignore
-                # Convert to RGB
-                if im.mode not in ("RGB", "RGBA"):
-                    im_converted = im.convert("RGB")
-                else:
-                    im_converted = im.convert("RGB")
+                im_converted = im.convert("RGB")
 
                 target_w, target_h = 3840, 2160
                 src_w, src_h = im_converted.width, im_converted.height
                 src_ratio = src_w / src_h
                 tgt_ratio = target_w / target_h
 
-                # Scale to fill, then center-crop
-                if src_ratio > tgt_ratio:
-                    # Source wider than target: height fit
-                    scale = target_h / src_h
-                    new_w = int(src_w * scale)
-                    new_h = target_h
+                if mode == "fit":
+                    # Scale to fit entirely, then pad to target (letterbox).
+                    if src_ratio > tgt_ratio:
+                        new_w = target_w
+                        new_h = max(1, round(target_w / src_ratio))
+                    else:
+                        new_h = target_h
+                        new_w = max(1, round(target_h * src_ratio))
+                    resized = im_converted.resize((new_w, new_h), Image.LANCZOS)
+                    canvas = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+                    canvas.paste(resized, ((target_w - new_w) // 2, (target_h - new_h) // 2))
+                    result = canvas
                 else:
-                    # Source taller/narrower: width fit
-                    scale = target_w / src_w
-                    new_w = target_w
-                    new_h = int(src_h * scale)
-
-                resized = im_converted.resize((new_w, new_h), Image.LANCZOS)
-                left = (new_w - target_w) // 2
-                top = (new_h - target_h) // 2
-                right = left + target_w
-                bottom = top + target_h
-                cropped = resized.crop((left, top, right, bottom))
+                    # Scale to fill, then center-crop.
+                    if src_ratio > tgt_ratio:
+                        scale = target_h / src_h
+                        new_w = int(src_w * scale)
+                        new_h = target_h
+                    else:
+                        scale = target_w / src_w
+                        new_w = target_w
+                        new_h = int(src_h * scale)
+                    resized = im_converted.resize((new_w, new_h), Image.LANCZOS)
+                    left = (new_w - target_w) // 2
+                    top = (new_h - target_h) // 2
+                    result = resized.crop((left, top, left + target_w, top + target_h))
 
                 out = io.BytesIO()
-                cropped.save(out, format="JPEG", quality=85, optimize=True, progressive=True)
+                result.save(out, format="JPEG", quality=85, optimize=True, progressive=True)
                 return out.getvalue()
 
         import io

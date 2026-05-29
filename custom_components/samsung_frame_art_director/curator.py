@@ -20,6 +20,10 @@ from .const import (
     CONF_AI_MODEL,
     CONF_GEMINI_API_KEY,
     CONF_OPENAI_API_KEY,
+    CONF_INBOX_DIR,
+    CONF_LIBRARY_DIR,
+    DEFAULT_INBOX_DIR,
+    DEFAULT_LIBRARY_DIR,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,8 +33,8 @@ class ContentCurator:
         self.hass = hass
         self.entry = entry
         self.api = api
-        self._inbox_dir = "/media/frame/inbox"
-        self._library_dir = "/media/frame/library"
+        self._inbox_dir = entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR
+        self._library_dir = entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR
 
     def _build_analyzer(self):
         """Build the AI analyzer for the configured provider.

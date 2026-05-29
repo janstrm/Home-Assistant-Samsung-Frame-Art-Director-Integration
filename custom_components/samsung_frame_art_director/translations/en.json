@@ -62,6 +62,9 @@
           "slideshow_source_type": "Source Type (Tags / Folders / Library)",
           "slideshow_filter": "Source Selection (Folder Path or Tag List)",
           "slideshow_source_dir": "Root Media Path",
+          "inbox_dir": "Inbox Folder",
+          "library_dir": "Library Folder",
+          "resize_mode": "Image Fit (crop or fit)",
           "mac_address": "TV MAC Address",
           "use_wol_before_on": "Wake on LAN before switching Art ON",
           "use_power_key_on_off": "Use Power Remote keys for OFF if Art mode fails",
@@ -85,6 +88,9 @@
           "cleanup_max_age_days": "Delete artworks older than this many days. 0 disables the age limit.",
           "cleanup_only_integration_managed": "Only ever delete artworks this integration uploaded (never your own/Art Store items).",
           "cleanup_dry_run": "Preview cleanup in the logs without deleting anything.",
+          "inbox_dir": "Folder watched by Process Inbox for new images to tag.",
+          "library_dir": "Permanent folder for processed/tagged images used by rotation and the gallery.",
+          "resize_mode": "'crop' fills the screen and may trim edges; 'fit' shows the whole image with black bars (better for portraits).",
           "diagnostics_verbose": "Enable detailed debug logging for troubleshooting."
         }
       }
