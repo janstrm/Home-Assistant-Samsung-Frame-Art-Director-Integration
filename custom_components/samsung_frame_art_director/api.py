@@ -52,9 +52,83 @@ class SamsungFrameClient:
         self._art_lock: asyncio.Lock = asyncio.Lock()
         # DB path (set on demand by caller)
         self._db_path: Optional[str] = None
+        # Loop-safe callback to persist a refreshed token (set by the integration)
+        self._token_persister = None
 
     def set_db_path(self, path: str) -> None:
         self._db_path = path
+
+    def set_token_persister(self, persister) -> None:
+        """Register a callback used to persist a refreshed token.
+
+        The callback is invoked from worker threads, so it must be loop-safe
+        (the integration schedules the config-entry update via
+        ``loop.call_soon_threadsafe``).
+        """
+        self._token_persister = persister
+
+    def _make_tv(self, port: Optional[int] = None):
+        """Create a sync SamsungTVWS client that ALWAYS identifies with our
+        client name and token (when known).
+
+        The Frame ties authorization to the (name, token) pair. Connecting
+        without them — or under a different name — makes the TV treat us as a
+        new device and pop the "Allow access" dialog again, which is the root
+        cause of recurring pairing prompts. Routing every connection through
+        here guarantees a stable identity.
+        """
+        from samsungtvws import SamsungTVWS  # type: ignore
+        p = port or self._port or 8002
+        try:
+            if self._token:
+                return SamsungTVWS(self._host, port=p, token=self._token, name=self._client_name)  # type: ignore[arg-type]
+            return SamsungTVWS(self._host, port=p, name=self._client_name)
+        except TypeError:
+            # Very old library signature: keep at least the name so the TV
+            # still recognizes a stable identity.
+            try:
+                return SamsungTVWS(self._host, name=self._client_name)
+            except TypeError:
+                return SamsungTVWS(self._host)
+
+    def _capture_token(self, tv) -> None:
+        """Capture a token the TV may have (re)issued on this connection and
+        persist it, so authorization stays valid across reconnects instead of
+        drifting and re-triggering the approval popup."""
+        try:
+            new = getattr(tv, "token", None)
+        except Exception:  # noqa: BLE001
+            new = None
+        if new and new != self._token:
+            _LOGGER.debug("Token refreshed for %s; persisting new token", self._host)
+            self._token = new
+            persister = self._token_persister
+            if persister:
+                try:
+                    persister(new)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.debug("Token persister failed", exc_info=True)
+
+    async def async_send_key(self, key: str) -> None:
+        """Send a remote key over a properly-identified connection."""
+        def _send():
+            tv = self._make_tv()
+            try:
+                try:
+                    tv.remote().send_key(key)
+                except Exception:  # noqa: BLE001
+                    send_fn = getattr(tv, "send_key", None)
+                    if callable(send_fn):
+                        send_fn(key)
+            finally:
+                self._capture_token(tv)
+                closer = getattr(tv, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
+        await asyncio.to_thread(_send)
 
     def _get_db(self):
         """Open a sqlite connection to the library DB."""
@@ -503,11 +577,7 @@ class SamsungFrameClient:
         """Helper to select an image by ID (best effort)."""
          # Fallback logic similar to upload select
         def _do_select():
-            from samsungtvws import SamsungTVWS
-            try:
-                tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name) if self._token else SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)  # type: ignore[arg-type]
-            except TypeError:
-                tv = SamsungTVWS(self._host)
+            tv = self._make_tv()
             try:
                 art_client = tv.art()
                 # CRITICAL: For change_matte and 3.0.5, "none" is often the literal string expected,
@@ -536,13 +606,14 @@ class SamsungFrameClient:
             except Exception as e:
                 _LOGGER.debug("Select failed: %s", e)
             finally:
+                self._capture_token(tv)
                 try:
                     c = getattr(tv, "close", None)
                     if callable(c):
                         c()
                 except Exception:
                     pass
-                 
+
         await asyncio.to_thread(_do_select)
 
     async def async_rotate_from_folder(self, source_dir: str, matte: str = "none") -> bool:
@@ -746,12 +817,7 @@ class SamsungFrameClient:
         def _read_status() -> Optional[str]:
             tv = None
             try:
-                if self._token:
-                    tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name)  # type: ignore[arg-type]
-                else:
-                    tv = SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)
-            except TypeError:
-                tv = SamsungTVWS(self._host)
+                tv = self._make_tv()
             except (ConnectionError, TimeoutError, OSError) as e:
                 _LOGGER.debug("get_artmode: connection error on %s: %r", self._host, e)
                 return None
@@ -763,6 +829,7 @@ class SamsungFrameClient:
                 return None
             finally:
                 if tv is not None:
+                    self._capture_token(tv)
                     try:
                         close_fn = getattr(tv, "close", None)
                         if callable(close_fn):
@@ -793,7 +860,7 @@ class SamsungFrameClient:
         def _fetch():
             tv = None
             try:
-                tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name) if self._token else SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)
+                tv = self._make_tv()
                 art_client = tv.art()
                 # Prime the art channel
                 try:
@@ -872,6 +939,7 @@ class SamsungFrameClient:
                 _LOGGER.debug("Error fetching current art: %r", e)
             finally:
                 if tv:
+                    self._capture_token(tv)
                     try:
                         tv.close()
                     except Exception:
@@ -924,6 +992,7 @@ class SamsungFrameClient:
                     if not hasattr(remote, "art"):
                         raise AttributeError("AsyncRemote missing art() API")
                     await remote.open()
+                    self._capture_token(remote)
                     _LOGGER.debug("ArtMode(async): sending set_artmode(%s) to %s", bool(enabled), self._host)
 
                     def _do_set() -> None:
@@ -958,20 +1027,8 @@ class SamsungFrameClient:
             return
 
         def _make_client():
-            try:
-                if self._token:
-                    _LOGGER.debug("Creating client with stored token: %s", _mask_secret(self._token))
-                    if self._port:
-                        return SamsungTVWS(self._host, port=self._port, token=self._token, name=self._client_name)  # type: ignore[arg-type]
-                    return SamsungTVWS(self._host, token=self._token, name=self._client_name)  # type: ignore[arg-type]
-            except TypeError:
-                pass
-            try:
-                if self._port:
-                    return SamsungTVWS(self._host, port=self._port, name=self._client_name)
-                return SamsungTVWS(self._host, name=self._client_name)
-            except TypeError:
-                return SamsungTVWS(self._host)
+            _LOGGER.debug("Creating client (token=%s)", _mask_secret(self._token))
+            return self._make_tv(port=self._port)
 
         def _set():
             tv_local = _make_client()
@@ -1039,6 +1096,7 @@ class SamsungFrameClient:
                         _LOGGER.debug("ArtMode: select image fallback failed on %s: %r", self._host, sel_err)
                 time.sleep(2)
             _LOGGER.debug("ArtMode: final status=%s on %s", last_status, self._host)
+            self._capture_token(tv_local)
             try:
                 close_fn = getattr(tv_local, "close", None)
                 if callable(close_fn):
@@ -1193,7 +1251,11 @@ class SamsungFrameClient:
             try:
                 # Track and finish
                 await self.async_track_art(new_content_id, source_file=source_file)
-                
+
+                # Persist any refreshed token the async client picked up
+                if final_client:
+                    self._capture_token(final_client)
+
                 # Final cleanup
                 if final_client:
                     try:
@@ -1218,17 +1280,8 @@ class SamsungFrameClient:
             return
 
         def _make_client():
-            try:
-                if self._token:
-                    # Force SSL websocket port 8002 for upload operations
-                    return SamsungTVWS(self._host, port=8002, token=self._token, name=self._client_name)  # type: ignore[arg-type]
-            except TypeError:
-                pass
-            try:
-                # Force SSL websocket port 8002 for upload operations
-                return SamsungTVWS(self._host, port=8002, name=self._client_name)
-            except TypeError:
-                return SamsungTVWS(self._host)
+            # Force SSL websocket port 8002 for upload operations
+            return self._make_tv(port=8002)
 
         tv = await asyncio.to_thread(_make_client)
 
@@ -1296,10 +1349,7 @@ class SamsungFrameClient:
                     try:
                         from samsungtvws import SamsungTVWS  # type: ignore
                         def _prime():
-                            try:
-                                tvp = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name) if self._token else SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)  # type: ignore[arg-type]
-                            except TypeError:
-                                tvp = SamsungTVWS(self._host)
+                            tvp = self._make_tv()
                             try:
                                 try:
                                     tvp.art().supported()
@@ -1310,6 +1360,7 @@ class SamsungFrameClient:
                                 except Exception:
                                     pass
                             finally:
+                                self._capture_token(tvp)
                                 try:
                                     c = getattr(tvp, "close", None)
                                     if callable(c):
@@ -1359,13 +1410,7 @@ class SamsungFrameClient:
             return {"error": str(err)}
 
         def _collect() -> dict:
-            try:
-                if self._token:
-                    tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name)  # type: ignore[arg-type]
-                else:
-                    tv = SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)
-            except TypeError:
-                tv = SamsungTVWS(self._host)
+            tv = self._make_tv()
             result: dict = {"host": self._host}
             try:
                 result["supported"] = tv.art().supported()
@@ -1413,10 +1458,7 @@ class SamsungFrameClient:
             return {"error": str(err)}
 
         def _fetch_tv_state():
-            try:
-                tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name) if self._token else SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)  # type: ignore[arg-type]
-            except TypeError:
-                tv = SamsungTVWS(self._host)
+            tv = self._make_tv()
             current_id = None
             available: list = []
             try:
@@ -1429,6 +1471,7 @@ class SamsungFrameClient:
                 available = tv.art().available() or []
             except Exception:
                 available = []
+            self._capture_token(tv)
             try:
                 closer = getattr(tv, "close", None)
                 if callable(closer):
@@ -1563,10 +1606,7 @@ class SamsungFrameClient:
                 errors: list[str] = []
                 if not ids:
                     return deleted, errors
-                try:
-                    tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name) if self._token else SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)  # type: ignore[arg-type]
-                except TypeError:
-                    tv = SamsungTVWS(self._host)
+                tv = self._make_tv()
                 try:
                     batch = list(ids)
                     # Prefer delete_list if present
@@ -1582,6 +1622,7 @@ class SamsungFrameClient:
                             except Exception as e:  # noqa: BLE001
                                 errors.append(f"{cid}: {e!r}")
                 finally:
+                    self._capture_token(tv)
                     try:
                         closer = getattr(tv, "close", None)
                         if callable(closer):
@@ -1690,10 +1731,7 @@ class SamsungFrameClient:
                 return
 
             def _select_random_from_tv():
-                try:
-                    tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name) if self._token else SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)  # type: ignore[arg-type]
-                except TypeError:
-                    tv = SamsungTVWS(self._host)
+                tv = self._make_tv()
                 try:
                     avail = tv.art().available() or []
                     candidates: list[str] = []
@@ -1736,6 +1774,7 @@ class SamsungFrameClient:
                     except Exception as e:
                         _LOGGER.debug("rotate(tv): select_image failed: %r", e)
                 finally:
+                    self._capture_token(tv)
                     closer = getattr(tv, "close", None)
                     if callable(closer):
                         closer()

@@ -331,6 +331,15 @@ then deletes via `delete_list` (fallback: per-id `delete`) and reconciles the
 
 Patterns you will see repeated, and why they exist:
 
+- **Stable connection identity (avoids recurring pairing popups).** The Frame
+  ties authorization to the `(client name, token)` pair. The integration opens a
+  short-lived connection per operation, so every one of them must present the
+  same name and token or the TV treats it as a *new device* and re-shows the
+  "Allow access" dialog. All sync clients are therefore built through
+  `SamsungFrameClient._make_tv()` (always passes `name` + `token`), and
+  `_capture_token()` runs on close to **persist any token the TV re-issues** (via
+  a loop-safe `set_token_persister` callback wired in `__init__.py`) so
+  authorization doesn't drift. Never construct a bare `SamsungTVWS(host)`.
 - **Async-first, sync-fallback.** `SamsungTVWSAsyncRemote` / `SamsungTVAsyncArt`
   are preferred (non-blocking, fewer stalls), but not present/working on every
   library version or model — so a synchronous `SamsungTVWS`-in-a-thread path
