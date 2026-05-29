@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SLIDESHOW_INTERVAL, DOMAIN, CONF_DUID
+from .const import CONF_SLIDESHOW_INTERVAL, DOMAIN, CONF_DUID, DATA_CLIENT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,7 +19,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up the number platform."""
     _LOGGER.debug("Setting up number platform for entry: %s", entry.entry_id)
-    async_add_entities([SamsungFrameSlideshowInterval(entry), SamsungFrameGalleryPage(entry)], True)
+    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    async_add_entities([
+        SamsungFrameSlideshowInterval(entry),
+        SamsungFrameGalleryPage(entry),
+        SamsungFrameBrightness(entry, client),
+        SamsungFrameColorTemperature(entry, client),
+    ], True)
 
 
 class SamsungFrameSlideshowInterval(NumberEntity):
@@ -99,4 +105,78 @@ class SamsungFrameGalleryPage(NumberEntity):
     async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""
         self._current_page = value
+        self.async_write_ha_state()
+
+
+class _SamsungFrameArtSetting(NumberEntity):
+    """Base for Art-Mode display settings read from / written to the TV.
+
+    These don't poll (to avoid extra TV connections); the value is read once
+    when added and updated optimistically on change. Changes made with the TV
+    remote won't be reflected until HA restarts.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_native_step = 1
+
+    def __init__(self, entry: ConfigEntry, client, suffix: str) -> None:
+        self._entry = entry
+        self._client = client
+        self._value: float | None = None
+        self._attr_unique_id = f"{entry.entry_id}_{suffix}"
+        device_id = entry.data.get(CONF_DUID) or entry.entry_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=entry.title,
+            manufacturer="Samsung",
+            model="The Frame",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        return self._value
+
+
+class SamsungFrameBrightness(_SamsungFrameArtSetting):
+    """Art Mode brightness (0-10)."""
+
+    _attr_name = "Art Mode Brightness"
+    _attr_icon = "mdi:brightness-6"
+    _attr_native_min_value = 0
+    _attr_native_max_value = 10
+
+    def __init__(self, entry: ConfigEntry, client) -> None:
+        super().__init__(entry, client, "art_brightness")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._value = await self._client.async_get_brightness()
+        self.async_write_ha_state()
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._client.async_set_brightness(int(value))
+        self._value = int(value)
+        self.async_write_ha_state()
+
+
+class SamsungFrameColorTemperature(_SamsungFrameArtSetting):
+    """Art Mode color temperature (-5..5)."""
+
+    _attr_name = "Art Mode Color Temperature"
+    _attr_icon = "mdi:thermometer"
+    _attr_native_min_value = -5
+    _attr_native_max_value = 5
+
+    def __init__(self, entry: ConfigEntry, client) -> None:
+        super().__init__(entry, client, "art_color_temp")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._value = await self._client.async_get_color_temperature()
+        self.async_write_ha_state()
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._client.async_set_color_temperature(int(value))
+        self._value = int(value)
         self.async_write_ha_state()

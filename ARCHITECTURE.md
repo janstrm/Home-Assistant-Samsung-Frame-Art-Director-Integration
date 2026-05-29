@@ -82,7 +82,7 @@ custom_components/samsung_frame_art_director/
 ├── __init__.py        # Setup, teardown, service & WS-API registration, slideshow timer
 ├── api.py             # SamsungFrameClient: the core TV facade + SQLite library DB (~1.8k lines)
 ├── bridge.py          # Pairing/handshake + port/method selection (used by config_flow)
-├── config_flow.py     # Initial pairing UI + reauth + options flow
+├── config_flow.py     # Pairing UI, zeroconf discovery, reauth, reconfigure, options
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
 ├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
 ├── const.py           # Constants, option keys, defaults
@@ -92,7 +92,7 @@ custom_components/samsung_frame_art_director/
 ├── media_player.py    # Main control entity (power/art-mode status)
 ├── switch.py          # slideshow_enabled, gallery_favorites_only
 ├── select.py          # slideshow source + interval pickers; matte style + color
-├── number.py          # custom slideshow interval, gallery page
+├── number.py          # slideshow interval, gallery page, art brightness + color temp
 ├── text.py            # free-text slideshow/tag filter
 ├── services.yaml      # Service schemas (UI metadata)
 ├── strings.json       # config/options flow strings
