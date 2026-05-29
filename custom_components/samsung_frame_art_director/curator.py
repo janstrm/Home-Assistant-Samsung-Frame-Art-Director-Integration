@@ -12,8 +12,14 @@ import logging
 from datetime import datetime
 from PIL import Image
 
-from .ai import GeminiAnalyzer
+from .ai import create_analyzer
 from .api import SamsungFrameClient
+from .const import (
+    AI_PROVIDER_GEMINI,
+    CONF_AI_PROVIDER,
+    CONF_GEMINI_API_KEY,
+    CONF_OPENAI_API_KEY,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,18 +31,25 @@ class ContentCurator:
         self._inbox_dir = "/media/frame/inbox"
         self._library_dir = "/media/frame/library"
 
+    def _build_analyzer(self):
+        """Build the AI analyzer for the configured provider.
+
+        Returns ``(analyzer, error)``; ``error`` is ``None`` on success.
+        """
+        provider = self.entry.options.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)
+        return create_analyzer(
+            provider,
+            gemini_api_key=self.entry.options.get(CONF_GEMINI_API_KEY, ""),
+            openai_api_key=self.entry.options.get(CONF_OPENAI_API_KEY, ""),
+        )
+
     async def async_process_inbox(self):
         """Process all images in the inbox."""
-        api_key = self.entry.options.get("gemini_api_key")
-        if not api_key:
-            _LOGGER.warning(
-                "Process Inbox: No Gemini API key configured. "
-                "Please add your API key in the integration options (Settings > Devices > Samsung Frame Art Director > Configure)."
-            )
-            return {"count": 0, "error": "No Gemini API key configured. Add it in integration options."}
+        analyzer, analyzer_err = self._build_analyzer()
+        if analyzer_err:
+            _LOGGER.warning("Process Inbox: %s", analyzer_err)
+            return {"count": 0, "error": analyzer_err}
 
-        analyzer = GeminiAnalyzer(api_key)
-        
         # Scan inbox (Moved to executor)
         def _list_files():
             if not os.path.exists(self._inbox_dir):
@@ -183,8 +196,8 @@ class ContentCurator:
             db_paths = await self.api.async_get_local_art_paths()
 
         # ── Phase 3: Add untracked files (on disk but not in DB) ────────
-        api_key = self.entry.options.get("gemini_api_key")
-        
+        analyzer, analyzer_err = self._build_analyzer()
+
         def _get_disk_files():
             if not os.path.exists(self._library_dir):
                 return []
@@ -198,16 +211,14 @@ class ContentCurator:
         missing_files = await self.hass.async_add_executor_job(_get_disk_files)
         added_count = 0
 
-        if missing_files and not api_key:
+        if missing_files and analyzer_err:
             _LOGGER.warning(
-                "Sync Library: Found %d untracked images but no Gemini API key configured. "
-                "Stale/duplicate cleanup was completed, but new images cannot be tagged. "
-                "Add your API key in Settings > Devices > Samsung Frame Art Director > Configure.",
-                len(missing_files)
+                "Sync Library: Found %d untracked images but the AI analyzer is unavailable: %s "
+                "Stale/duplicate cleanup was completed, but new images cannot be tagged.",
+                len(missing_files), analyzer_err
             )
         elif missing_files:
             _LOGGER.info("Sync Library: Found %d untracked images. Starting AI analysis...", len(missing_files))
-            analyzer = GeminiAnalyzer(api_key)
 
             for path in missing_files:
                 try:

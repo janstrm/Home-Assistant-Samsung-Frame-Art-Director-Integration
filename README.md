@@ -280,6 +280,8 @@ Check HA logs filtered by `samsung_frame_art_director` for detailed error messag
 Contributions, issues, and feature requests are welcome!
 Feel free to check the [issues page](https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/issues).
 
+> **Working on the code?** Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first — it explains the module layout, the SQLite data model, the key control flows, and (importantly) *why* the TV-API fallback logic exists before you refactor it.
+
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
 3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)

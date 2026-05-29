@@ -46,7 +46,9 @@
       "init": {
         "title": "Samsung Frame Art Director Options",
         "data": {
+          "ai_provider": "AI Tagging Provider",
           "gemini_api_key": "Gemini AI API Key",
+          "openai_api_key": "OpenAI API Key (requires the 'openai' package)",
           "slideshow_enabled": "Enable Automated Slideshow",
           "slideshow_interval": "Rotation Interval (minutes)",
           "slideshow_source_type": "Source Type (Tags / Folders / Library)",

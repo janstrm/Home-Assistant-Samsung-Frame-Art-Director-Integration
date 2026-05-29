@@ -50,7 +50,13 @@ CONF_SLIDESHOW_SOURCE_TYPE = "slideshow_source_type"
 CONF_SLIDESHOW_FILTER = "slideshow_filter"
 CONF_SLIDESHOW_INTERVAL = "slideshow_interval"
 CONF_GEMINI_API_KEY = "gemini_api_key"
+CONF_OPENAI_API_KEY = "openai_api_key"
+CONF_AI_PROVIDER = "ai_provider"
 CONF_MATTE_ENABLED = "matte_enabled"
+
+# AI vision providers used for auto-tagging
+AI_PROVIDER_GEMINI = "gemini"
+AI_PROVIDER_OPENAI = "openai"
 
 SLIDESHOW_SOURCE_FOLDER = "folder"
 SLIDESHOW_SOURCE_TAGS = "Tags"

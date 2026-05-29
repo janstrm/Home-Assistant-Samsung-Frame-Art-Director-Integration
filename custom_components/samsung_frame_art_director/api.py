@@ -482,6 +482,10 @@ class SamsungFrameClient:
         def _do_select():
             from samsungtvws import SamsungTVWS
             try:
+                tv = SamsungTVWS(self._host, port=(self._port or 8002), token=self._token, name=self._client_name) if self._token else SamsungTVWS(self._host, port=(self._port or 8002), name=self._client_name)  # type: ignore[arg-type]
+            except TypeError:
+                tv = SamsungTVWS(self._host)
+            try:
                 art_client = tv.art()
                 # CRITICAL: For change_matte and 3.0.5, "none" is often the literal string expected,
                 # but select_image prefers None to clear it.
