@@ -38,7 +38,7 @@ class ImageAnalyzer(ABC):
         pass
 
 class GeminiAnalyzer(ImageAnalyzer):
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
         self.api_key = api_key
         self.model_name = model
         self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
@@ -176,6 +176,7 @@ def create_analyzer(
     provider: str,
     gemini_api_key: str = "",
     openai_api_key: str = "",
+    model: str = "",
 ) -> tuple[Optional[ImageAnalyzer], Optional[str]]:
     """Build the configured image analyzer.
 
@@ -188,6 +189,7 @@ def create_analyzer(
     suitable for logging and persistent notifications.
     """
     provider = (provider or "gemini").lower()
+    model = (model or "").strip()
 
     if provider == "openai":
         if not openai_api_key:
@@ -195,6 +197,8 @@ def create_analyzer(
                 "OpenAI selected but no OpenAI API key configured. "
                 "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
             )
+        if model:
+            return OpenAIAnalyzer(openai_api_key, model_name=model), None
         return OpenAIAnalyzer(openai_api_key), None
 
     # Default provider: Google Gemini
@@ -203,4 +207,6 @@ def create_analyzer(
             "No Gemini API key configured. "
             "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
         )
+    if model:
+        return GeminiAnalyzer(gemini_api_key, model=model), None
     return GeminiAnalyzer(gemini_api_key), None

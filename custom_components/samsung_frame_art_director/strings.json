@@ -49,6 +49,7 @@
         "description": "Matte style/color, the slideshow toggle and the favorites filter are controlled by their own entities; this dialog covers the remaining settings.",
         "data": {
           "ai_provider": "AI Tagging Provider",
+          "ai_model": "AI Model (optional override)",
           "gemini_api_key": "Gemini API Key",
           "openai_api_key": "OpenAI API Key (requires the 'openai' package)",
           "slideshow_enabled": "Enable Slideshow",
@@ -68,6 +69,7 @@
         },
         "data_description": {
           "ai_provider": "Which AI vision service tags images dropped into the inbox.",
+          "ai_model": "Leave blank for the recommended default (gemini-2.5-flash / gpt-4o). Override only if you need a specific model.",
           "gemini_api_key": "Required when the provider is Gemini. Get a free key at aistudio.google.com.",
           "openai_api_key": "Required when the provider is OpenAI. The 'openai' Python package must be installed.",
           "slideshow_interval": "How often to rotate art, in minutes. 0 disables the timer.",
