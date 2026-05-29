@@ -28,7 +28,6 @@ from homeassistant.helpers.selector import (
 
 from .bridge import async_probe_device_info, async_try_connect, async_encrypted_start_pairing, async_encrypted_try_pin
 from .const import (
-    DOMAIN,
     CONF_DUID,
     RESULT_AUTH_MISSING,
     RESULT_CANNOT_CONNECT,

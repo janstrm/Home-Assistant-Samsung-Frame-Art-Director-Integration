@@ -52,7 +52,6 @@ coverage.xml
 HA Testing/
 HA logs/
 docs/
-tests/
 test/
 
 # Keep the relevant files and folders for HACS

@@ -12,7 +12,10 @@ import os
 import tempfile
 
 from .const import DOMAIN
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 # Suppress local HTTPS cert warnings from TV endpoints during pairing/info calls
 try:  # pragma: no cover - best-effort suppression
@@ -916,7 +919,7 @@ class SamsungFrameClient:
     async def async_get_artmode_status(self) -> Optional[str]:
         """Return current Art Mode status as 'on'/'off'/None with best effort logging."""
         try:
-            from samsungtvws import SamsungTVWS  # type: ignore
+            from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("get_artmode: samsungtvws unavailable: %r", err)
             return None
@@ -960,7 +963,7 @@ class SamsungFrameClient:
 
         results = {"content_id": None, "image": None}
         try:
-            from samsungtvws import SamsungTVWS
+            from samsungtvws import SamsungTVWS  # noqa: F401
         except Exception:
             return results
 
@@ -1127,7 +1130,7 @@ class SamsungFrameClient:
 
         # Fallback path: sync client in executor
         try:
-            from samsungtvws import SamsungTVWS  # type: ignore
+            from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("samsungtvws import failed, cannot set art mode: %s", err)
             await asyncio.sleep(0.01)
@@ -1285,13 +1288,11 @@ class SamsungFrameClient:
                 try:
                     from samsungtvws import SamsungTVAsyncArt  # type: ignore
                 except ImportError:
-                    from samsungtvws.async_art import SamsungTVAsyncArt  # type: ignore
+                    from samsungtvws.async_art import SamsungTVAsyncArt  # type: ignore  # noqa: F401
             except Exception as e:  # noqa: BLE001
                 _LOGGER.debug("Async art API unavailable: %r", e)
                 return None
 
-            tv_async = None
-            
             async def _attempt_upload(port):
                 async_client = None
                 try:
@@ -1466,7 +1467,7 @@ class SamsungFrameClient:
                 try:
                     # Prime art channel just before attempt
                     try:
-                        from samsungtvws import SamsungTVWS  # type: ignore
+                        from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
                         def _prime():
                             tvp = self._make_tv()
                             try:
@@ -1524,7 +1525,7 @@ class SamsungFrameClient:
         Returns dict with supported, status, current id, available sample ids.
         """
         try:
-            from samsungtvws import SamsungTVWS  # type: ignore
+            from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("Diagnostics: samsungtvws unavailable: %s", err)
             return {"error": str(err)}
@@ -1716,7 +1717,7 @@ class SamsungFrameClient:
         # Execute deletion in batches under art lock
         async with self._art_lock:
             try:
-                from samsungtvws import SamsungTVWS  # type: ignore
+                from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
             except Exception as err:  # noqa: BLE001
                 summary["errors"].append(str(err))
                 return summary
@@ -1797,6 +1798,8 @@ class SamsungFrameClient:
 
     async def async_add_local_art(self, file_path, tags, description, width, height, file_size):
         """Add -local only- art to the database."""
+        await self._ensure_db()
+
         def _add():
             with self._get_db() as conn:
                 conn.execute(

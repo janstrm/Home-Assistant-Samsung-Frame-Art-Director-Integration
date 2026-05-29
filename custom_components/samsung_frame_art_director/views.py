@@ -1,13 +1,10 @@
 import logging
-import os
 from http import HTTPStatus
-from typing import Optional
 
 from aiohttp import web
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, DATA_CLIENT
 
@@ -32,11 +29,9 @@ class SamsungFrameThumbnailView(HomeAssistantView):
         
         # 1. Use content_id as-is (it might be a file path)
         clean_id = content_id
-        
-        # 2. Locate DB
-        db_path = None
+
         client = None
-        
+
         # Find loaded config entry
         entries = self.hass.config_entries.async_entries(DOMAIN)
         if not entries:
