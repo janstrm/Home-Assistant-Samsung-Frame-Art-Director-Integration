@@ -48,7 +48,8 @@ CONF_SLIDESHOW_SOURCE_PATH = "slideshow_source_dir"  # Legacy, kept for folder p
 CONF_SLIDESHOW_ENABLED = "slideshow_enabled"
 CONF_SLIDESHOW_SOURCE_TYPE = "slideshow_source_type"
 CONF_SLIDESHOW_FILTER = "slideshow_filter"
-CONF_SLIDESHOW_INTERVAL = "slideshow_interval"
+# Preconfigured default so enabling the slideshow is a single tap.
+DEFAULT_SLIDESHOW_INTERVAL = 15
 CONF_GEMINI_API_KEY = "gemini_api_key"
 CONF_OPENAI_API_KEY = "openai_api_key"
 CONF_AI_PROVIDER = "ai_provider"

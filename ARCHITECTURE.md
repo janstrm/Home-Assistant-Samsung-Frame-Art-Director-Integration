@@ -91,7 +91,7 @@ custom_components/samsung_frame_art_director/
 ├── image.py           # Live "current artwork" preview entity
 ├── media_player.py    # Main control entity (power/art-mode status)
 ├── switch.py          # slideshow_enabled, gallery_favorites_only
-├── select.py          # slideshow source + interval pickers; matte style + color
+├── select.py          # slideshow source picker; matte style + color
 ├── number.py          # slideshow interval, gallery page, art brightness + color temp
 ├── text.py            # free-text slideshow/tag filter
 ├── services.yaml      # Service schemas (UI metadata)
@@ -146,10 +146,18 @@ models. Returns `PairResult` objects with `RESULT_*` semantics from `const.py`.
 - **`SamsungFrameConfigFlow`** — probes the host, picks a port, sets a unique id
   from the DUID, and runs either the standard pairing step or the encrypted PIN
   step (selected by model-name prefix `H`/`J`).
-- **`OptionsFlowHandler`** — all runtime tunables: AI provider + API keys,
-  slideshow, matte, Wake-on-LAN, cleanup thresholds, verbose logging. Option
-  changes are hot-applied (slideshow timer reload) **without** a full entry
-  reload, to avoid an "unavailable" blip on the entities.
+- **`OptionsFlowHandler`** — setup-time, rarely-changed config only: AI
+  provider/keys/model, folders, image fit, cleanup, Wake-on-LAN, verbose
+  logging. All fields are **optional** (nothing required) and grouped into
+  collapsible **sections** (`data_entry_flow.section`) with proper selectors.
+  Because sections return data **nested** under each section key, `async_step_init`
+  **flattens** the payload (driven by `OPTION_SECTIONS`) and merges it into
+  existing options so entity-managed keys are preserved. Slideshow/matte/favorites
+  live as **entities**, not here. Option changes are hot-applied (slideshow timer +
+  resize mode) **without** a full entry reload, to avoid an "unavailable" blip.
+- **Config-entry migration** — `async_migrate_entry` in `__init__.py` upgrades to
+  `VERSION = 3`: legacy `matte_enabled` → `matte_style`/`matte_color`, legacy
+  `slideshow_source_dir` → `library_dir`. Idempotent; guarded on version.
 
 ### `curator.py` — `ContentCurator`
 
