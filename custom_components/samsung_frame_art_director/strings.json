@@ -41,6 +41,7 @@
     "step": {
       "init": {
         "title": "Configure Art Director Options",
+        "description": "Matte style/color, the slideshow toggle and the favorites filter are controlled by their own entities; this dialog covers the remaining settings.",
         "data": {
           "ai_provider": "AI Tagging Provider",
           "gemini_api_key": "Gemini API Key",
@@ -49,7 +50,7 @@
           "slideshow_interval": "Rotation Interval (minutes)",
           "slideshow_source_type": "Rotation Source",
           "slideshow_filter": "Slideshow Filter (Tags or Folders)",
-          "slideshow_source_path": "Local Media Path (Legacy)",
+          "slideshow_source_dir": "Local Media Path (Legacy)",
           "mac_address": "MAC Address (for WoL)",
           "use_wol_before_on": "Send WoL before Art ON",
           "use_power_key_on_off": "Use Power Key as OFF fallback",
@@ -57,7 +58,22 @@
           "cleanup_max_age_days": "Cleanup: Max age (days)",
           "cleanup_preserve_current": "Cleanup: Keep current image",
           "cleanup_only_integration_managed": "Cleanup: Only track integration images",
+          "cleanup_dry_run": "Cleanup: Dry run (log only, don't delete)",
           "diagnostics_verbose": "Enable Verbose Logging"
+        },
+        "data_description": {
+          "ai_provider": "Which AI vision service tags images dropped into the inbox.",
+          "gemini_api_key": "Required when the provider is Gemini. Get a free key at aistudio.google.com.",
+          "openai_api_key": "Required when the provider is OpenAI. The 'openai' Python package must be installed.",
+          "slideshow_interval": "How often to rotate art, in minutes. 0 disables the timer.",
+          "slideshow_source_type": "Where rotation picks images from: a folder, a tag filter, or the whole library.",
+          "slideshow_filter": "Folder path (Folder source) or comma-separated tags (Tags source). Prefix a tag with '-' to exclude it.",
+          "use_power_key_on_off": "If turning Art Mode off fails, send the TV's power key as a fallback.",
+          "cleanup_max_items": "Maximum artworks to keep on the TV; oldest are deleted first.",
+          "cleanup_max_age_days": "Delete artworks older than this many days. 0 disables the age limit.",
+          "cleanup_only_integration_managed": "Only ever delete artworks this integration uploaded (never your own/Art Store items).",
+          "cleanup_dry_run": "Preview cleanup in the logs without deleting anything.",
+          "diagnostics_verbose": "Enable detailed debug logging for troubleshooting."
         }
       }
     }
