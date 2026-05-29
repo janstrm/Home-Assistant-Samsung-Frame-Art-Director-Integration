@@ -5,11 +5,10 @@ to analyze images and generate descriptive tags.
 It is designed to be usable standalone (for testing) or within HA.
 """
 import logging
-import asyncio
 import base64
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 
 # Configure logging for standalone use
 logging.basicConfig(level=logging.INFO)

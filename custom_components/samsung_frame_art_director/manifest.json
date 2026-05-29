@@ -1,7 +1,7 @@
 {
   "domain": "samsung_frame_art_director",
   "name": "Samsung Frame Art Director",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "config_flow": true,
   "documentation": "https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration",
   "iot_class": "local_polling",

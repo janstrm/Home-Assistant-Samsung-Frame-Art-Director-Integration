@@ -12,19 +12,16 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components import persistent_notification
 
 from .const import (
-    DATA_CLIENT, 
-    DOMAIN, 
-    METHOD_ENCRYPTED, 
-    CONF_SLIDESHOW_INTERVAL, 
-    CONF_SLIDESHOW_SOURCE_PATH, 
-    CONF_SLIDESHOW_ENABLED, 
-    CONF_SLIDESHOW_SOURCE_TYPE, 
-    CONF_SLIDESHOW_FILTER, 
-    SLIDESHOW_SOURCE_FOLDER, 
-    SLIDESHOW_SOURCE_TAGS, 
-    SLIDESHOW_SOURCE_LIBRARY,
+    DATA_CLIENT,
+    DOMAIN,
+    CONF_SLIDESHOW_INTERVAL,
+    CONF_SLIDESHOW_SOURCE_PATH,
+    CONF_SLIDESHOW_ENABLED,
+    CONF_SLIDESHOW_SOURCE_TYPE,
+    CONF_SLIDESHOW_FILTER,
+    SLIDESHOW_SOURCE_FOLDER,
+    SLIDESHOW_SOURCE_TAGS,
     DEFAULT_SLIDESHOW_INTERVAL,
-    CONF_GEMINI_API_KEY,
     CONF_RESIZE_MODE,
     DEFAULT_RESIZE_MODE,
     CONF_INBOX_DIR,
@@ -392,9 +389,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Get matte from configured style/color
         matte = resolve_matte(entry.options)
 
-        found = False
         async for client in _resolve_clients(call):
-            found = True
             try:
                 if source == "folder":
                     # Use provided path or default from options

@@ -9,7 +9,6 @@ This module handles:
 import os
 import shutil
 import logging
-from datetime import datetime
 from PIL import Image
 
 from .ai import create_analyzer
