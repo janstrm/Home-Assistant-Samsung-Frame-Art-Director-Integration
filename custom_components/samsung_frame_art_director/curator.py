@@ -17,6 +17,7 @@ from .api import SamsungFrameClient
 from .const import (
     AI_PROVIDER_GEMINI,
     CONF_AI_PROVIDER,
+    CONF_AI_MODEL,
     CONF_GEMINI_API_KEY,
     CONF_OPENAI_API_KEY,
 )
@@ -41,6 +42,7 @@ class ContentCurator:
             provider,
             gemini_api_key=self.entry.options.get(CONF_GEMINI_API_KEY, ""),
             openai_api_key=self.entry.options.get(CONF_OPENAI_API_KEY, ""),
+            model=self.entry.options.get(CONF_AI_MODEL, ""),
         )
 
     async def async_process_inbox(self):
