@@ -206,21 +206,17 @@ cleanup (`on_tv`, favorites, age).
 The columns the code actually reads/writes are: `content_id` (PK), `tags`,
 `source_file` (the local file it came from, enabling instant high-res preview),
 `is_favorite`, `created_at`, `last_displayed_at`, `on_tv`, `deleted_at`,
-`category`.
+`category`, plus `width`/`height`.
 
-> ⚠️ **Schema caveat — read before touching `_ensure_db()`.** The
-> `CREATE TABLE art_library` statement in `_ensure_db()` lists a *different,
-> older* column set (`date_added`, `last_seen`, `source`) than the columns the
-> rest of the code uses (`created_at`, `last_displayed_at`, `on_tv`,
-> `is_favorite`). The `ALTER TABLE` migrations add `tags`, `category`,
-> `deleted_at`, `source_file` — but **not** `created_at`, `last_displayed_at`,
-> `on_tv`, or `art_library.is_favorite`. On a brand-new database these
-> `art_library` writes/reads can raise `no such column`, which is caught and
-> logged rather than fatal. In practice the integration works because the
-> **`local_art` table is internally consistent** and is the primary path
-> (inbox/sync write there; rotation uploads from there). If you rework the
-> schema, make `CREATE TABLE` match the columns actually used and add the
-> missing migrations. See [§11 quirks](#11-known-quirks--gotchas).
+> 🛠 **Maintaining `_ensure_db()`.** The `CREATE TABLE art_library` statement
+> declares exactly the column set above, and a guarded `ALTER TABLE ADD COLUMN`
+> migration exists for each non-PK column so older databases are upgraded in
+> place (idempotently). **If you add a column the code uses, add it in *both*
+> places** — the `CREATE TABLE` (for fresh installs) and an
+> `if "<col>" not in existing_cols` migration (for existing installs).
+> Databases created by a much older schema (`date_added`/`last_seen`/`source`)
+> keep those now-unused columns as harmless leftovers; the migrations fill in
+> everything the current code needs.
 
 ### Why two tables?
 
@@ -409,10 +405,9 @@ the [README](README.md#-services).
 
 ## 11. Known quirks & gotchas
 
-- **`art_library` schema mismatch** — see the caveat in [§5](#5-data-model-sqlite).
-  `CREATE TABLE` columns don't match the columns the code uses; missing columns
-  are not added by migrations. Errors are swallowed; `local_art` carries the
-  feature set. Fix carefully if you touch `_ensure_db()`.
+- **`art_library` schema is two-place** — `CREATE TABLE` *and* the `ALTER`
+  migrations must stay in sync (see [§5](#5-data-model-sqlite)). Adding a column
+  in only one place silently breaks either fresh installs or upgrades.
 - **`OpenAIAnalyzer` needs a manual dependency.** `openai` isn't declared in
   `manifest.json`. This is intentional (don't force the dep on Gemini users) but
   means OpenAI silently errors until the package is installed.
