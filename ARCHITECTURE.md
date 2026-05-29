@@ -410,12 +410,16 @@ provider constant in `const.py`, and add its option(s) to the options flow in
 
 ## 9. Services, entities & the dashboard
 
-Service schemas live in `services.yaml`; handlers are registered in
-`__init__.py`. Domain-targeted services (`set_artmode`, `upload_art`,
-`rotate_art_now`, `cleanup_storage`, `art_diagnostics`) resolve their target
-`SamsungFrameClient`(s) via `_resolve_clients()` from the entity target;
-library/gallery services (`process_inbox`, `sync_library`, `purge_database`,
-`toggle_favorite`, `delete_art`, `rotate_favorites`) act on the entry's client.
+Service schemas live in `services.yaml`; handlers are registered **only** in
+`__init__.py` (a single source of truth). Domain-targeted services
+(`set_artmode`, `upload_art`, `rotate_art_now`, `cleanup_storage`,
+`art_diagnostics`) resolve their target `SamsungFrameClient`(s) via
+`_resolve_clients()` from the entity target; library/gallery services
+(`process_inbox`, `sync_library`, `purge_database`, `toggle_favorite`,
+`delete_art`, `rotate_favorites`) act on the entry's client. `media_player.py`
+deliberately does **not** register entity-platform services for the same names
+(it would double-register and diverge); it only implements the native
+`turn_on`/`turn_off` Art-Mode toggle.
 
 A **WebSocket command** `samsung_frame_art_director/get_library` and the
 `SamsungFrameThumbnailView` HTTP view feed the example gallery dashboard. The
