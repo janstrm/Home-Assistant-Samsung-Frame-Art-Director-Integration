@@ -113,6 +113,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     safe_host = str(host).replace("/", "_").replace(".", "_")
     token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
     client = SamsungFrameClient(hass, host, entry.data.get("token"), token_file_path=token_file_path, port=entry.data.get("port"))
+
+    # Persist a refreshed token whenever the TV (re)issues one during normal
+    # operation, so authorization stays valid across reconnects and the TV
+    # stops re-prompting for access. Called from worker threads, so hop back
+    # onto the event loop before touching the config entry.
+    def _persist_token(new_token: str) -> None:
+        def _update() -> None:
+            cur = hass.config_entries.async_get_entry(entry.entry_id)
+            if cur and new_token and new_token != cur.data.get("token"):
+                _LOGGER.info("Persisting refreshed token for host=%s", host)
+                hass.config_entries.async_update_entry(cur, data={**cur.data, "token": new_token})
+        hass.loop.call_soon_threadsafe(_update)
+
+    client.set_token_persister(_persist_token)
+
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
         import os as _os
@@ -205,20 +220,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     if status in ("on", "true", "1"):
                         _LOGGER.debug("OFF fallback: sending POWER key via websocket remote")
                         try:
-                            from samsungtvws import SamsungTVWS  # type: ignore
-                            def _send_power():
-                                try:
-                                    tvp = SamsungTVWS(getattr(client, "host", None))
-                                except Exception:
-                                    return
-                                try:
-                                    # KEY_POWER for power toggle
-                                    tvp.remote().send_key("KEY_POWER")
-                                finally:
-                                    closer = getattr(tvp, "close", None)
-                                    if callable(closer):
-                                        closer()
-                            await hass.async_add_executor_job(_send_power)
+                            # Use the client's identified connection (name + token)
+                            # so this does not trigger a TV authorization popup.
+                            await client.async_send_key("KEY_POWER")
                             await asyncio.sleep(1.5)
                         except Exception:  # noqa: BLE001
                             _LOGGER.debug("OFF fallback: POWER key path unavailable")
