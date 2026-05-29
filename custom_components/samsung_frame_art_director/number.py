@@ -3,6 +3,7 @@ import logging
 
 from homeassistant.components.number import NumberEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -32,6 +33,7 @@ class SamsungFrameSlideshowInterval(NumberEntity):
     """Number entity to control slideshow interval (minutes)."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Slideshow Interval"
     _attr_native_min_value = 0
     _attr_native_max_value = 1440  # 24 hours
@@ -74,6 +76,7 @@ class SamsungFrameGalleryPage(NumberEntity):
     """Number entity to control gallery page (ephemeral state)."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Gallery Page"
     _attr_native_min_value = 1
     _attr_native_max_value = 1000

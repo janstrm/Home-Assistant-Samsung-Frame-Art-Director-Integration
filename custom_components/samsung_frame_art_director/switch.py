@@ -4,6 +4,7 @@ import logging
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
@@ -29,6 +30,7 @@ class SamsungFrameSlideshowSwitch(SwitchEntity):
     """Switch entity to enable/disable slideshow."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Slideshow Enabled"
     _attr_icon = "mdi:play-pause"
 
@@ -75,6 +77,7 @@ class SamsungFrameFavoritesSwitch(SwitchEntity):
     """Switch entity to enable/disable filtering by favorites in gallery."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Gallery Favorites Only"
     _attr_icon = "mdi:heart-multiple-outline"
 

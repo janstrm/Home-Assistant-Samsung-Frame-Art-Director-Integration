@@ -173,7 +173,12 @@ point** between options and implementations — see [§8](#8-ai-tagging-layer).
 ### Entity platforms
 
 All entities are thin and read from / write to either the `ConfigEntry.options`
-or the `SamsungFrameClient`. Notable:
+or the `SamsungFrameClient`. Every entity uses `_attr_has_entity_name = True` and
+attaches to the one device via `DeviceInfo` keyed on the DUID. Behaviour-config
+entities (slideshow source/interval/filter/enabled, matte style/color,
+favorites-only, gallery page) are marked `EntityCategory.CONFIG` so they group
+under *Configuration* on the device page; the actual controls (media_player,
+art preview, brightness, color temperature) stay primary. Notable:
 
 - `media_player.py` — primary entity; exposes `art_mode_status` attribute.
 - `image.py` — serves `async_get_current_art()` bytes as a camera-style preview.

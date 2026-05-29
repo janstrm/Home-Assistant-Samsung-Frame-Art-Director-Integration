@@ -1,23 +1,16 @@
 """Select platform for Samsung Frame Art Director."""
 import logging
-import os
-import sqlite3
-import voluptuous as vol
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
-    CONF_SLIDESHOW_SOURCE_TYPE, 
-    CONF_SLIDESHOW_INTERVAL,
-    CONF_SLIDESHOW_FILTER,
-    CONF_SLIDESHOW_SOURCE_PATH,
+    CONF_SLIDESHOW_SOURCE_TYPE,
     DOMAIN,
-    DATA_CLIENT,
-    DB_FILE,
     CONF_DUID,
     SLIDESHOW_SOURCE_FOLDER,
     SLIDESHOW_SOURCE_TAGS,
@@ -53,6 +46,7 @@ class SamsungFrameSlideshowSourceSelect(SelectEntity):
     """Select entity to choose slideshow source type."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Slideshow Source"
     _attr_icon = "mdi:source-branch"
     _attr_options = [SLIDESHOW_SOURCE_FOLDER, SLIDESHOW_SOURCE_TAGS, SLIDESHOW_SOURCE_LIBRARY]
@@ -90,6 +84,7 @@ class SamsungFrameMatteStyleSelect(SelectEntity):
     """Select the matte (border) style. 'none' disables the matte."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Matte Style"
     _attr_icon = "mdi:image-frame"
     _attr_options = MATTE_STYLES
@@ -129,6 +124,7 @@ class SamsungFrameMatteColorSelect(SelectEntity):
     """Select the matte (border) color. Ignored when the style is 'none'."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Matte Color"
     _attr_icon = "mdi:palette"
     _attr_options = MATTE_COLORS

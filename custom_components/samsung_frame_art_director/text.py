@@ -4,6 +4,7 @@ import logging
 from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
@@ -26,6 +27,7 @@ class SamsungFrameSlideshowFilterText(TextEntity):
     """Text entity to filter slideshow (Folder filters or Tag list)."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Slideshow Filter"
     _attr_icon = "mdi:filter-variant"
     _attr_native_min = 0
