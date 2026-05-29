@@ -82,7 +82,7 @@ custom_components/samsung_frame_art_director/
 ├── __init__.py        # Setup, teardown, service & WS-API registration, slideshow timer
 ├── api.py             # SamsungFrameClient: the core TV facade + SQLite library DB (~1.8k lines)
 ├── bridge.py          # Pairing/handshake + port/method selection (used by config_flow)
-├── config_flow.py     # Initial pairing UI + options flow
+├── config_flow.py     # Initial pairing UI + reauth + options flow
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
 ├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
 ├── const.py           # Constants, option keys, defaults
@@ -240,8 +240,16 @@ while preserving favorites and the currently-displayed image.
    provokes the on-TV "Allow" prompt, and polls up to ~10 attempts for the user
    to accept. On success a **token** is captured (from the remote object or the
    `token_file`) and stored in the `ConfigEntry`.
-4. On every setup, `async_connect_and_pair()` re-validates the token; failure
-   raises `ConfigEntryNotReady` so HA retries.
+4. On every setup, `async_connect_and_pair()` re-validates the token. A
+   `PairingTimeoutError` (no token/duid established) raises
+   `ConfigEntryAuthFailed`, which triggers the **reauth flow**
+   (`async_step_reauth` → `async_step_reauth_confirm`) so the user can
+   re-accept on the TV; the new token replaces the old one via
+   `async_update_reload_and_abort`. Other (transient/connectivity) failures
+   raise `ConfigEntryNotReady` so HA retries.
+
+User-entered hosts are cleaned by `_normalize_host()` (trims whitespace,
+strips a `scheme://`, path, and trailing `:port`) before probing.
 
 ### Set Art Mode (with verification)
 

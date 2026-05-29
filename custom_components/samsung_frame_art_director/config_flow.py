@@ -42,6 +42,23 @@ _LOGGER = logging.getLogger(__name__)
 DATA_SCHEMA = vol.Schema({vol.Required(CONF_HOST): str, vol.Optional(CONF_NAME, default="Samsung Frame"): str})
 
 
+def _normalize_host(raw: str) -> str:
+    """Clean up user-entered host: trim, drop scheme/path, and a trailing port.
+
+    Accepts things like " http://192.168.1.5:8002/ " and returns "192.168.1.5".
+    Leaves bracketed IPv6 literals untouched.
+    """
+    host = (raw or "").strip()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    # Drop any path component
+    host = host.split("/", 1)[0]
+    # Strip a trailing :port for hostnames/IPv4 (but not IPv6, which has many colons)
+    if host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    return host.strip()
+
+
 class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_art_director"):
     """Handle a config flow for Samsung Frame Art Director."""
 
@@ -68,7 +85,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
         _LOGGER.debug("Flow step_user: user_input=%s", bool(user_input))
         errors: dict[str, str] | None = None
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
+            self._host = _normalize_host(user_input[CONF_HOST])
             self._name = user_input.get(CONF_NAME, "Samsung Frame")
             _LOGGER.debug("User provided host=%s name=%s", self._host, self._name)
             port, info = await async_probe_device_info(self._host)
@@ -194,6 +211,50 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
         return self.async_show_form(
             step_id="encrypted_pairing",
             data_schema=vol.Schema({vol.Required("pin"): str}),
+            errors=errors,
+            description_placeholders={"device": self._name or self._host},
+        )
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]):
+        """Handle re-authentication when the stored token is no longer valid."""
+        self._host = entry_data.get(CONF_HOST)
+        self._port = entry_data.get(CONF_PORT)
+        self._name = entry_data.get(CONF_NAME)
+        self._duid = entry_data.get(CONF_DUID)
+        _LOGGER.debug("Flow step_reauth: host=%s port=%s", self._host, self._port)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict | None = None):
+        """Re-pair with the TV and update the stored token."""
+        errors: dict[str, str] = {}
+        if user_input is not None and self._host:
+            safe_host = str(self._host).replace("/", "_").replace(".", "_")
+            token_file_path = self.hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
+            try:
+                os.makedirs(os.path.dirname(token_file_path), exist_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+            # Re-pair without the old token to force a fresh acceptance + token.
+            result = await async_try_connect(
+                self._host, self._port or 8002, None, token_file_path=token_file_path
+            )
+            if result.result == RESULT_SUCCESS:
+                entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+                _LOGGER.info("Reauth success: host=%s", self._host)
+                return self.async_update_reload_and_abort(
+                    entry, data={**entry.data, "token": result.token or entry.data.get("token")}
+                )
+            if result.result == RESULT_AUTH_MISSING:
+                errors = {"base": RESULT_AUTH_MISSING}
+            elif result.result == RESULT_CANNOT_CONNECT:
+                errors = {"base": RESULT_CANNOT_CONNECT}
+            else:
+                errors = {"base": RESULT_NOT_SUPPORTED}
+
+        self.context["title_placeholders"] = {"device": self._name or self._host}
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({}),
             errors=errors,
             description_placeholders={"device": self._name or self._host},
         )

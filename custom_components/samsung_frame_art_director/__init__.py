@@ -5,7 +5,7 @@ import asyncio
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
 from homeassistant.helpers import entity_registry as er, service as ha_service
 import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
@@ -63,7 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
 
     # Import here to avoid blocking config_flow import on package import
-    from .api import SamsungFrameClient
+    from .api import SamsungFrameClient, PairingTimeoutError
 
     # Enable verbose logs from the beginning for diagnostics
     _enable_verbose_logging()
@@ -122,8 +122,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001
         pass
     try:
-        # Validate token at setup: if unauthorized, raise ConfigEntryNotReady to trigger retry
+        # Validate token at setup. PairingTimeoutError means the device identity
+        # could not be established (no token/duid) -> trigger reauth so the user
+        # can re-accept on the TV. Other failures are treated as transient.
         await client.async_connect_and_pair()
+    except PairingTimeoutError as err:
+        _LOGGER.debug("Client pairing failed (auth): %r", err, exc_info=True)
+        raise ConfigEntryAuthFailed from err
     except Exception as err:  # noqa: BLE001
         _LOGGER.debug("Client connect_and_pair failed: %r", err, exc_info=True)
         raise ConfigEntryNotReady from err
