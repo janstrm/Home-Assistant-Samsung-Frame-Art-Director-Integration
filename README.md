@@ -52,11 +52,12 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 
 ## ⚙️ Configuration
 
-Add the integration from **Settings → Devices & Services → Add Integration** and search for "Samsung Frame Art Director".
+If your TV is on, it is usually **auto-discovered** — look for "Samsung Frame Art Director" under **Settings → Devices & Services** and click **Configure** to set it up. Otherwise add it manually from **Add Integration** and search for "Samsung Frame Art Director".
 
 ### Initial Setup
-- You will be asked for the TV's IP address and a Name.
+- You will be asked for the TV's IP address and a Name (pre-filled when discovered).
 - Follow the prompt on your TV to "Allow" the connection.
+- If the TV's IP later changes, use **Reconfigure** on the integration to update it (no need to delete and re-add); discovery also updates it automatically.
 
 ### Options Flow (Configure)
 Once installed, click **Configure** on the integration page to access advanced settings:
@@ -249,6 +250,8 @@ When configured, the integration creates the following entities (where `samsung_
 | Entity | Description |
 |---|---|
 | `number.samsung_frame_slideshow_interval` | Custom rotation interval in minutes (0–1440). |
+| `number.samsung_frame_art_mode_brightness` | Art Mode brightness (0–10). |
+| `number.samsung_frame_art_mode_color_temperature` | Art Mode color temperature (−5…5). |
 
 ### Text Entities
 | Entity | Description |
@@ -259,6 +262,19 @@ When configured, the integration creates the following entities (where `samsung_
 | Entity | Description |
 |---|---|
 | `sensor.samsung_frame_art_library` | Reports total tracked artworks. Attributes include the full `items` list for dashboard gallery rendering. |
+
+---
+
+## 🔔 Events
+
+The integration fires an event whenever the displayed artwork changes (upload or rotation), so you can build automations off it:
+
+```yaml
+trigger:
+  - platform: event
+    event_type: samsung_frame_art_director_art_changed
+# event.data: { host: "<tv ip>", content_id: "<id or path>" }
+```
 
 ---
 

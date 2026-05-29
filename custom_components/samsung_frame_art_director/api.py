@@ -10,6 +10,8 @@ import asyncio
 import logging
 import os
 import tempfile
+
+from .const import DOMAIN
 from typing import Optional
 
 # Suppress local HTTPS cert warnings from TV endpoints during pairing/info calls
@@ -135,6 +137,104 @@ class SamsungFrameClient:
                     except Exception:  # noqa: BLE001
                         pass
         await asyncio.to_thread(_send)
+
+    def _fire_art_changed(self, content_id) -> None:
+        """Fire an HA event when the displayed artwork changes (automation hook)."""
+        try:
+            self.hass.bus.async_fire(
+                f"{DOMAIN}_art_changed",
+                {"host": self._host, "content_id": content_id},
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Failed to fire art_changed event", exc_info=True)
+
+    async def async_get_brightness(self) -> Optional[int]:
+        """Return Art Mode brightness (0-10) or None."""
+        def _get():
+            tv = self._make_tv()
+            try:
+                val = tv.art().get_brightness()
+                if isinstance(val, dict):
+                    val = val.get("value")
+                return int(val) if val is not None else None
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.debug("get_brightness failed: %r", e)
+                return None
+            finally:
+                self._capture_token(tv)
+                closer = getattr(tv, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_get), timeout=10)
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def async_set_brightness(self, value: int) -> None:
+        """Set Art Mode brightness (0-10)."""
+        async with self._art_lock:
+            def _set():
+                tv = self._make_tv()
+                try:
+                    tv.art().set_brightness(int(value))
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.debug("set_brightness failed: %r", e)
+                finally:
+                    self._capture_token(tv)
+                    closer = getattr(tv, "close", None)
+                    if callable(closer):
+                        try:
+                            closer()
+                        except Exception:  # noqa: BLE001
+                            pass
+            await asyncio.to_thread(_set)
+
+    async def async_get_color_temperature(self) -> Optional[int]:
+        """Return Art Mode color temperature (-5..5) or None."""
+        def _get():
+            tv = self._make_tv()
+            try:
+                val = tv.art().get_color_temperature()
+                if isinstance(val, dict):
+                    val = val.get("value")
+                return int(val) if val is not None else None
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.debug("get_color_temperature failed: %r", e)
+                return None
+            finally:
+                self._capture_token(tv)
+                closer = getattr(tv, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_get), timeout=10)
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def async_set_color_temperature(self, value: int) -> None:
+        """Set Art Mode color temperature (-5..5)."""
+        async with self._art_lock:
+            def _set():
+                tv = self._make_tv()
+                try:
+                    tv.art().set_color_temperature(int(value))
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.debug("set_color_temperature failed: %r", e)
+                finally:
+                    self._capture_token(tv)
+                    closer = getattr(tv, "close", None)
+                    if callable(closer):
+                        try:
+                            closer()
+                        except Exception:  # noqa: BLE001
+                            pass
+            await asyncio.to_thread(_set)
 
     def _get_db(self):
         """Open a sqlite connection to the library DB."""
@@ -621,6 +721,7 @@ class SamsungFrameClient:
                     pass
 
         await asyncio.to_thread(_do_select)
+        self._fire_art_changed(content_id)
 
     async def async_rotate_from_folder(self, source_dir: str, matte: str = "none") -> bool:
         """Rotate art by picking a random file from a folder and uploading it."""
@@ -1349,6 +1450,7 @@ class SamsungFrameClient:
                 new_id = await _async_upload_once()
                 if new_id:
                     _LOGGER.info("Upload(success, async) on host=%s (attempt %s)", self._host, attempt_async)
+                    self._fire_art_changed(new_id)
                     try:
                         diag_ok = await self.async_art_diagnostics(max_ids=1)
                         _LOGGER.debug("Upload(async) post-check on %s: current=%s", self._host, diag_ok.get("current"))
@@ -1393,6 +1495,7 @@ class SamsungFrameClient:
                     _LOGGER.info("Upload success on host=%s (attempt %s, content_id=%s)", self._host, attempt, res)
                     if res:
                         await self.async_track_art(res, source_file=source_file)
+                        self._fire_art_changed(res)
                     try:
                         # Confirm selection by logging current content id
                         diag_ok = await self.async_art_diagnostics(max_ids=1)
