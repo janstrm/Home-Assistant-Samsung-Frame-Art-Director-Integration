@@ -73,20 +73,28 @@ class SamsungFrameClient:
             try:
                 os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
                 with sqlite3.connect(self._db_path) as conn:
-                    # Create table if not exists (base schema)
+                    # Create table if not exists (current schema).
+                    # NOTE: keep this column set in sync with every column the
+                    # rest of api.py reads/writes (track, rotate, cleanup,
+                    # favorites, preview). Older databases are upgraded by the
+                    # ALTER migrations below.
                     conn.execute(
                         """
             CREATE TABLE IF NOT EXISTS art_library (
                 content_id TEXT PRIMARY KEY,
-                width INTEGER,
-                height INTEGER,
-                date_added TIMESTAMP,
-                last_seen TIMESTAMP,
+                created_at TIMESTAMP,
+                last_displayed_at TIMESTAMP,
+                on_tv INTEGER DEFAULT 0,
+                is_favorite INTEGER DEFAULT 0,
+                tags TEXT,
+                category TEXT,
+                source_file TEXT,
                 deleted_at TIMESTAMP,
-                source TEXT
+                width INTEGER,
+                height INTEGER
             )
         """)
-        
+
                     # New table for Local Files (AI Tagged)
                     conn.execute("""
             CREATE TABLE IF NOT EXISTS local_art (
@@ -99,11 +107,26 @@ class SamsungFrameClient:
                 file_size INTEGER
             )
         """)
-        
-                    # Migration: Add columns if missing
+
+                    # Migration: bring older art_library tables up to the full
+                    # schema. Each ALTER is guarded so it only runs when missing,
+                    # which makes this idempotent across versions (including DBs
+                    # created by the legacy date_added/last_seen/source schema).
                     existing_cols = [row[1] for row in conn.execute("PRAGMA table_info(art_library)")]
                     _LOGGER.debug("DB Sync: art_library columns: %s", existing_cols)
-                    
+
+                    if "created_at" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'created_at' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN created_at TIMESTAMP")
+                    if "last_displayed_at" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'last_displayed_at' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN last_displayed_at TIMESTAMP")
+                    if "on_tv" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'on_tv' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN on_tv INTEGER DEFAULT 0")
+                    if "is_favorite" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'is_favorite' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN is_favorite INTEGER DEFAULT 0")
                     if "tags" not in existing_cols:
                         _LOGGER.info("DB Sync: adding 'tags' column to art_library")
                         conn.execute("ALTER TABLE art_library ADD COLUMN tags TEXT")
@@ -112,11 +135,11 @@ class SamsungFrameClient:
                         conn.execute("ALTER TABLE art_library ADD COLUMN category TEXT")
                     if "deleted_at" not in existing_cols:
                         _LOGGER.info("DB Sync: adding 'deleted_at' column to art_library")
-                        conn.execute("ALTER TABLE art_library ADD COLUMN deleted_at TEXT")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN deleted_at TIMESTAMP")
                     if "source_file" not in existing_cols:
                         _LOGGER.info("DB Sync: adding 'source_file' column to art_library")
                         conn.execute("ALTER TABLE art_library ADD COLUMN source_file TEXT")
-                    
+
                     # Migration: local_art
                     local_cols = [row[1] for row in conn.execute("PRAGMA table_info(local_art)")]
                     if "is_favorite" not in local_cols:
