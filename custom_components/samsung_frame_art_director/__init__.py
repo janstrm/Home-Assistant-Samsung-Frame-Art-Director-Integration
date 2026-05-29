@@ -23,8 +23,8 @@ from .const import (
     SLIDESHOW_SOURCE_FOLDER, 
     SLIDESHOW_SOURCE_TAGS, 
     SLIDESHOW_SOURCE_LIBRARY,
-    CONF_MATTE_ENABLED,
-    CONF_GEMINI_API_KEY
+    CONF_GEMINI_API_KEY,
+    resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
 
@@ -225,10 +225,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _svc_upload_art(call: ha_service.ServiceCall) -> None:
         path = call.data.get("path")
         tags = call.data.get("tags")
-        # Get matte from call data or default to options (or 'none' if enabled is false)
-        # Find entry for options
-        matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-        matte = call.data.get("matte") or ("polar" if matte_enabled else "none")
+        # Matte from call data, else the configured style/color (or 'none').
+        matte = call.data.get("matte") or resolve_matte(entry.options)
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
@@ -322,10 +320,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Action rotate_art_now called: tags=%s match_all=%s source=%s path=%s", tags, match_all, source, path)
         
         tag_list = [t.strip() for t in tags.split(",")] if tags else None
-        
-        # Get matte from options
-        matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-        matte = "polar" if matte_enabled else "none"
+
+        # Get matte from configured style/color
+        matte = resolve_matte(entry.options)
 
         found = False
         async for client in _resolve_clients(call):
@@ -491,8 +488,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                 
         elif call.service == "rotate_favorites":
-            matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-            matte = "polar" if matte_enabled else "none"
+            matte = resolve_matte(entry.options)
             await client.async_rotate_art(source="favorites", matte=matte)
             
     hass.services.async_register(DOMAIN, "toggle_favorite", async_fav_handler)
@@ -615,8 +611,7 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     source_type = entry.options.get(CONF_SLIDESHOW_SOURCE_TYPE, SLIDESHOW_SOURCE_FOLDER)
     filter_val = entry.options.get(CONF_SLIDESHOW_FILTER)
-    matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-    matte = "polar" if matte_enabled else "none"
+    matte = resolve_matte(entry.options)
     
     # --- NEW LOGIC: Respect Dashboard Filters ---
     # 1. Favorites Filter
