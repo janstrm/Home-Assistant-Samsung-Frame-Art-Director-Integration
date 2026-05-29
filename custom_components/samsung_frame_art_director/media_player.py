@@ -15,7 +15,7 @@ from homeassistant.helpers.entity import DeviceInfo
 
 import voluptuous as vol
 
-from .const import CONF_DUID, DATA_CLIENT, DOMAIN, DB_DIR, DB_FILE, DEFAULT_CLEANUP_MAX_ITEMS
+from .const import CONF_DUID, DATA_CLIENT, DOMAIN, DB_DIR, DB_FILE, DEFAULT_CLEANUP_MAX_ITEMS, resolve_matte
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,9 +150,9 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
                 return f.read()
 
         image_bytes = await self.hass.async_add_executor_job(_read)
-        
-        # Upload
-        await self._client.async_upload_image(image_bytes, matte=matte)
+
+        # Upload (honor configured matte style/color when not explicitly given)
+        await self._client.async_upload_image(image_bytes, matte=matte or resolve_matte(self._entry.options))
         
         from os.path import basename
         remote_filename = basename(path) 
@@ -167,19 +167,20 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         """Rotate art using optional tag filters or folder source."""
         _LOGGER.debug("rotate_art_now service called for %s with tags=%s match_all=%s source=%s", self.entity_id, tags, match_all, source)
         
+        matte = resolve_matte(self._entry.options)
         if source == "folder":
              # Use provided path or default from options (if accessible)
              if not path:
                  # Best effort default
                  path = "/media/frame/library"
-             success = await self._client.async_rotate_from_folder(path)
+             success = await self._client.async_rotate_from_folder(path, matte=matte)
              if success:
                  _LOGGER.info("Rotate art (folder) success on %s", self.entity_id)
              else:
                  _LOGGER.warning("Rotate art (folder) failed on %s", self.entity_id)
         else:
             tag_list = [t.strip() for t in tags.split(",")] if tags else None
-            success = await self._client.async_rotate_art(tags=tag_list, match_all=match_all)
+            success = await self._client.async_rotate_art(tags=tag_list, match_all=match_all, matte=matte)
             
             if success:
                 _LOGGER.info("Rotate art success on %s", self.entity_id)

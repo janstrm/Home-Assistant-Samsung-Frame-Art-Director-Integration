@@ -481,9 +481,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         elif call.service == "toggle_favorite":
             content_id = call.data.get("content_id")
+            if not content_id:
+                # Default to whatever is currently displayed on the TV.
+                try:
+                    current = await client.async_get_current_art()
+                    content_id = current.get("content_id")
+                except Exception:  # noqa: BLE001
+                    content_id = None
             if content_id:
                 new_state = await client.async_toggle_favorite(content_id)
                 _LOGGER.debug(f"Toggled favorite for {content_id}: {new_state}")
+                persistent_notification.async_create(
+                    hass,
+                    f"{'Added to' if new_state else 'Removed from'} favorites: {content_id}",
+                    title="Art Director",
+                )
+            else:
+                _LOGGER.warning("toggle_favorite: no content_id provided and no current artwork detected")
 
         elif call.service == "delete_art":
             content_id = call.data.get("content_id")

@@ -48,7 +48,18 @@ rotate_art_now:
 
 toggle_favorite:
   name: Toggle Favorite
-  description: Toggle favorite for the currently displayed artwork in the AI library.
+  description: >-
+    Toggle favorite status for an artwork. If no Content ID is given, the
+    currently displayed artwork on the TV is used.
+  fields:
+    content_id:
+      name: Content ID
+      description: >-
+        The content ID (or local file path) to toggle. Leave empty to favorite
+        the artwork currently on screen.
+      example: "MY-C0002_xxxxxxxx"
+      selector:
+        text:
 
 cleanup_storage:
   name: Cleanup Storage
@@ -94,14 +105,15 @@ cleanup_storage:
 upload_art:
   name: Upload Art
   description: >-
-    Upload an image and display it on the Frame. The integration preprocesses to
-    3840x2160 (center-crop). Uses the async Art API when available for reliability;
-    falls back to the sync path otherwise. Matte is currently disabled for stability.
+    Upload an image and display it on the Frame. The integration preprocesses the
+    image to 3840x2160. Uses the async Art API when available for reliability and
+    falls back to the sync path otherwise.
   target:
     entity:
       domain: media_player
   fields:
     path:
+      name: Path
       description: >-
         Path to the image. Use absolute /media paths (e.g. /media/frame/library/example.jpg).
         You may also pass just a filename and it will assume /media/frame/library/<filename>.
@@ -109,7 +121,20 @@ upload_art:
       required: true
       selector:
         text:
-          type: text
+    matte:
+      name: Matte
+      description: >-
+        Matte (border) id as "{style}_{color}" (e.g. shadowbox_polar) or "none".
+        Leave empty to use the configured Matte Style / Matte Color.
+      example: shadowbox_polar
+      selector:
+        text:
+    tags:
+      name: Tags
+      description: Optional comma-separated tags to associate with this artwork.
+      example: "nature, blue, calm"
+      selector:
+        text:
 
 art_diagnostics:
   name: Art Diagnostics
