@@ -21,7 +21,6 @@ async def async_setup_entry(
     _LOGGER.debug("Setting up switch platform for entry: %s", entry.entry_id)
     async_add_entities([
         SamsungFrameSlideshowSwitch(entry),
-        SamsungFrameMatteSwitch(entry),
         SamsungFrameFavoritesSwitch(entry)
     ], True)
 
@@ -65,54 +64,6 @@ class SamsungFrameSlideshowSwitch(SwitchEntity):
         """Turn the entity off."""
         new_data = {**self._entry.options}
         new_data[CONF_SLIDESHOW_ENABLED] = False
-        
-        self.hass.config_entries.async_update_entry(
-            self._entry, options=new_data
-        )
-        self.async_write_ha_state()
-
-
-class SamsungFrameMatteSwitch(SwitchEntity):
-    """Switch entity to enable/disable art matte."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Matte Enabled"
-    _attr_icon = "mdi:picture-in-picture-bottom-right-outline"
-
-    def __init__(self, entry: ConfigEntry) -> None:
-        """Initialize the switch entity."""
-        self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_matte_enabled"
-        device_id = entry.data.get(CONF_DUID) or entry.entry_id
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_id)},
-            name=entry.title,
-            manufacturer="Samsung",
-            model="The Frame",
-        )
-
-    @property
-    def is_on(self) -> bool:
-        """Return True if entity is on."""
-        from .const import CONF_MATTE_ENABLED
-        return self._entry.options.get(CONF_MATTE_ENABLED, False)
-
-    async def async_turn_on(self, **kwargs) -> None:
-        """Turn the entity on."""
-        from .const import CONF_MATTE_ENABLED
-        new_data = {**self._entry.options}
-        new_data[CONF_MATTE_ENABLED] = True
-        
-        self.hass.config_entries.async_update_entry(
-            self._entry, options=new_data
-        )
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        """Turn the entity off."""
-        from .const import CONF_MATTE_ENABLED
-        new_data = {**self._entry.options}
-        new_data[CONF_MATTE_ENABLED] = False
         
         self.hass.config_entries.async_update_entry(
             self._entry, options=new_data

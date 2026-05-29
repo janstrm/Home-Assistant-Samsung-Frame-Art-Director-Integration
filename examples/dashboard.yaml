@@ -93,14 +93,20 @@ views:
               - type: toggle
               
           - type: tile
-            entity: switch.samsung_frame_matte_enabled
-            name: Matte (Polar)
-            icon: mdi:picture-in-picture-bottom-right-outline
-            vertical: false
-            hide_state: true
-            features_position: inline
+            entity: select.samsung_frame_matte_style
+            name: Matte Style
+            icon: mdi:image-frame
+            features_position: bottom
             features:
-              - type: toggle
+              - type: select-options
+
+          - type: tile
+            entity: select.samsung_frame_matte_color
+            name: Matte Color
+            icon: mdi:palette
+            features_position: bottom
+            features:
+              - type: select-options
 
           - type: tile
             entity: select.samsung_frame_slideshow_source

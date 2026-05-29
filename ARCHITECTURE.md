@@ -90,8 +90,8 @@ custom_components/samsung_frame_art_director/
 ├── sensor.py          # Gallery library sensor (+ gallery page number)
 ├── image.py           # Live "current artwork" preview entity
 ├── media_player.py    # Main control entity (power/art-mode status)
-├── switch.py          # slideshow_enabled, matte_enabled, gallery_favorites_only
-├── select.py          # slideshow source + interval pickers
+├── switch.py          # slideshow_enabled, gallery_favorites_only
+├── select.py          # slideshow source + interval pickers; matte style + color
 ├── number.py          # custom slideshow interval, gallery page
 ├── text.py            # free-text slideshow/tag filter
 ├── services.yaml      # Service schemas (UI metadata)
@@ -334,8 +334,12 @@ Patterns you will see repeated, and why they exist:
   is "primed" (`supported()` / `get_artmode()`) before attempts.
 - **State verification loops.** `set_artmode` doesn't trust the call; it polls
   `get_artmode()` and force-selects an image to coax the mode on.
-- **`matte` quirks.** `select_image` wants `None` to mean "no matte" while
-  `change_matte` wants the literal string `"none"`. Both paths are attempted.
+- **`matte` quirks.** A matte id is `"{style}_{color}"` (e.g. `shadowbox_polar`)
+  or `"none"`, resolved from options by `resolve_matte()` in `const.py`. Recent
+  `samsungtvws` dropped the `matte` kwarg from `select_image`, so matte is applied
+  via `upload(matte=…)` and `change_matte`; `change_matte` wants the literal
+  string `"none"` to clear. The `select_image(matte=…)` call is kept only as a
+  guarded fast path that falls back on `TypeError`.
 - **Multiple thumbnail methods.** `get_thumbnail` → `get_preview` → `get_photo`,
   because availability varies; a local `source_file` is preferred for instant
   high-res previews.

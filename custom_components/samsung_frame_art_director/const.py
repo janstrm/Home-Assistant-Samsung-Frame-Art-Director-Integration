@@ -61,3 +61,64 @@ AI_PROVIDER_OPENAI = "openai"
 SLIDESHOW_SOURCE_FOLDER = "folder"
 SLIDESHOW_SOURCE_TAGS = "Tags"
 SLIDESHOW_SOURCE_LIBRARY = "All Library"
+
+# Matte (the digital passe-partout border the Frame draws around art).
+# A matte id is "{style}_{color}" (e.g. "shadowbox_polar"), or "none".
+# Values vary by model/firmware; these are the documented supersets.
+CONF_MATTE_STYLE = "matte_style"
+CONF_MATTE_COLOR = "matte_color"
+
+MATTE_STYLE_NONE = "none"
+MATTE_STYLES = [
+    MATTE_STYLE_NONE,
+    "modernthin",
+    "modern",
+    "modernwide",
+    "flexible",
+    "shadowbox",
+    "panoramic",
+    "triptych",
+    "mix",
+    "squares",
+]
+MATTE_COLORS = [
+    "black",
+    "neutral",
+    "antique",
+    "warm",
+    "polar",
+    "sand",
+    "seafoam",
+    "sage",
+    "burgandy",
+    "navy",
+    "apricot",
+    "byzantine",
+    "lavender",
+    "redorange",
+    "skyblue",
+    "turquoise",
+]
+DEFAULT_MATTE_STYLE = "shadowbox"
+DEFAULT_MATTE_COLOR = "polar"
+
+
+def resolve_matte(options) -> str:
+    """Resolve the configured matte id from entry options.
+
+    Returns a matte id like ``"shadowbox_polar"`` or ``"none"``. Mattes are
+    ``"{style}_{color}"``. Installs configured before the style/color pickers
+    existed only had the on/off ``matte_enabled`` switch, so fall back to a
+    sensible default matte when that legacy flag is set.
+    """
+    style = options.get(CONF_MATTE_STYLE)
+    if style is None:
+        # Legacy: only the boolean matte_enabled switch existed.
+        if options.get(CONF_MATTE_ENABLED):
+            return f"{DEFAULT_MATTE_STYLE}_{DEFAULT_MATTE_COLOR}"
+        return "none"
+    if not style or style == MATTE_STYLE_NONE:
+        return "none"
+    color = options.get(CONF_MATTE_COLOR) or DEFAULT_MATTE_COLOR
+    return f"{style}_{color}"
+
