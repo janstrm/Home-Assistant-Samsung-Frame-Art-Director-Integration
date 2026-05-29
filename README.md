@@ -60,12 +60,14 @@ If your TV is on, it is usually **auto-discovered** — look for "Samsung Frame 
 - If the TV's IP later changes, use **Reconfigure** on the integration to update it (no need to delete and re-add); discovery also updates it automatically.
 
 ### Options Flow (Configure)
-Once installed, click **Configure** on the integration page to access advanced settings:
-- **Gemini API Key:** Required for automatic image tagging (Process Inbox & Sync Library).
-- **Slideshow Settings:** Enable rotation, set interval (minutes), and select source type (Library / Folder / Tags).
-- **Matte:** Choose the matte (border) style and color drawn around art via the `Matte Style` / `Matte Color` select entities (set style to `none` to disable). Available styles/colors vary by TV model.
-- **Wake-on-LAN:** Enter the TV's MAC address to wake it before sending commands.
-- **Cleanup Settings:** Define max items on TV, max storage age, and whether to preserve favorites.
+**Nothing here is required** — the integration works out of the box after pairing. Click **Configure** to adjust optional settings, grouped into collapsible sections:
+- **AI Image Tagging:** Add a Gemini (or OpenAI) API key to enable Process Inbox / Sync Library auto-tagging. This is the only thing most users will set.
+- **Storage Cleanup:** Max items / age to keep on the TV, preserve-current, dry-run.
+- **Folders & Image:** Inbox/library folder paths and the image fit mode (crop vs. fit/letterbox).
+- **Connection & Power:** Wake-on-LAN MAC and power-key fallback.
+- **Advanced:** AI model override and verbose logging.
+
+> **Slideshow, matte and favorites** are controlled by their own **entities** (switches/selects/number/text), not this dialog — so you can drive them from dashboards and automations.
 
 ---
 
@@ -242,7 +244,6 @@ When configured, the integration creates the following entities (where `samsung_
 | Entity | Description |
 |---|---|
 | `select.samsung_frame_slideshow_source` | Choose rotation source: `Library`, `Folder`, or `Tags`. |
-| `select.samsung_frame_slideshow_interval` | Quick-pick rotation interval (1, 2, 5, 10, 15, 30, 60, 120, 240 min). |
 | `select.samsung_frame_matte_style` | Matte (border) style: `none`, `modern`, `shadowbox`, `flexible`, etc. Set to `none` to disable the matte. |
 | `select.samsung_frame_matte_color` | Matte (border) color: `polar`, `apricot`, `navy`, etc. Combined with the style as `{style}_{color}` (e.g. `shadowbox_polar`). Ignored when style is `none`. |
 

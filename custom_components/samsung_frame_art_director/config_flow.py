@@ -11,6 +11,20 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
+from homeassistant.data_entry_flow import section
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .bridge import async_probe_device_info, async_try_connect, async_encrypted_start_pairing, async_encrypted_try_pin
 from .const import (
@@ -22,20 +36,13 @@ from .const import (
     RESULT_SUCCESS,
     RESULT_INVALID_PIN,
     ENCRYPTED_WEBSOCKET_PORT,
-    CONF_SLIDESHOW_INTERVAL,
-    CONF_SLIDESHOW_SOURCE_PATH,
-    CONF_SLIDESHOW_ENABLED,
-    CONF_SLIDESHOW_SOURCE_TYPE,
-    CONF_SLIDESHOW_FILTER,
     CONF_GEMINI_API_KEY,
     CONF_OPENAI_API_KEY,
     CONF_AI_PROVIDER,
     CONF_AI_MODEL,
     AI_PROVIDER_GEMINI,
     AI_PROVIDER_OPENAI,
-    SLIDESHOW_SOURCE_FOLDER,
-    SLIDESHOW_SOURCE_TAGS,
-    SLIDESHOW_SOURCE_LIBRARY,
+    DEFAULT_CLEANUP_MAX_ITEMS,
     CONF_INBOX_DIR,
     CONF_LIBRARY_DIR,
     DEFAULT_INBOX_DIR,
@@ -71,7 +78,7 @@ def _normalize_host(raw: str) -> str:
 class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_art_director"):
     """Handle a config flow for Samsung Frame Art Director."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         self._host: str | None = None
@@ -336,6 +343,26 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
         return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
 
 
+# Options flow: section key -> the flat option keys it contains. Single source
+# of truth used to flatten the nested section payload on save.
+OPTION_SECTIONS: dict[str, list[str]] = {
+    "ai_tagging": [CONF_AI_PROVIDER, CONF_GEMINI_API_KEY, CONF_OPENAI_API_KEY],
+    "cleanup": [
+        "cleanup_max_items",
+        "cleanup_max_age_days",
+        "cleanup_preserve_current",
+        "cleanup_only_integration_managed",
+        "cleanup_dry_run",
+    ],
+    "folders": [CONF_INBOX_DIR, CONF_LIBRARY_DIR, CONF_RESIZE_MODE],
+    "power": ["mac_address", "use_wol_before_on", "use_power_key_on_off"],
+    "advanced": [CONF_AI_MODEL, "diagnostics_verbose"],
+}
+
+_TEXT = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+_PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+
 # Options Flow
 class OptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:  # type: ignore[name-defined]
@@ -343,35 +370,87 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input: dict | None = None):
         if user_input is not None:
-            # Merge with existing options so settings managed by entities
-            # (matte style/color, favorites-only, etc.) that aren't part of
-            # this form are preserved rather than wiped on save.
-            new_options = {**(self._entry.options or {}), **user_input}
-            return self.async_create_entry(title="", data=new_options)
+            # Section data is returned nested under each section key; flatten it
+            # back to flat option keys. Merge with existing options so settings
+            # managed by entities (slideshow, matte, favorites) are preserved.
+            flat: dict = {}
+            for value in user_input.values():
+                if isinstance(value, dict):
+                    flat.update(value)
+                # (no top-level fields in this form)
+            merged = {**(self._entry.options or {}), **flat}
+            return self.async_create_entry(title="", data=merged)
+
         opts = self._entry.options or {}
+
+        ai_schema = vol.Schema(
+            {
+                vol.Optional(CONF_AI_PROVIDER, default=opts.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value=AI_PROVIDER_GEMINI, label="Google Gemini"),
+                            SelectOptionDict(value=AI_PROVIDER_OPENAI, label="OpenAI"),
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(CONF_GEMINI_API_KEY, default=opts.get(CONF_GEMINI_API_KEY, "")): _PASSWORD,
+                vol.Optional(CONF_OPENAI_API_KEY, default=opts.get(CONF_OPENAI_API_KEY, "")): _PASSWORD,
+            }
+        )
+
+        cleanup_schema = vol.Schema(
+            {
+                vol.Optional("cleanup_max_items", default=opts.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)): NumberSelector(
+                    NumberSelectorConfig(min=1, max=500, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="items")
+                ),
+                vol.Optional("cleanup_max_age_days", default=opts.get("cleanup_max_age_days", 0)): NumberSelector(
+                    NumberSelectorConfig(min=0, max=3650, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="days")
+                ),
+                vol.Optional("cleanup_preserve_current", default=opts.get("cleanup_preserve_current", True)): BooleanSelector(),
+                vol.Optional("cleanup_only_integration_managed", default=opts.get("cleanup_only_integration_managed", True)): BooleanSelector(),
+                vol.Optional("cleanup_dry_run", default=opts.get("cleanup_dry_run", False)): BooleanSelector(),
+            }
+        )
+
+        folders_schema = vol.Schema(
+            {
+                vol.Optional(CONF_INBOX_DIR, default=opts.get(CONF_INBOX_DIR, DEFAULT_INBOX_DIR)): _TEXT,
+                vol.Optional(CONF_LIBRARY_DIR, default=opts.get(CONF_LIBRARY_DIR, DEFAULT_LIBRARY_DIR)): _TEXT,
+                vol.Optional(CONF_RESIZE_MODE, default=opts.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE)): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value=RESIZE_MODE_CROP, label="Crop to fill (may trim edges)"),
+                            SelectOptionDict(value=RESIZE_MODE_FIT, label="Fit (letterbox, keeps whole image)"),
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+            }
+        )
+
+        power_schema = vol.Schema(
+            {
+                vol.Optional("mac_address", default=opts.get("mac_address", "")): _TEXT,
+                vol.Optional("use_wol_before_on", default=opts.get("use_wol_before_on", False)): BooleanSelector(),
+                vol.Optional("use_power_key_on_off", default=opts.get("use_power_key_on_off", False)): BooleanSelector(),
+            }
+        )
+
+        advanced_schema = vol.Schema(
+            {
+                vol.Optional(CONF_AI_MODEL, default=opts.get(CONF_AI_MODEL, "")): _TEXT,
+                vol.Optional("diagnostics_verbose", default=opts.get("diagnostics_verbose", False)): BooleanSelector(),
+            }
+        )
+
         schema = vol.Schema(
             {
-                vol.Optional("mac_address", default=opts.get("mac_address", "")): str,
-                vol.Optional("use_wol_before_on", default=opts.get("use_wol_before_on", False)): bool,
-                vol.Optional("use_power_key_on_off", default=opts.get("use_power_key_on_off", False)): bool,
-                vol.Optional(CONF_SLIDESHOW_ENABLED, default=opts.get(CONF_SLIDESHOW_ENABLED, False)): bool,
-                vol.Optional(CONF_SLIDESHOW_INTERVAL, default=opts.get(CONF_SLIDESHOW_INTERVAL, 0)): int,
-                vol.Optional(CONF_SLIDESHOW_SOURCE_TYPE, default=opts.get(CONF_SLIDESHOW_SOURCE_TYPE, SLIDESHOW_SOURCE_FOLDER)): vol.In([SLIDESHOW_SOURCE_FOLDER, SLIDESHOW_SOURCE_TAGS, SLIDESHOW_SOURCE_LIBRARY]),
-                vol.Optional(CONF_SLIDESHOW_FILTER, default=opts.get(CONF_SLIDESHOW_FILTER, "")): str,
-                vol.Optional(CONF_AI_PROVIDER, default=opts.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)): vol.In([AI_PROVIDER_GEMINI, AI_PROVIDER_OPENAI]),
-                vol.Optional(CONF_AI_MODEL, default=opts.get(CONF_AI_MODEL, "")): str,
-                vol.Optional(CONF_GEMINI_API_KEY, default=opts.get(CONF_GEMINI_API_KEY, "")): str,
-                vol.Optional(CONF_OPENAI_API_KEY, default=opts.get(CONF_OPENAI_API_KEY, "")): str,
-                vol.Optional(CONF_SLIDESHOW_SOURCE_PATH, default=opts.get(CONF_SLIDESHOW_SOURCE_PATH, "/media/frame/library")): str,
-                vol.Optional(CONF_INBOX_DIR, default=opts.get(CONF_INBOX_DIR, DEFAULT_INBOX_DIR)): str,
-                vol.Optional(CONF_LIBRARY_DIR, default=opts.get(CONF_LIBRARY_DIR, DEFAULT_LIBRARY_DIR)): str,
-                vol.Optional(CONF_RESIZE_MODE, default=opts.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE)): vol.In([RESIZE_MODE_CROP, RESIZE_MODE_FIT]),
-                vol.Optional("cleanup_max_items", default=opts.get("cleanup_max_items", 50)): int,
-                vol.Optional("cleanup_max_age_days", default=opts.get("cleanup_max_age_days", 0)): int,
-                vol.Optional("cleanup_preserve_current", default=opts.get("cleanup_preserve_current", True)): bool,
-                vol.Optional("cleanup_only_integration_managed", default=opts.get("cleanup_only_integration_managed", True)): bool,
-                vol.Optional("cleanup_dry_run", default=opts.get("cleanup_dry_run", False)): bool,
-                vol.Optional("diagnostics_verbose", default=opts.get("diagnostics_verbose", True)): bool,
+                "ai_tagging": section(ai_schema, {"collapsed": False}),
+                "cleanup": section(cleanup_schema, {"collapsed": True}),
+                "folders": section(folders_schema, {"collapsed": True}),
+                "power": section(power_schema, {"collapsed": True}),
+                "advanced": section(advanced_schema, {"collapsed": True}),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema)

@@ -60,48 +60,79 @@
   "options": {
     "step": {
       "init": {
-        "title": "Configure Art Director Options",
-        "description": "Matte style/color, the slideshow toggle and the favorites filter are controlled by their own entities; this dialog covers the remaining settings.",
-        "data": {
-          "ai_provider": "AI Tagging Provider",
-          "ai_model": "AI Model (optional override)",
-          "gemini_api_key": "Gemini API Key",
-          "openai_api_key": "OpenAI API Key (requires the 'openai' package)",
-          "slideshow_enabled": "Enable Slideshow",
-          "slideshow_interval": "Rotation Interval (minutes)",
-          "slideshow_source_type": "Rotation Source",
-          "slideshow_filter": "Slideshow Filter (Tags or Folders)",
-          "slideshow_source_dir": "Local Media Path (Legacy)",
-          "inbox_dir": "Inbox Folder",
-          "library_dir": "Library Folder",
-          "resize_mode": "Image Fit (crop or fit)",
-          "mac_address": "MAC Address (for WoL)",
-          "use_wol_before_on": "Send WoL before Art ON",
-          "use_power_key_on_off": "Use Power Key as OFF fallback",
-          "cleanup_max_items": "Cleanup: Max items on TV",
-          "cleanup_max_age_days": "Cleanup: Max age (days)",
-          "cleanup_preserve_current": "Cleanup: Keep current image",
-          "cleanup_only_integration_managed": "Cleanup: Only track integration images",
-          "cleanup_dry_run": "Cleanup: Dry run (log only, don't delete)",
-          "diagnostics_verbose": "Enable Verbose Logging"
-        },
-        "data_description": {
-          "ai_provider": "Which AI vision service tags images dropped into the inbox.",
-          "ai_model": "Leave blank for the recommended default (gemini-2.5-flash / gpt-4o). Override only if you need a specific model.",
-          "gemini_api_key": "Required when the provider is Gemini. Get a free key at aistudio.google.com.",
-          "openai_api_key": "Required when the provider is OpenAI. The 'openai' Python package must be installed.",
-          "slideshow_interval": "How often to rotate art, in minutes. 0 disables the timer.",
-          "slideshow_source_type": "Where rotation picks images from: a folder, a tag filter, or the whole library.",
-          "slideshow_filter": "Folder path (Folder source) or comma-separated tags (Tags source). Prefix a tag with '-' to exclude it.",
-          "use_power_key_on_off": "If turning Art Mode off fails, send the TV's power key as a fallback.",
-          "cleanup_max_items": "Maximum artworks to keep on the TV; oldest are deleted first.",
-          "cleanup_max_age_days": "Delete artworks older than this many days. 0 disables the age limit.",
-          "cleanup_only_integration_managed": "Only ever delete artworks this integration uploaded (never your own/Art Store items).",
-          "cleanup_dry_run": "Preview cleanup in the logs without deleting anything.",
-          "inbox_dir": "Folder watched by Process Inbox for new images to tag.",
-          "library_dir": "Permanent folder for processed/tagged images used by rotation and the gallery.",
-          "resize_mode": "'crop' fills the screen and may trim edges; 'fit' shows the whole image with black bars (better for portraits).",
-          "diagnostics_verbose": "Enable detailed debug logging for troubleshooting."
+        "title": "Art Director Options",
+        "description": "Everything here is optional and preconfigured. Add an AI key only if you want automatic tagging. Slideshow, matte and favorites are controlled by their own entities.",
+        "sections": {
+          "ai_tagging": {
+            "name": "AI Image Tagging",
+            "description": "Optional. Used to auto-tag images dropped into the inbox.",
+            "data": {
+              "ai_provider": "Provider",
+              "gemini_api_key": "Gemini API key",
+              "openai_api_key": "OpenAI API key"
+            },
+            "data_description": {
+              "ai_provider": "Which AI vision service tags images dropped into the inbox.",
+              "gemini_api_key": "Required for Gemini. Get a free key at aistudio.google.com.",
+              "openai_api_key": "Required for OpenAI. The 'openai' Python package must be installed."
+            }
+          },
+          "cleanup": {
+            "name": "Storage Cleanup",
+            "description": "Controls how the TV's limited internal storage is pruned.",
+            "data": {
+              "cleanup_max_items": "Max items on TV",
+              "cleanup_max_age_days": "Max age",
+              "cleanup_preserve_current": "Keep the current image",
+              "cleanup_only_integration_managed": "Only delete images this integration uploaded",
+              "cleanup_dry_run": "Dry run (log only, don't delete)"
+            },
+            "data_description": {
+              "cleanup_max_items": "Maximum artworks to keep on the TV; oldest are deleted first.",
+              "cleanup_max_age_days": "Delete artworks older than this many days. 0 disables the age limit.",
+              "cleanup_only_integration_managed": "Never deletes your own or Art Store items.",
+              "cleanup_dry_run": "Preview cleanup in the logs without deleting anything."
+            }
+          },
+          "folders": {
+            "name": "Folders & Image",
+            "description": "Where images live and how they are fitted to the screen.",
+            "data": {
+              "inbox_dir": "Inbox folder",
+              "library_dir": "Library folder",
+              "resize_mode": "Image fit"
+            },
+            "data_description": {
+              "inbox_dir": "Folder watched by Process Inbox for new images to tag.",
+              "library_dir": "Permanent folder for processed images used by rotation and the gallery.",
+              "resize_mode": "'Crop' fills the screen and may trim edges; 'Fit' shows the whole image with black bars (better for portraits)."
+            }
+          },
+          "power": {
+            "name": "Connection & Power",
+            "description": "Optional Wake-on-LAN and power-key fallbacks.",
+            "data": {
+              "mac_address": "TV MAC address",
+              "use_wol_before_on": "Send Wake-on-LAN before turning Art Mode on",
+              "use_power_key_on_off": "Use the power key as an OFF fallback"
+            },
+            "data_description": {
+              "mac_address": "Needed only if you enable Wake-on-LAN.",
+              "use_power_key_on_off": "If turning Art Mode off fails, send the TV's power key as a fallback."
+            }
+          },
+          "advanced": {
+            "name": "Advanced",
+            "description": "You usually don't need to change these.",
+            "data": {
+              "ai_model": "AI model override",
+              "diagnostics_verbose": "Verbose debug logging"
+            },
+            "data_description": {
+              "ai_model": "Leave blank for the recommended default (gemini-2.5-flash / gpt-4o).",
+              "diagnostics_verbose": "Enable detailed debug logging for troubleshooting."
+            }
+          }
         }
       }
     }

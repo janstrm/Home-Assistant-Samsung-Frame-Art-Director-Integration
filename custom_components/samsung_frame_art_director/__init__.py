@@ -23,11 +23,20 @@ from .const import (
     SLIDESHOW_SOURCE_FOLDER, 
     SLIDESHOW_SOURCE_TAGS, 
     SLIDESHOW_SOURCE_LIBRARY,
+    DEFAULT_SLIDESHOW_INTERVAL,
     CONF_GEMINI_API_KEY,
     CONF_RESIZE_MODE,
     DEFAULT_RESIZE_MODE,
+    CONF_INBOX_DIR,
+    DEFAULT_INBOX_DIR,
     CONF_LIBRARY_DIR,
     DEFAULT_LIBRARY_DIR,
+    CONF_MATTE_ENABLED,
+    CONF_MATTE_STYLE,
+    CONF_MATTE_COLOR,
+    DEFAULT_MATTE_STYLE,
+    DEFAULT_MATTE_COLOR,
+    MATTE_STYLE_NONE,
     resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
@@ -39,6 +48,39 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old config entries to the current schema (idempotent)."""
+    if entry.version > 3:
+        # Downgrade not supported.
+        return False
+    if entry.version == 3:
+        return True
+
+    new_options = dict(entry.options or {})
+
+    # Legacy matte on/off switch -> matte style + color.
+    if CONF_MATTE_ENABLED in new_options and CONF_MATTE_STYLE not in new_options:
+        if new_options.get(CONF_MATTE_ENABLED):
+            new_options[CONF_MATTE_STYLE] = DEFAULT_MATTE_STYLE
+            new_options[CONF_MATTE_COLOR] = DEFAULT_MATTE_COLOR
+        else:
+            new_options[CONF_MATTE_STYLE] = MATTE_STYLE_NONE
+    new_options.pop(CONF_MATTE_ENABLED, None)
+
+    # Legacy slideshow_source_dir -> library_dir (only if customised).
+    legacy_dir = new_options.pop(CONF_SLIDESHOW_SOURCE_PATH, None)
+    if (
+        legacy_dir
+        and legacy_dir != DEFAULT_LIBRARY_DIR
+        and not new_options.get(CONF_LIBRARY_DIR)
+    ):
+        new_options[CONF_LIBRARY_DIR] = legacy_dir
+
+    hass.config_entries.async_update_entry(entry, options=new_options, version=3)
+    _LOGGER.info("Migrated config entry %s to version 3", entry.entry_id)
+    return True
 
 
 def _enable_verbose_logging() -> None:
@@ -105,12 +147,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as e:  # noqa: BLE001
         _LOGGER.info("samsungtvws package not importable: %r", e)
 
-    # Respect diagnostics verbosity option
+    # Respect diagnostics verbosity option (off by default)
     try:
-        if entry.options.get("diagnostics_verbose", True):
+        if entry.options.get("diagnostics_verbose", False):
             _enable_verbose_logging()
     except Exception:  # noqa: BLE001
         pass
+
+    # Best-effort: create the inbox/library folders so users can drop images
+    # immediately without first running a service.
+    try:
+        import os as _os
+        for _d in (
+            entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR,
+            entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR,
+        ):
+            _os.makedirs(_d, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Could not pre-create media folders", exc_info=True)
 
     # Initialize and connect client; use persistent token file under /config
     host = entry.data.get("host")
@@ -612,7 +666,7 @@ async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> No
         data["timer_unsub"]()
         data.pop("timer_unsub")
 
-    interval = entry.options.get(CONF_SLIDESHOW_INTERVAL, 0)
+    interval = entry.options.get(CONF_SLIDESHOW_INTERVAL) or DEFAULT_SLIDESHOW_INTERVAL
     enabled = entry.options.get(CONF_SLIDESHOW_ENABLED, False)
     
     if interval > 0 and enabled:
