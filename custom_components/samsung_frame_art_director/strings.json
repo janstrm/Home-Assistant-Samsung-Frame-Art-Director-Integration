@@ -16,6 +16,10 @@
       "pairing": {
         "description": "Accept the authorization popup on {device}. After accepting, click Submit to finish pairing."
       },
+      "reauth_confirm": {
+        "title": "Re-authorize {device}",
+        "description": "The stored authorization for {device} is no longer valid. Make sure the TV is on, accept the authorization popup on the TV, then click Submit to re-pair."
+      },
       "encrypted_pairing": {
         "description": "Please enter the PIN displayed on {device}.",
         "data": {
@@ -34,7 +38,8 @@
     },
     "abort": {
       "already_in_progress": "A configuration flow is already in progress.",
-      "already_configured": "This device is already configured."
+      "already_configured": "This device is already configured.",
+      "reauth_successful": "Re-authorization was successful."
     }
   },
   "options": {
