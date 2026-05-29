@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import io
 
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import MediaPlayerEntityFeature
