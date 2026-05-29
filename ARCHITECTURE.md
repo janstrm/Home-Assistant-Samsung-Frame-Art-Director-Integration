@@ -427,9 +427,17 @@ the [README](README.md#-services).
 
 ## 12. Development notes
 
-- **Dependency:** `samsungtvws` is pinned to the NickWaterton GitHub fork in
-  `manifest.json`. HA installs it into `deps`; `__init__.py` also adds the deps
-  dir to `sys.path` and patches `helper.is_true` for older builds.
+- **Dependency:** `samsungtvws` is the **NickWaterton fork**, pinned to a
+  specific commit SHA in `manifest.json`
+  (`...samsung-tv-ws-api.git@<sha>`). The fork has no PyPI release and its
+  `master` API shifts over time (e.g. the Dec 2025 upload-API rework), so we pin
+  to a known-good commit for reproducible installs. **To upgrade:** read the
+  fork's recent commits, verify the `art()` method signatures we call still
+  match `api.py` (`upload`, `select_image`, `change_matte`, `set_artmode`,
+  `get_artmode`, `get_current`, `get_thumbnail`, `available`, `delete`,
+  `delete_list`), then update the SHA and bump the integration version. HA
+  installs the dep into `deps`; `__init__.py` also adds the deps dir to
+  `sys.path` and patches `helper.is_true` for older builds.
 - **Quick sanity check** (no HA required):
   ```bash
   python3 -m py_compile custom_components/samsung_frame_art_director/*.py
