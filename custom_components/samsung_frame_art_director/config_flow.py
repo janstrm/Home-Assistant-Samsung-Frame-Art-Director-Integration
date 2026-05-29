@@ -268,6 +268,73 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             description_placeholders={"device": self._name or self._host},
         )
 
+    async def async_step_zeroconf(self, discovery_info):
+        """Handle a Samsung TV discovered via zeroconf (_samsungmsf._tcp)."""
+        host = _normalize_host(getattr(discovery_info, "host", "") or "")
+        if not host:
+            return self.async_abort(reason="cannot_connect")
+        props = getattr(discovery_info, "properties", {}) or {}
+        _LOGGER.debug("Zeroconf discovery: host=%s props=%s", host, props)
+
+        port, info = await async_probe_device_info(host)
+        if not port:
+            return self.async_abort(reason="cannot_connect")
+        self._host = host
+        self._port = port
+        self._device_info = info or {}
+        dev = self._device_info.get("device", {}) if isinstance(self._device_info, dict) else {}
+        self._duid = dev.get("duid") or dev.get("udn") or host
+        self._name = dev.get("name") or props.get("fn") or "Samsung Frame"
+
+        await self.async_set_unique_id(self._duid)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: self._host, CONF_PORT: self._port})
+
+        self.context["title_placeholders"] = {"device": self._name or self._host}
+        return await self.async_step_discovery_confirm()
+
+    async def async_step_discovery_confirm(self, user_input: dict | None = None):
+        """Confirm setup of a discovered TV, then continue to pairing."""
+        if user_input is not None:
+            model = (self._device_info or {}).get("device", {}).get("modelName")
+            if model and isinstance(model, str) and model.upper().startswith(("H", "J")):
+                self._port = ENCRYPTED_WEBSOCKET_PORT
+                return await self.async_step_encrypted_pairing()
+            return await self.async_step_pairing()
+
+        self.context["title_placeholders"] = {"device": self._name or self._host}
+        return self.async_show_form(
+            step_id="discovery_confirm",
+            description_placeholders={"device": self._name or self._host},
+        )
+
+    async def async_step_reconfigure(self, user_input: dict | None = None):
+        """Change the TV's IP/name without removing the integration."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        errors: dict[str, str] = {}
+        if user_input is not None and entry:
+            new_host = _normalize_host(user_input[CONF_HOST])
+            port, info = await async_probe_device_info(new_host)
+            if not port:
+                errors = {"base": RESULT_CANNOT_CONNECT}
+            else:
+                dev = (info or {}).get("device", {}) if isinstance(info, dict) else {}
+                duid = dev.get("duid") or dev.get("udn") or new_host
+                # Guard against pointing the entry at a different TV.
+                if entry.unique_id and duid != entry.unique_id:
+                    return self.async_abort(reason="wrong_device")
+                new_data = {**entry.data, CONF_HOST: new_host, CONF_PORT: port}
+                if user_input.get(CONF_NAME):
+                    new_data[CONF_NAME] = user_input[CONF_NAME]
+                return self.async_update_reload_and_abort(entry, data=new_data)
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=(entry.data.get(CONF_HOST) if entry else "")): str,
+                vol.Optional(CONF_NAME, default=(entry.data.get(CONF_NAME, "Samsung Frame") if entry else "Samsung Frame")): str,
+            }
+        )
+        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
+
 
 # Options Flow
 class OptionsFlowHandler(config_entries.OptionsFlow):

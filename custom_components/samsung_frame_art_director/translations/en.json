@@ -33,6 +33,18 @@
         "title": "Re-authorize {device}",
         "description": "The stored authorization for {device} is no longer valid. Make sure the TV is on, accept the authorization popup on the TV, then click Submit to re-pair.",
         "data": {}
+      },
+      "discovery_confirm": {
+        "title": "Set up {device}",
+        "description": "A Samsung TV ({device}) was found on your network. Set it up with Samsung Frame Art Director? You'll be asked to accept an authorization prompt on the TV next."
+      },
+      "reconfigure": {
+        "title": "Reconfigure {device}",
+        "description": "Update the TV's IP address (e.g. after a DHCP change). It must be the same TV.",
+        "data": {
+          "host": "Host",
+          "name": "Name"
+        }
       }
     },
     "error": {
@@ -44,7 +56,10 @@
     "abort": {
       "already_in_progress": "A configuration flow is already in progress.",
       "already_configured": "This device is already configured.",
-      "reauth_successful": "Re-authorization was successful."
+      "reauth_successful": "Re-authorization was successful.",
+      "reconfigure_successful": "The TV address was updated successfully.",
+      "cannot_connect": "Cannot connect to the TV. Verify it is on and reachable on the network.",
+      "wrong_device": "That address belongs to a different TV than the one configured here."
     }
   },
   "options": {
