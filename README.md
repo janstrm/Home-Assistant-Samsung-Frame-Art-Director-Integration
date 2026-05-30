@@ -26,7 +26,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 ## ✨ Capabilities
 
 - **State Verification:** Toggles Art Mode ON/OFF and verifies the state to ensure the screen displays art rather than just being powered down.
-- **Local Uploads:** Upload local images directly to the TV. Images are programmatically center-cropped and resized to 3840×2160 pixels before upload.
+- **Local Uploads:** Upload local images directly to the TV. Images are resized to 3840×2160 before upload (choose **crop** to fill or **fit** to letterbox in the options).
 - **Auto-Tagging (Optional):** Drop images into an inbox folder and run Process Inbox — Gemini analyzes, tags, and catalogs them to your local library.
 - **Gallery Sensor:** Exposes a database of your local art, allowing you to build dashboard views with the provided example YAML.
 - **Media Browser:** Browse your tagged library in Home Assistant's **Media** panel and "play" any image to the Frame (it uploads and displays it).
@@ -289,7 +289,7 @@ trigger:
 |---|---|
 | Art uploads stall or fail | Ensure the TV is paired. Try turning on manually and watching for permission popups. |
 | "No Gemini API key" warning | Add your API key in **Settings → Devices → Samsung Frame Art Director → Configure**. |
-| "Local file missing" warnings during rotation | Run **Reset Database** then **Sync Library** to clean up stale entries. |
+| "Local file missing" warnings during rotation | Run **Purge Database** then **Sync Library** to clean up stale entries. |
 | Gallery shows no images | Ensure images exist in `/media/frame/library/` and run **Sync Library**. |
 | Rate limit (429) during inbox processing | Gemini free tier has request limits. Wait a few minutes and try again. |
 
@@ -302,7 +302,7 @@ Check HA logs filtered by `samsung_frame_art_director` for detailed error messag
 Contributions, issues, and feature requests are welcome!
 Feel free to check the [issues page](https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/issues).
 
-> **Working on the code?** Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first — it explains the module layout, the SQLite data model, the key control flows, and (importantly) *why* the TV-API fallback logic exists before you refactor it.
+> **Working on the code?** See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup and checks, and read [`ARCHITECTURE.md`](ARCHITECTURE.md) first — it explains the module layout, the SQLite data model, the key control flows, and (importantly) *why* the TV-API fallback logic exists before you refactor it.
 
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
