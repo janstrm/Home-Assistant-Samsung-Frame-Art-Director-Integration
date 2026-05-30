@@ -75,6 +75,9 @@ CONF_LIBRARY_DIR = "library_dir"
 DEFAULT_INBOX_DIR = "/media/frame/inbox"
 DEFAULT_LIBRARY_DIR = "/media/frame/library"
 
+# Experimental: reuse one connection for the status poll (opt-in)
+CONF_USE_PERSISTENT = "use_persistent_connection"
+
 # Image preprocessing
 CONF_RESIZE_MODE = "resize_mode"
 RESIZE_MODE_CROP = "crop"   # scale-to-fill then center-crop (default; may trim edges)

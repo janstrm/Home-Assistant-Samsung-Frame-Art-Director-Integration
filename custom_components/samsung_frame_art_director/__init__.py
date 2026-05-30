@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_SLIDESHOW_INTERVAL,
     CONF_RESIZE_MODE,
     DEFAULT_RESIZE_MODE,
+    CONF_USE_PERSISTENT,
     CONF_INBOX_DIR,
     DEFAULT_INBOX_DIR,
     CONF_LIBRARY_DIR,
@@ -188,6 +189,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     client.set_token_persister(_persist_token)
     client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+    client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
@@ -643,10 +645,11 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # For now, we assume most option changes are slideshow related and can be hot-reloaded.
     # If connection-critical options were in 'options', we would check them here.
     
-    # Re-apply image preprocessing preference
+    # Re-apply runtime client preferences
     data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if data and (client := data.get(DATA_CLIENT)):
         client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+        client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
 
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)
