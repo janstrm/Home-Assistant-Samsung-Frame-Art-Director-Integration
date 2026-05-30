@@ -1,5 +1,6 @@
 """Tests for the Media Source provider (browse + resolve)."""
 import types
+from urllib.parse import quote, unquote
 
 from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
@@ -43,7 +44,9 @@ async def test_browse_lists_library_items(hass):
     assert len(result.children) == 2
     first = result.children[0]
     assert first.can_play is True
-    assert first.identifier == "/media/frame/library/a.jpg"
+    # Identifier must be URL-encoded (HA rejects identifiers starting with "/").
+    assert not first.identifier.startswith("/")
+    assert unquote(first.identifier) == "/media/frame/library/a.jpg"
     assert first.title.startswith("★")  # favorite marker
     assert first.thumbnail.startswith("/api/samsung_frame_art_director/thumbnail/")
 
@@ -58,7 +61,7 @@ async def test_browse_without_client_is_empty(hass):
 async def test_resolve_returns_image_url(hass):
     source = ArtLibraryMediaSource(hass)
     media = await source.async_resolve_media(
-        types.SimpleNamespace(identifier="/media/frame/library/a.jpg")
+        types.SimpleNamespace(identifier=quote("/media/frame/library/a.jpg", safe=""))
     )
     assert media.mime_type == "image/jpeg"
     assert media.url.startswith("/api/samsung_frame_art_director/thumbnail/")
