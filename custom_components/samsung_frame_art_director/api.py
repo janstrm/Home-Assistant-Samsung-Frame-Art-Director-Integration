@@ -61,9 +61,19 @@ class SamsungFrameClient:
         self._token_persister = None
         # Image preprocessing preference: "crop" (center-crop) or "fit" (letterbox)
         self._resize_mode = "crop"
+        # Experimental: reuse one async connection for the status poll instead of
+        # opening a fresh connection each time. Off by default; falls back to the
+        # per-call path on any error so it can never break polling.
+        self._use_persistent = False
+        self._remote = None
+        self._remote_lock: asyncio.Lock = asyncio.Lock()
 
     def set_db_path(self, path: str) -> None:
         self._db_path = path
+
+    def set_persistent(self, enabled: bool) -> None:
+        """Enable/disable reusing a persistent connection for the status poll."""
+        self._use_persistent = bool(enabled)
 
     def set_resize_mode(self, mode: str) -> None:
         """Set image preprocessing mode: 'crop' (center-crop) or 'fit' (pad)."""
@@ -239,12 +249,78 @@ class SamsungFrameClient:
                             pass
             await asyncio.to_thread(_set)
 
+    async def _persistent_state(self) -> Optional[dict]:
+        """Status + current content id over a reused async connection.
+
+        Returns None (so the caller falls back to the per-call path) if the
+        persistent connection can't be established or used.
+        """
+        async with self._remote_lock:
+            remote = self._remote
+            try:
+                if remote is None:
+                    from samsungtvws.async_remote import SamsungTVWSAsyncRemote  # type: ignore
+                    remote = SamsungTVWSAsyncRemote(
+                        host=self._host,
+                        port=self._port or 8002,
+                        token=self._token or "",
+                        name=self._client_name,
+                        timeout=31,
+                    )
+                    await remote.open()
+                    if not hasattr(remote, "art"):
+                        await self._close_remote_obj(remote)
+                        return None
+                    self._capture_token(remote)
+                    self._remote = remote
+
+                status = await asyncio.to_thread(lambda: remote.art().get_artmode())
+                content_id = None
+                try:
+                    cur = await asyncio.to_thread(lambda: remote.art().get_current())
+                    if isinstance(cur, dict):
+                        content_id = cur.get("content_id") or cur.get("contentId")
+                except Exception:  # noqa: BLE001
+                    pass
+                return {
+                    "status": str(status).lower() if status is not None else None,
+                    "content_id": content_id,
+                }
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.debug("Persistent state failed (%r); resetting connection", e)
+                await self._close_remote_obj(self._remote)
+                self._remote = None
+                return None
+
+    @staticmethod
+    async def _close_remote_obj(remote) -> None:
+        if remote is None:
+            return
+        try:
+            closer = getattr(remote, "close", None)
+            if callable(closer):
+                res = closer()
+                if asyncio.iscoroutine(res):
+                    await res
+        except Exception:  # noqa: BLE001
+            pass
+
     async def async_get_state(self) -> dict:
         """Fetch art-mode status AND current content id over a SINGLE connection.
 
         Used by the media_player coordinator so exposing the current artwork
-        adds no extra connections beyond the existing status poll.
+        adds no extra connections beyond the existing status poll. When the
+        persistent-connection option is enabled, reuses one connection and falls
+        back to the per-call path on any error.
         """
+        if self._use_persistent:
+            try:
+                result = await asyncio.wait_for(self._persistent_state(), timeout=12)
+                if result is not None:
+                    return result
+            except Exception:  # noqa: BLE001
+                self._remote = None
+
         def _read() -> dict:
             tv = self._make_tv()
             status = None
@@ -1006,6 +1082,10 @@ class SamsungFrameClient:
         _LOGGER.info("Client: paired host=%s duid=%s", self._host, self._duid)
 
     async def async_disconnect(self) -> None:
+        # Close the persistent connection if one is open.
+        if self._remote is not None:
+            await self._close_remote_obj(self._remote)
+            self._remote = None
         if self._connected:
             _LOGGER.debug("Disconnecting from Samsung Frame")
             await asyncio.sleep(0.05)

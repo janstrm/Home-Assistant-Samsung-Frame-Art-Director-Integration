@@ -28,6 +28,21 @@ async def test_preprocess_fit_outputs_target_size(hass):
         assert im.size == (3840, 2160)
 
 
+async def test_get_state_falls_back_gracefully_without_tv(hass):
+    # No TV reachable: the per-call path must degrade to a safe empty result.
+    client = SamsungFrameClient(hass, "127.0.0.1")
+    assert await client.async_get_state() == {"status": None, "content_id": None}
+
+
+async def test_persistent_flag_falls_back_when_connection_fails(hass):
+    # With persistence on but no TV, _persistent_state returns None and the
+    # per-call fallback still yields a safe result.
+    client = SamsungFrameClient(hass, "127.0.0.1")
+    client.set_persistent(True)
+    assert client._use_persistent is True
+    assert await client.async_get_state() == {"status": None, "content_id": None}
+
+
 async def test_local_art_crud(hass, tmp_path):
     client = SamsungFrameClient(hass, "1.2.3.4")
     client.set_db_path(str(tmp_path / "art.db"))
