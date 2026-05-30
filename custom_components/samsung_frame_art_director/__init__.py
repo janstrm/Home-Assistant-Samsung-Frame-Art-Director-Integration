@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
 from homeassistant.helpers import entity_registry as er, service as ha_service
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components import persistent_notification
@@ -37,6 +38,10 @@ from .const import (
     resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+
+
+# This integration is configured via the UI only (config entries), not YAML.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config) -> bool:
