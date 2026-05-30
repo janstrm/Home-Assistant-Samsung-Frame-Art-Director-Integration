@@ -123,7 +123,9 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         if sourced.domain != DOMAIN:
             raise HomeAssistantError("Only Samsung Frame Art library items can be sent to the Frame")
 
-        path = sourced.identifier
+        from urllib.parse import unquote
+
+        path = unquote(sourced.identifier)
 
         def _read() -> bytes:
             with open(path, "rb") as f:

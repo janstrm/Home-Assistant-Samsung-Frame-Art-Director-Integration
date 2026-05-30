@@ -8,7 +8,7 @@ Each library image is exposed as a playable item; "playing" it on the
 from __future__ import annotations
 
 import os
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from homeassistant.components.media_source import (
     BrowseMediaSource,
@@ -33,8 +33,9 @@ async def async_get_media_source(hass: HomeAssistant) -> "ArtLibraryMediaSource"
     return ArtLibraryMediaSource(hass)
 
 
-def _thumbnail_url(identifier: str) -> str:
-    return f"/api/samsung_frame_art_director/thumbnail/{quote(identifier, safe='/')}"
+def _thumbnail_url(path: str) -> str:
+    # Keep slashes literal so the thumbnail HTTP view receives the absolute path.
+    return f"/api/samsung_frame_art_director/thumbnail/{quote(path, safe='/')}"
 
 
 class ArtLibraryMediaSource(MediaSource):
@@ -55,7 +56,8 @@ class ArtLibraryMediaSource(MediaSource):
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve an item to a viewable image URL (for the Media panel preview)."""
-        return PlayMedia(_thumbnail_url(item.identifier), _MIME)
+        path = unquote(item.identifier)
+        return PlayMedia(_thumbnail_url(path), _MIME)
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Return the (single-level) list of library images."""
@@ -64,20 +66,22 @@ class ArtLibraryMediaSource(MediaSource):
         if client is not None:
             data = await client.async_get_library_data()
             for entry in data.get("items", []):
-                identifier = entry.get("id")
-                if not identifier:
+                path = entry.get("id")
+                if not path:
                     continue
                 star = "★ " if entry.get("is_favorite") else ""
                 children.append(
                     BrowseMediaSource(
                         domain=DOMAIN,
-                        identifier=identifier,
+                        # Identifier must NOT start with "/" (HA URI rules), so
+                        # URL-encode the absolute path; decoded on resolve/play.
+                        identifier=quote(path, safe=""),
                         media_class=_MEDIA_CLASS_IMAGE,
                         media_content_type=_MEDIA_TYPE_IMAGE,
-                        title=f"{star}{os.path.basename(identifier)}",
+                        title=f"{star}{os.path.basename(path)}",
                         can_play=True,
                         can_expand=False,
-                        thumbnail=_thumbnail_url(identifier),
+                        thumbnail=_thumbnail_url(path),
                     )
                 )
 
