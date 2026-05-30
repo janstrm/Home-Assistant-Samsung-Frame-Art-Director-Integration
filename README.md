@@ -29,6 +29,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 - **Local Uploads:** Upload local images directly to the TV. Images are programmatically center-cropped and resized to 3840×2160 pixels before upload.
 - **Auto-Tagging (Optional):** Drop images into an inbox folder and run Process Inbox — Gemini analyzes, tags, and catalogs them to your local library.
 - **Gallery Sensor:** Exposes a database of your local art, allowing you to build dashboard views with the provided example YAML.
+- **Media Browser:** Browse your tagged library in Home Assistant's **Media** panel and "play" any image to the Frame (it uploads and displays it).
 - **Auto-Rotation:** Rotates art from local storage or limits selection based on assigned tags, favorites, and filters.
 - **Favorites:** Mark individual artworks as favorites. Filter the gallery or rotation to only use your favorite pieces.
 - **Storage Management:** Detects and deletes orphaned or un-favorited artworks from the TV memory to manage limited storage capacity.

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import logging
 
+from homeassistant.components import media_source
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import MediaPlayerEntityFeature
+from homeassistant.components.media_source.models import MediaSourceItem
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_DUID, DATA_CLIENT, DOMAIN
+from .const import CONF_DUID, DATA_CLIENT, DOMAIN, resolve_matte
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +55,8 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     _attr_supported_features = (
         MediaPlayerEntityFeature.TURN_ON
         | MediaPlayerEntityFeature.TURN_OFF
+        | MediaPlayerEntityFeature.PLAY_MEDIA
+        | MediaPlayerEntityFeature.BROWSE_MEDIA
     )
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, coordinator: DataUpdateCoordinator) -> None:
@@ -100,3 +105,30 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_turn_off(self) -> None:
         """Turn the media player off (leave Art Mode)."""
         await self._client.async_set_artmode(False)
+
+    async def async_browse_media(self, media_content_type=None, media_content_id=None):
+        """Browse media sources, limited to images (the art library)."""
+        return await media_source.async_browse_media(
+            self.hass,
+            media_content_id,
+            content_filter=lambda item: item.media_content_type.startswith("image"),
+        )
+
+    async def async_play_media(self, media_type: str, media_id: str, **kwargs) -> None:
+        """Upload and display a library image selected from the Media panel."""
+        if not media_source.is_media_source_id(media_id):
+            raise HomeAssistantError("Only Home Assistant media-source items are supported")
+        sourced = MediaSourceItem.from_uri(self.hass, media_id, None)
+        if sourced.domain != DOMAIN:
+            raise HomeAssistantError("Only Samsung Frame Art library items can be sent to the Frame")
+
+        path = sourced.identifier
+
+        def _read() -> bytes:
+            with open(path, "rb") as f:
+                return f.read()
+
+        image_bytes = await self.hass.async_add_executor_job(_read)
+        await self._client.async_upload_image(
+            image_bytes, matte=resolve_matte(self._entry.options), source_file=path
+        )
