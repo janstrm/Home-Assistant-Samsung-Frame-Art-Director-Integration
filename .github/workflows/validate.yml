@@ -22,5 +22,7 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # brands: logo lives in the home-assistant/brands repo (not yet submitted).
+          # brands: we ship local brand images (custom_components/.../brand/, HA
+          # 2026.3+) instead of registering in the home-assistant/brands repo, so
+          # the HACS brands (repo) check is intentionally skipped.
           ignore: brands
