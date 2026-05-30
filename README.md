@@ -102,6 +102,12 @@ To use the Art Gallery with popups, you will need these HACS frontend plugins:
 
 Simply create a new Dashboard View in Home Assistant, click **Edit (Raw Configuration)**, and paste the contents of the example file! Home Assistant will automatically arrange the 3 columns on wide screens.
 
+### 🧪 Testing dashboard (no extra plugins)
+
+For exercising **every** entity and service from one screen — using only built‑in Lovelace cards (no HACS frontend plugins) — paste [`examples/testing_dashboard.yaml`](examples/testing_dashboard.yaml) into a new dashboard's **Raw configuration**. It surfaces the art preview, Art Mode toggle, brightness/color/motion settings, matte, slideshow, the library sensor, a media‑control card to browse + play to the Frame, and buttons for rotate / process inbox / sync / cleanup / diagnostics / purge.
+
+> Entity IDs in both examples assume the prefix `samsung_frame`. If your device uses a different prefix (e.g. `65_the_frame_…`), find‑replace it (check **Developer Tools → States**).
+
 ---
 
 ## 🎮 Services

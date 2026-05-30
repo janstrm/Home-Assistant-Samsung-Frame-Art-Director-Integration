@@ -113,16 +113,10 @@ views:
             name: Rotation Source
             icon: mdi:source-branch
             
-          - type: horizontal-stack
-            cards:
-              - type: tile
-                entity: select.samsung_frame_slideshow_interval
-                name: Interval
-                icon: mdi:timer-cog
-              - type: tile
-                entity: number.samsung_frame_slideshow_interval
-                name: Custom
-                icon: mdi:timer-edit
+          - type: tile
+            entity: number.samsung_frame_slideshow_interval
+            name: Interval (min)
+            icon: mdi:timer-cog
 
           - type: markdown
             content: "### 🛠️ Maintenance Tools"
@@ -157,7 +151,7 @@ views:
                   target:
                     entity_id: media_player.samsung_frame
               - type: button
-                name: Reset Database
+                name: Purge Database
                 icon: mdi:database-remove
                 tap_action:
                   action: perform-action
