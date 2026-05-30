@@ -12,6 +12,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
 from homeassistant.data_entry_flow import section
+from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
@@ -273,6 +274,26 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             errors=errors,
             description_placeholders={"device": self._name or self._host},
         )
+
+    async def async_step_dhcp(self, discovery_info):
+        """Enrich an already-configured TV with its MAC (for Wake-on-LAN).
+
+        Purely additive: if a DHCP lease matches a configured entry's host and
+        no MAC is set yet, store it as the WoL default. Never starts a
+        user-facing flow.
+        """
+        ip = getattr(discovery_info, "ip", None)
+        raw_mac = getattr(discovery_info, "macaddress", None)
+        if ip and raw_mac:
+            mac = format_mac(raw_mac)
+            for entry in self._async_current_entries():
+                if entry.data.get(CONF_HOST) == ip and not entry.options.get("mac_address"):
+                    _LOGGER.debug("DHCP: storing MAC %s for %s", mac, ip)
+                    self.hass.config_entries.async_update_entry(
+                        entry, options={**entry.options, "mac_address": mac}
+                    )
+                    break
+        return self.async_abort(reason="already_configured")
 
     async def async_step_zeroconf(self, discovery_info):
         """Handle a Samsung TV discovered via zeroconf (_samsungmsf._tcp)."""

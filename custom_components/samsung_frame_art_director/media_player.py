@@ -25,9 +25,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
 
     async def async_update_data():
-        """Fetch data from API endpoint."""
-        status = await client.async_get_artmode_status()
-        return {"art_mode_status": status}
+        """Fetch art-mode status + current artwork over a single connection."""
+        return await client.async_get_state()
 
     coordinator = DataUpdateCoordinator(
         hass,
@@ -81,7 +80,7 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         if not self._client.is_connected:
             return "off"
 
-        status = self.coordinator.data.get("art_mode_status") if self.coordinator.data else "unknown"
+        status = (self.coordinator.data or {}).get("status")
         if status in ("on", "true", "1"):
             return "on"
         elif status in ("off", "false", "0"):
@@ -92,10 +91,12 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
-        status = self.coordinator.data.get("art_mode_status") if self.coordinator.data else "unknown"
+        data = self.coordinator.data or {}
+        status = data.get("status")
         return {
-            "art_mode_status": str(status).lower() if status is not None else "unknown",
+            "art_mode_status": status if status is not None else "unknown",
             "connected": self._client.is_connected,
+            "content_id": data.get("content_id"),
         }
 
     async def async_turn_on(self) -> None:

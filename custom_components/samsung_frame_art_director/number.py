@@ -26,6 +26,7 @@ async def async_setup_entry(
         SamsungFrameGalleryPage(entry),
         SamsungFrameBrightness(entry, client),
         SamsungFrameColorTemperature(entry, client),
+        SamsungFrameMotionSensitivity(entry, client),
     ], True)
 
 
@@ -181,5 +182,32 @@ class SamsungFrameColorTemperature(_SamsungFrameArtSetting):
 
     async def async_set_native_value(self, value: float) -> None:
         await self._client.async_set_color_temperature(int(value))
+        self._value = int(value)
+        self.async_write_ha_state()
+
+
+class SamsungFrameMotionSensitivity(_SamsungFrameArtSetting):
+    """Art Mode motion-sensor sensitivity (1-3)."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_name = "Motion Sensitivity"
+    _attr_icon = "mdi:motion-sensor"
+    _attr_native_min_value = 1
+    _attr_native_max_value = 3
+
+    def __init__(self, entry: ConfigEntry, client) -> None:
+        super().__init__(entry, client, "motion_sensitivity")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        val = await self._client.async_get_artmode_setting("motion_sensitivity")
+        try:
+            self._value = int(val) if val is not None else None
+        except (ValueError, TypeError):
+            self._value = None
+        self.async_write_ha_state()
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self._client.async_set_motion_sensitivity(int(value))
         self._value = int(value)
         self.async_write_ha_state()
