@@ -685,10 +685,28 @@ async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> No
 
 async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Pick a random image from source_dir and upload it."""
-    client = hass.data[DOMAIN][entry.entry_id].get(DATA_CLIENT)
+    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if not data:
+        return
+    client = data.get(DATA_CLIENT)
     if not client:
         return
 
+    # Skip this tick if the previous slideshow upload is still running. Uploading
+    # over a slow Frame connection can take longer than an aggressive interval,
+    # and without this guard ticks would pile up and overwhelm the TV.
+    if data.get("slideshow_running"):
+        _LOGGER.debug("Slideshow skipped: previous rotation still in progress")
+        return
+    data["slideshow_running"] = True
+    try:
+        await _do_slideshow_rotation(hass, entry, client)
+    finally:
+        data["slideshow_running"] = False
+
+
+async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client) -> None:
+    """Perform a single slideshow rotation (guarded by ``_run_slideshow_job``)."""
     # Check if TV is in Art Mode. Do not interrupt movies or wake a fully powered off TV.
     try:
         status = await client.async_get_artmode_status()
@@ -702,7 +720,7 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     source_type = entry.options.get(CONF_SLIDESHOW_SOURCE_TYPE, SLIDESHOW_SOURCE_FOLDER)
     filter_val = entry.options.get(CONF_SLIDESHOW_FILTER)
     matte = resolve_matte(entry.options)
-    
+
     # --- NEW LOGIC: Respect Dashboard Filters ---
     # 1. Favorites Filter
     fav_switch = hass.states.get("switch.samsung_frame_gallery_favorites_only")
@@ -712,7 +730,7 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     text_filter = hass.states.get("text.samsung_frame_slideshow_filter")
     tags_filter = []
     neg_filter = []
-    
+
     if text_filter and text_filter.state not in (None, "unknown", "", "unavailable"):
         # Split by comma if multiple tags
         raw_tags = [t.strip() for t in text_filter.state.split(",")]
@@ -726,16 +744,16 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if fav_only or tags_filter or neg_filter:
         _LOGGER.debug(f"Slideshow: Using Dashboard filters (Fav={fav_only}, Tags={tags_filter}, Exclude={neg_filter})")
         await client.async_rotate_art(
-            tags=tags_filter, 
+            tags=tags_filter,
             negative_tags=neg_filter,
-            source="favorites" if fav_only else "library", 
+            source="favorites" if fav_only else "library",
             matte=matte
         )
         # Cleanup and exit early (skip default logic)
         cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
         try:
             await client.async_cleanup_storage(max_items=cleanup_max, only_integration_managed=False)
-        except Exception: 
+        except Exception:
             pass
         return
     # --------------------------------------------
