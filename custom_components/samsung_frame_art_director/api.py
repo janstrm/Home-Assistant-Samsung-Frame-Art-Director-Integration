@@ -1448,17 +1448,33 @@ class SamsungFrameClient:
                     if not new_id:
                         raise ValueError("No content ID returned from TV")
 
-                    # Select image
+                    # Select the image to show it. The matte was already applied
+                    # by upload(matte=...) above, so the matte calls here are
+                    # best-effort — a matte error (e.g. change_matte "-7" on
+                    # samsungtvws 3.0.5) must NOT fail an otherwise-successful
+                    # upload, or every rotation retries for ~40s.
                     tv_matte = matte if matte else "none"
+                    sel_matte = None if tv_matte == "none" else tv_matte
+                    shown = False
                     try:
-                        sel_matte = None if tv_matte == "none" else tv_matte
                         await asyncio.wait_for(async_client.select_image(new_id, show=True, matte=sel_matte), timeout=15)
-                    except (TypeError, Exception):
-                        # Fallback for older select_image or 3.0.5 matte quirk
-                        await asyncio.wait_for(async_client.select_image(new_id, show=True), timeout=10)
-                        if hasattr(async_client, "change_matte"):
-                            final_matte = "none" if tv_matte == "none" else tv_matte
-                            await asyncio.wait_for(async_client.change_matte(new_id, matte_id=final_matte, portrait_matte=final_matte), timeout=10)
+                        shown = True
+                    except Exception:  # noqa: BLE001
+                        try:
+                            await asyncio.wait_for(async_client.select_image(new_id, show=True), timeout=10)
+                            shown = True
+                        except Exception as e:  # noqa: BLE001
+                            _LOGGER.debug("Upload(async): select_image failed: %r", e)
+                    if not shown:
+                        raise ValueError("select_image failed after upload")
+                    if sel_matte and hasattr(async_client, "change_matte"):
+                        try:
+                            await asyncio.wait_for(
+                                async_client.change_matte(new_id, matte_id=tv_matte, portrait_matte=tv_matte),
+                                timeout=10,
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            _LOGGER.debug("Upload(async): change_matte best-effort failed: %r", e)
 
                     return new_id, async_client
                 except Exception:
