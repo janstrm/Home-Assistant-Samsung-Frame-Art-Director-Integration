@@ -239,6 +239,101 @@ class SamsungFrameClient:
                             pass
             await asyncio.to_thread(_set)
 
+    async def async_get_state(self) -> dict:
+        """Fetch art-mode status AND current content id over a SINGLE connection.
+
+        Used by the media_player coordinator so exposing the current artwork
+        adds no extra connections beyond the existing status poll.
+        """
+        def _read() -> dict:
+            tv = self._make_tv()
+            status = None
+            content_id = None
+            try:
+                try:
+                    status = tv.art().get_artmode()
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    cur = tv.art().get_current()
+                    if isinstance(cur, dict):
+                        content_id = cur.get("content_id") or cur.get("contentId")
+                except Exception:  # noqa: BLE001
+                    pass
+            finally:
+                self._capture_token(tv)
+                closer = getattr(tv, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
+            return {
+                "status": str(status).lower() if status is not None else None,
+                "content_id": content_id,
+            }
+
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_read), timeout=10)
+        except Exception:  # noqa: BLE001
+            return {"status": None, "content_id": None}
+
+    async def async_get_artmode_setting(self, setting: str):
+        """Return an art-mode setting value (motion_sensitivity, motion_timer,
+        brightness_sensor_setting) or None."""
+        def _get():
+            tv = self._make_tv()
+            try:
+                res = tv.art().get_artmode_settings(setting)
+                if isinstance(res, dict):
+                    return res.get("value", res.get(setting))
+                return res
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.debug("get_artmode_settings(%s) failed: %r", setting, e)
+                return None
+            finally:
+                self._capture_token(tv)
+                closer = getattr(tv, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_get), timeout=10)
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _async_set_art(self, method_name: str, value) -> None:
+        """Call a no-return art() setter (set_motion_sensitivity, etc.) safely."""
+        async with self._art_lock:
+            def _set():
+                tv = self._make_tv()
+                try:
+                    fn = getattr(tv.art(), method_name, None)
+                    if callable(fn):
+                        fn(value)
+                except Exception as e:  # noqa: BLE001
+                    _LOGGER.debug("%s(%s) failed: %r", method_name, value, e)
+                finally:
+                    self._capture_token(tv)
+                    closer = getattr(tv, "close", None)
+                    if callable(closer):
+                        try:
+                            closer()
+                        except Exception:  # noqa: BLE001
+                            pass
+            await asyncio.to_thread(_set)
+
+    async def async_set_motion_sensitivity(self, value: int) -> None:
+        await self._async_set_art("set_motion_sensitivity", str(int(value)))
+
+    async def async_set_motion_timer(self, value: str) -> None:
+        await self._async_set_art("set_motion_timer", str(value))
+
+    async def async_set_brightness_sensor(self, enabled: bool) -> None:
+        await self._async_set_art("set_brightness_sensor_setting", "on" if enabled else "off")
+
     def _get_db(self):
         """Open a sqlite connection to the library DB."""
         import sqlite3

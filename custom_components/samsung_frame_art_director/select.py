@@ -11,6 +11,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .const import (
     CONF_SLIDESHOW_SOURCE_TYPE,
     DOMAIN,
+    DATA_CLIENT,
     CONF_DUID,
     SLIDESHOW_SOURCE_FOLDER,
     SLIDESHOW_SOURCE_TAGS,
@@ -23,6 +24,7 @@ from .const import (
     MATTE_STYLE_NONE,
     DEFAULT_MATTE_STYLE,
     DEFAULT_MATTE_COLOR,
+    ART_MOTION_TIMER_OPTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,10 +37,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up the select platform."""
     _LOGGER.debug("Setting up select platform for entry: %s", entry.entry_id)
+    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
     async_add_entities([
         SamsungFrameSlideshowSourceSelect(entry),
         SamsungFrameMatteStyleSelect(entry),
         SamsungFrameMatteColorSelect(entry),
+        SamsungFrameMotionTimerSelect(entry, client),
     ], True)
 
 
@@ -151,4 +155,44 @@ class SamsungFrameMatteColorSelect(SelectEntity):
         new_data = {**self._entry.options}
         new_data[CONF_MATTE_COLOR] = option
         self.hass.config_entries.async_update_entry(self._entry, options=new_data)
+        self.async_write_ha_state()
+
+
+class SamsungFrameMotionTimerSelect(SelectEntity):
+    """Art Mode motion timer (auto-off after motion). Backed by the TV."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_name = "Motion Timer"
+    _attr_icon = "mdi:timer-outline"
+    _attr_options = ART_MOTION_TIMER_OPTIONS
+    _attr_should_poll = False
+
+    def __init__(self, entry: ConfigEntry, client) -> None:
+        self._entry = entry
+        self._client = client
+        self._current: str | None = None
+        self._attr_unique_id = f"{entry.entry_id}_motion_timer"
+        device_id = entry.data.get(CONF_DUID) or entry.entry_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=entry.title,
+            manufacturer="Samsung",
+            model="The Frame",
+        )
+
+    @property
+    def current_option(self) -> str | None:
+        return self._current
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        val = await self._client.async_get_artmode_setting("motion_timer")
+        val = str(val) if val is not None else None
+        self._current = val if val in self._attr_options else None
+        self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        await self._client.async_set_motion_timer(option)
+        self._current = option
         self.async_write_ha_state()

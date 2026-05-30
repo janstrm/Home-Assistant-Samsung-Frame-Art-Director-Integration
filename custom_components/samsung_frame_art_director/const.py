@@ -121,6 +121,9 @@ MATTE_COLORS = [
 DEFAULT_MATTE_STYLE = "shadowbox"
 DEFAULT_MATTE_COLOR = "polar"
 
+# Art-mode motion-timer options (minutes, or "off") supported by the TV API.
+ART_MOTION_TIMER_OPTIONS = ["off", "5", "15", "30", "60", "120", "240"]
+
 
 def resolve_matte(options) -> str:
     """Resolve the configured matte id from entry options.

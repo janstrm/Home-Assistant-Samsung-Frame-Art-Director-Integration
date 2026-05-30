@@ -228,7 +228,7 @@ When configured, the integration creates the following entities (where `samsung_
 ### Media Player
 | Entity | Description |
 |---|---|
-| `media_player.samsung_frame` | Main control entity. State reflects TV power. Attributes include `art_mode_status`. |
+| `media_player.samsung_frame` | Main control entity. State reflects Art Mode. Attributes include `art_mode_status` and the current `content_id`. Supports browse/play from the Media panel. |
 
 ### Image
 | Entity | Description |
@@ -240,6 +240,7 @@ When configured, the integration creates the following entities (where `samsung_
 |---|---|
 | `switch.samsung_frame_slideshow_enabled` | Enable/disable automatic art rotation. |
 | `switch.samsung_frame_gallery_favorites_only` | Restrict the gallery and rotation to only favorited images. |
+| `switch.samsung_frame_auto_brightness` | Art Mode auto-brightness (the TV's light sensor). |
 
 ### Select Entities
 | Entity | Description |
@@ -247,6 +248,7 @@ When configured, the integration creates the following entities (where `samsung_
 | `select.samsung_frame_slideshow_source` | Choose rotation source: `Library`, `Folder`, or `Tags`. |
 | `select.samsung_frame_matte_style` | Matte (border) style: `none`, `modern`, `shadowbox`, `flexible`, etc. Set to `none` to disable the matte. |
 | `select.samsung_frame_matte_color` | Matte (border) color: `polar`, `apricot`, `navy`, etc. Combined with the style as `{style}_{color}` (e.g. `shadowbox_polar`). Ignored when style is `none`. |
+| `select.samsung_frame_motion_timer` | Art Mode motion auto-off timer: `off`, `5`, `15`, `30`, `60`, `120`, `240` (minutes). |
 
 ### Number Entities
 | Entity | Description |
@@ -254,6 +256,7 @@ When configured, the integration creates the following entities (where `samsung_
 | `number.samsung_frame_slideshow_interval` | Custom rotation interval in minutes (0–1440). |
 | `number.samsung_frame_art_mode_brightness` | Art Mode brightness (0–10). |
 | `number.samsung_frame_art_mode_color_temperature` | Art Mode color temperature (−5…5). |
+| `number.samsung_frame_motion_sensitivity` | Art Mode motion-sensor sensitivity (1–3). |
 
 ### Text Entities
 | Entity | Description |

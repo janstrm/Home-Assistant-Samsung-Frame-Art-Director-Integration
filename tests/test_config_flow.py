@@ -51,6 +51,20 @@ async def test_user_flow_cannot_connect(hass):
         assert result["errors"]["base"] == "cannot_connect"
 
 
+async def test_dhcp_enriches_mac_for_existing_entry(hass):
+    from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
+
+    entry = MockConfigEntry(domain=DOMAIN, unique_id="DUID1", data={"host": "1.2.3.4"}, options={})
+    entry.add_to_hass(hass)
+
+    info = DhcpServiceInfo(ip="1.2.3.4", hostname="samsung", macaddress="aabbccddeeff")
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "dhcp"}, data=info
+    )
+    assert result["type"] == FlowResultType.ABORT
+    assert entry.options.get("mac_address") == "aa:bb:cc:dd:ee:ff"
+
+
 async def test_reconfigure_rejects_different_device(hass):
     entry = MockConfigEntry(domain=DOMAIN, unique_id="DUID1", data={"host": "1.2.3.4"})
     entry.add_to_hass(hass)
