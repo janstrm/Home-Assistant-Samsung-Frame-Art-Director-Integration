@@ -126,11 +126,13 @@
             "description": "You usually don't need to change these.",
             "data": {
               "ai_model": "AI model override",
+              "enable_art_mode_settings": "Show Art-Mode setting entities",
               "use_persistent_connection": "Reuse one connection (experimental)",
               "diagnostics_verbose": "Verbose debug logging"
             },
             "data_description": {
               "ai_model": "Leave blank for the recommended default (gemini-2.5-flash / gpt-4o).",
+              "enable_art_mode_settings": "Brightness / color temp / motion / auto-brightness entities. Require the NickWaterton samsungtvws fork — leave off if you have the official samsungtvws (they won't work). Reload the integration after changing.",
               "use_persistent_connection": "Experimental: keep a single connection open for status polling instead of reconnecting each time. Falls back automatically if it fails.",
               "diagnostics_verbose": "Enable detailed debug logging for troubleshooting."
             }
