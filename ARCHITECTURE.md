@@ -91,9 +91,9 @@ custom_components/samsung_frame_art_director/
 ├── sensor.py          # Gallery library sensor (+ gallery page number)
 ├── image.py           # Live "current artwork" preview entity
 ├── media_player.py    # Main control entity (power/art-mode status)
-├── switch.py          # slideshow_enabled, gallery_favorites_only
-├── select.py          # slideshow source picker; matte style + color
-├── number.py          # slideshow interval, gallery page, art brightness + color temp
+├── switch.py          # slideshow_enabled, gallery_favorites_only, auto-brightness
+├── select.py          # slideshow source; matte style/color; motion timer
+├── number.py          # slideshow interval, gallery page, brightness, color temp, motion sensitivity
 ├── text.py            # free-text slideshow/tag filter
 ├── services.yaml      # Service schemas (UI metadata)
 ├── strings.json       # config/options flow strings
@@ -354,6 +354,11 @@ Patterns you will see repeated, and why they exist:
   `_capture_token()` runs on close to **persist any token the TV re-issues** (via
   a loop-safe `set_token_persister` callback wired in `__init__.py`) so
   authorization doesn't drift. Never construct a bare `SamsungTVWS(host)`.
+- **Optional persistent connection.** The `use_persistent_connection` option
+  (default off) lets `async_get_state` (the 30s status poll) reuse one
+  `SamsungTVWSAsyncRemote` instead of reconnecting each time. `_persistent_state`
+  returns `None` on any error so `async_get_state` falls back to the per-call
+  path and resets the connection — enabling it can never break polling.
 - **Async-first, sync-fallback.** `SamsungTVWSAsyncRemote` / `SamsungTVAsyncArt`
   are preferred (non-blocking, fewer stalls), but not present/working on every
   library version or model — so a synchronous `SamsungTVWS`-in-a-thread path

@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a problem with the integration
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill in the details below. Samsung's Art
+        Mode API varies a lot by model/year, so the TV model is important.
+  - type: input
+    id: tv_model
+    attributes:
+      label: TV model & year
+      placeholder: "e.g. Samsung The Frame Q65LS03DAU (2024)"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "e.g. 2025.5.0"
+    validations:
+      required: true
+  - type: input
+    id: integration_version
+    attributes:
+      label: Integration version
+      placeholder: "e.g. 1.9.0 (see manifest.json / HACS)"
+    validations:
+      required: true
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug logs
+      description: >-
+        Enable Verbose debug logging (integration options → Advanced), reproduce,
+        then paste logs filtered by `samsung_frame_art_director`.
+      render: shell
