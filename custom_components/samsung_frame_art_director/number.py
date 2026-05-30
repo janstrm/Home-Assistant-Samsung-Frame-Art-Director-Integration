@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SLIDESHOW_INTERVAL, DEFAULT_SLIDESHOW_INTERVAL, DOMAIN, CONF_DUID, DATA_CLIENT
+from .const import CONF_SLIDESHOW_INTERVAL, DEFAULT_SLIDESHOW_INTERVAL, DOMAIN, CONF_DUID, DATA_CLIENT, CONF_ENABLE_ART_SETTINGS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,13 +21,17 @@ async def async_setup_entry(
     """Set up the number platform."""
     _LOGGER.debug("Setting up number platform for entry: %s", entry.entry_id)
     client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
-    async_add_entities([
+    entities = [
         SamsungFrameSlideshowInterval(entry),
         SamsungFrameGalleryPage(entry),
-        SamsungFrameBrightness(entry, client),
-        SamsungFrameColorTemperature(entry, client),
-        SamsungFrameMotionSensitivity(entry, client),
-    ], True)
+    ]
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+        entities += [
+            SamsungFrameBrightness(entry, client),
+            SamsungFrameColorTemperature(entry, client),
+            SamsungFrameMotionSensitivity(entry, client),
+        ]
+    async_add_entities(entities, True)
 
 
 class SamsungFrameSlideshowInterval(NumberEntity):

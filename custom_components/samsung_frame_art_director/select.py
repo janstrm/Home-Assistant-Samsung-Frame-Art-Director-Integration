@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_MATTE_STYLE,
     DEFAULT_MATTE_COLOR,
     ART_MOTION_TIMER_OPTIONS,
+    CONF_ENABLE_ART_SETTINGS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,12 +39,14 @@ async def async_setup_entry(
     """Set up the select platform."""
     _LOGGER.debug("Setting up select platform for entry: %s", entry.entry_id)
     client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
-    async_add_entities([
+    entities = [
         SamsungFrameSlideshowSourceSelect(entry),
         SamsungFrameMatteStyleSelect(entry),
         SamsungFrameMatteColorSelect(entry),
-        SamsungFrameMotionTimerSelect(entry, client),
-    ], True)
+    ]
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+        entities.append(SamsungFrameMotionTimerSelect(entry, client))
+    async_add_entities(entities, True)
 
 
 class SamsungFrameSlideshowSourceSelect(SelectEntity):

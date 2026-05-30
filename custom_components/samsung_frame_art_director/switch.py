@@ -8,7 +8,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SLIDESHOW_ENABLED, DOMAIN, DATA_CLIENT, CONF_DUID
+from .const import CONF_SLIDESHOW_ENABLED, DOMAIN, DATA_CLIENT, CONF_DUID, CONF_ENABLE_ART_SETTINGS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,11 +21,13 @@ async def async_setup_entry(
     """Set up the switch platform."""
     _LOGGER.debug("Setting up switch platform for entry: %s", entry.entry_id)
     client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
-    async_add_entities([
+    entities = [
         SamsungFrameSlideshowSwitch(entry),
         SamsungFrameFavoritesSwitch(entry),
-        SamsungFrameBrightnessSensorSwitch(entry, client),
-    ], True)
+    ]
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+        entities.append(SamsungFrameBrightnessSensorSwitch(entry, client))
+    async_add_entities(entities, True)
 
 
 class SamsungFrameSlideshowSwitch(SwitchEntity):

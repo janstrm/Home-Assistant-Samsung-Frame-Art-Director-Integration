@@ -78,8 +78,10 @@ views:
           - type: markdown
             content: >
               ## 🎚️ Art-Mode Settings
-              These write to the TV. Values populate after a restart with the
-              TV on.
+              These write to the TV and require the NickWaterton `samsungtvws`
+              fork. Hidden unless you enable **Show Art-Mode setting entities**
+              in the integration options (Advanced); otherwise these cards show
+              "entity not found".
           - type: entities
             entities:
               - entity: number.samsung_frame_art_mode_brightness

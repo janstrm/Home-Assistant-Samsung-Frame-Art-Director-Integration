@@ -78,6 +78,11 @@ DEFAULT_LIBRARY_DIR = "/media/frame/library"
 # Experimental: reuse one connection for the status poll (opt-in)
 CONF_USE_PERSISTENT = "use_persistent_connection"
 
+# Art-mode setting entities (brightness/color-temp/motion/auto-brightness) only
+# work with the NickWaterton samsungtvws fork; hidden by default so the common
+# official-samsungtvws setup isn't cluttered with non-functional entities.
+CONF_ENABLE_ART_SETTINGS = "enable_art_mode_settings"
+
 # Image preprocessing
 CONF_RESIZE_MODE = "resize_mode"
 RESIZE_MODE_CROP = "crop"   # scale-to-fill then center-crop (default; may trim edges)
