@@ -34,16 +34,16 @@ Use the issue templates. For bugs, include your TV model/year and HA version, an
 turn on **Verbose debug logging** (integration options → Advanced) before
 capturing logs filtered by `samsung_frame_art_director`.
 
-## Maintainer note: brand logo
-For the icon/logo to appear in Home Assistant, the integration must be added to
-the [home-assistant/brands](https://github.com/home-assistant/brands) repo
-(this is a one‑time, separate PR — it can't live in this repo):
+## Brand logo
+Since **Home Assistant 2026.3**, custom integrations ship their own brand images
+locally — no `home-assistant/brands` PR needed. They live in the integration's
+**`brand/`** folder and HA serves them (taking priority over the CDN):
 
-1. Prepare a square **`icon.png`** (256×256 or 512×512, transparent background)
-   and optionally **`icon@2x.png`**, plus an optional wide **`logo.png`**. The
-   existing `custom_components/samsung_frame_art_director/icon.png` can be the
-   starting point.
-2. Fork `home-assistant/brands`, add the files under
-   `custom_integrations/samsung_frame_art_director/`.
-3. Open a PR there. Once merged, remove `brands` from the `ignore:` list in
-   `.github/workflows/validate.yml` so HACS validates it.
+```
+custom_components/samsung_frame_art_director/brand/
+├── icon.png       # 256×256
+└── icon@2x.png    # 512×512
+```
+Supported filenames also include `dark_icon.png`, `logo.png`/`dark_logo.png` and
+their `@2x` variants. The HACS `brands` check still validates the (legacy) brands
+repo, so it stays in the `ignore:` list of `.github/workflows/validate.yml`.
