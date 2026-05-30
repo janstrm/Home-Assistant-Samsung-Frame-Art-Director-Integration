@@ -23,6 +23,4 @@ jobs:
         with:
           category: integration
           # brands: logo lives in the home-assistant/brands repo (not yet submitted).
-          # description/topics: set on the GitHub repo itself (Settings) — remove
-          # these ignores once a repo description and topics are added.
-          ignore: brands description topics
+          ignore: brands
