@@ -22,6 +22,7 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # The brand logo lives in the home-assistant/brands repo (not yet
-          # submitted); ignore that check until it is.
-          ignore: brands
+          # brands: logo lives in the home-assistant/brands repo (not yet submitted).
+          # description/topics: set on the GitHub repo itself (Settings) — remove
+          # these ignores once a repo description and topics are added.
+          ignore: brands description topics

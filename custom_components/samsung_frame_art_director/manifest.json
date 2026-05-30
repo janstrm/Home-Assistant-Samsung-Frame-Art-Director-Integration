@@ -1,9 +1,12 @@
 {
   "domain": "samsung_frame_art_director",
   "name": "Samsung Frame Art Director",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "config_flow": true,
+  "dependencies": ["http"],
+  "after_dependencies": ["wake_on_lan"],
   "documentation": "https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration",
+  "issue_tracker": "https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/issues",
   "iot_class": "local_polling",
   "zeroconf": [
     "_samsungmsf._tcp.local."
