@@ -87,6 +87,7 @@ custom_components/samsung_frame_art_director/
 ├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
 ├── const.py           # Constants, option keys, defaults
 ├── views.py           # HTTP view serving local thumbnails to the dashboard
+├── media_source.py    # Media Source provider (browse library in the Media panel)
 ├── sensor.py          # Gallery library sensor (+ gallery page number)
 ├── image.py           # Live "current artwork" preview entity
 ├── media_player.py    # Main control entity (power/art-mode status)
