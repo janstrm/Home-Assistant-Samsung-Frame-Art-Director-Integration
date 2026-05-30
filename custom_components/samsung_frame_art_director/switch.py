@@ -4,10 +4,11 @@ import logging
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SLIDESHOW_ENABLED, DOMAIN, CONF_DUID
+from .const import CONF_SLIDESHOW_ENABLED, DOMAIN, DATA_CLIENT, CONF_DUID, CONF_ENABLE_ART_SETTINGS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,17 +20,21 @@ async def async_setup_entry(
 ) -> None:
     """Set up the switch platform."""
     _LOGGER.debug("Setting up switch platform for entry: %s", entry.entry_id)
-    async_add_entities([
+    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    entities = [
         SamsungFrameSlideshowSwitch(entry),
-        SamsungFrameMatteSwitch(entry),
-        SamsungFrameFavoritesSwitch(entry)
-    ], True)
+        SamsungFrameFavoritesSwitch(entry),
+    ]
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+        entities.append(SamsungFrameBrightnessSensorSwitch(entry, client))
+    async_add_entities(entities, True)
 
 
 class SamsungFrameSlideshowSwitch(SwitchEntity):
     """Switch entity to enable/disable slideshow."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Slideshow Enabled"
     _attr_icon = "mdi:play-pause"
 
@@ -72,58 +77,11 @@ class SamsungFrameSlideshowSwitch(SwitchEntity):
         self.async_write_ha_state()
 
 
-class SamsungFrameMatteSwitch(SwitchEntity):
-    """Switch entity to enable/disable art matte."""
-
-    _attr_has_entity_name = True
-    _attr_name = "Matte Enabled"
-    _attr_icon = "mdi:picture-in-picture-bottom-right-outline"
-
-    def __init__(self, entry: ConfigEntry) -> None:
-        """Initialize the switch entity."""
-        self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_matte_enabled"
-        device_id = entry.data.get(CONF_DUID) or entry.entry_id
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, device_id)},
-            name=entry.title,
-            manufacturer="Samsung",
-            model="The Frame",
-        )
-
-    @property
-    def is_on(self) -> bool:
-        """Return True if entity is on."""
-        from .const import CONF_MATTE_ENABLED
-        return self._entry.options.get(CONF_MATTE_ENABLED, False)
-
-    async def async_turn_on(self, **kwargs) -> None:
-        """Turn the entity on."""
-        from .const import CONF_MATTE_ENABLED
-        new_data = {**self._entry.options}
-        new_data[CONF_MATTE_ENABLED] = True
-        
-        self.hass.config_entries.async_update_entry(
-            self._entry, options=new_data
-        )
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        """Turn the entity off."""
-        from .const import CONF_MATTE_ENABLED
-        new_data = {**self._entry.options}
-        new_data[CONF_MATTE_ENABLED] = False
-        
-        self.hass.config_entries.async_update_entry(
-            self._entry, options=new_data
-        )
-        self.async_write_ha_state()
-
-
 class SamsungFrameFavoritesSwitch(SwitchEntity):
     """Switch entity to enable/disable filtering by favorites in gallery."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Gallery Favorites Only"
     _attr_icon = "mdi:heart-multiple-outline"
 
@@ -158,8 +116,51 @@ class SamsungFrameFavoritesSwitch(SwitchEntity):
         """Turn the entity off."""
         new_data = {**self._entry.options}
         new_data["favorites_filter_enabled"] = False
-        
+
         self.hass.config_entries.async_update_entry(
             self._entry, options=new_data
         )
+        self.async_write_ha_state()
+
+
+class SamsungFrameBrightnessSensorSwitch(SwitchEntity):
+    """Auto-brightness (Art Mode light sensor). Backed by the TV, read once."""
+
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_name = "Auto Brightness"
+    _attr_icon = "mdi:brightness-auto"
+    _attr_should_poll = False
+
+    def __init__(self, entry: ConfigEntry, client) -> None:
+        self._entry = entry
+        self._client = client
+        self._is_on: bool | None = None
+        self._attr_unique_id = f"{entry.entry_id}_brightness_sensor"
+        device_id = entry.data.get(CONF_DUID) or entry.entry_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=entry.title,
+            manufacturer="Samsung",
+            model="The Frame",
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._is_on
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        val = await self._client.async_get_artmode_setting("brightness_sensor_setting")
+        self._is_on = str(val).lower() in ("on", "1", "true") if val is not None else None
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        await self._client.async_set_brightness_sensor(True)
+        self._is_on = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        await self._client.async_set_brightness_sensor(False)
+        self._is_on = False
         self.async_write_ha_state()

@@ -1,27 +1,31 @@
 """Select platform for Samsung Frame Art Director."""
 import logging
-import os
-import sqlite3
-import voluptuous as vol
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
-    CONF_SLIDESHOW_SOURCE_TYPE, 
-    CONF_SLIDESHOW_INTERVAL,
-    CONF_SLIDESHOW_FILTER,
-    CONF_SLIDESHOW_SOURCE_PATH,
-    DOMAIN, 
+    CONF_SLIDESHOW_SOURCE_TYPE,
+    DOMAIN,
     DATA_CLIENT,
-    DB_FILE,
     CONF_DUID,
-    SLIDESHOW_SOURCE_FOLDER, 
-    SLIDESHOW_SOURCE_TAGS, 
-    SLIDESHOW_SOURCE_LIBRARY
+    SLIDESHOW_SOURCE_FOLDER,
+    SLIDESHOW_SOURCE_TAGS,
+    SLIDESHOW_SOURCE_LIBRARY,
+    CONF_MATTE_STYLE,
+    CONF_MATTE_COLOR,
+    CONF_MATTE_ENABLED,
+    MATTE_STYLES,
+    MATTE_COLORS,
+    MATTE_STYLE_NONE,
+    DEFAULT_MATTE_STYLE,
+    DEFAULT_MATTE_COLOR,
+    ART_MOTION_TIMER_OPTIONS,
+    CONF_ENABLE_ART_SETTINGS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,17 +38,22 @@ async def async_setup_entry(
 ) -> None:
     """Set up the select platform."""
     _LOGGER.debug("Setting up select platform for entry: %s", entry.entry_id)
-    async_add_entities([
+    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    entities = [
         SamsungFrameSlideshowSourceSelect(entry),
-        SamsungFrameSlideshowIntervalSelect(entry),
-        SamsungFrameSlideshowContentSelect(hass, entry)
-    ], True)
+        SamsungFrameMatteStyleSelect(entry),
+        SamsungFrameMatteColorSelect(entry),
+    ]
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+        entities.append(SamsungFrameMotionTimerSelect(entry, client))
+    async_add_entities(entities, True)
 
 
 class SamsungFrameSlideshowSourceSelect(SelectEntity):
     """Select entity to choose slideshow source type."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Slideshow Source"
     _attr_icon = "mdi:source-branch"
     _attr_options = [SLIDESHOW_SOURCE_FOLDER, SLIDESHOW_SOURCE_TAGS, SLIDESHOW_SOURCE_LIBRARY]
@@ -78,19 +87,19 @@ class SamsungFrameSlideshowSourceSelect(SelectEntity):
         self.async_write_ha_state()
 
 
-class SamsungFrameSlideshowIntervalSelect(SelectEntity):
-    """Select entity to choose slideshow interval (minutes)."""
+class SamsungFrameMatteStyleSelect(SelectEntity):
+    """Select the matte (border) style. 'none' disables the matte."""
 
     _attr_has_entity_name = True
-    _attr_name = "Slideshow Interval"
-    _attr_icon = "mdi:timer-refresh"
-    _attr_options = ["1", "2", "5", "10", "15", "30", "60", "120", "240"]
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_name = "Matte Style"
+    _attr_icon = "mdi:image-frame"
+    _attr_options = MATTE_STYLES
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize the select entity."""
         self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_slideshow_interval_select"
-        # Use duid for device identifiers to ensure all platforms group together
+        self._attr_unique_id = f"{entry.entry_id}_matte_style"
         device_id = entry.data.get(CONF_DUID) or entry.entry_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device_id)},
@@ -101,35 +110,36 @@ class SamsungFrameSlideshowIntervalSelect(SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        """Return the selected entity option."""
-        val = self._entry.options.get(CONF_SLIDESHOW_INTERVAL, 0)
-        return str(val) if str(val) in self._attr_options else None
+        """Return the selected matte style."""
+        style = self._entry.options.get(CONF_MATTE_STYLE)
+        if style is None:
+            # Legacy installs only had the matte_enabled on/off switch.
+            if self._entry.options.get(CONF_MATTE_ENABLED):
+                return DEFAULT_MATTE_STYLE
+            return MATTE_STYLE_NONE
+        return style if style in self._attr_options else MATTE_STYLE_NONE
 
     async def async_select_option(self, option: str) -> None:
-        """Change the selected option."""
+        """Change the selected matte style."""
         new_data = {**self._entry.options}
-        new_data[CONF_SLIDESHOW_INTERVAL] = int(option)
-        
-        self.hass.config_entries.async_update_entry(
-            self._entry, options=new_data
-        )
+        new_data[CONF_MATTE_STYLE] = option
+        self.hass.config_entries.async_update_entry(self._entry, options=new_data)
         self.async_write_ha_state()
 
 
-class SamsungFrameSlideshowContentSelect(SelectEntity):
-    """Dynamic select entity to choose content (Folders or Tags) depending on Source Type."""
+class SamsungFrameMatteColorSelect(SelectEntity):
+    """Select the matte (border) color. Ignored when the style is 'none'."""
 
     _attr_has_entity_name = True
-    _attr_name = "Slideshow Content"
-    _attr_icon = "mdi:folder-image"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_name = "Matte Color"
+    _attr_icon = "mdi:palette"
+    _attr_options = MATTE_COLORS
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(self, entry: ConfigEntry) -> None:
         """Initialize the select entity."""
-        self.hass = hass
         self._entry = entry
-        self._attr_unique_id = f"{entry.entry_id}_slideshow_content_select"
-        self._attr_options = []
-        # Use duid for device identifiers to ensure all platforms group together
+        self._attr_unique_id = f"{entry.entry_id}_matte_color"
         device_id = entry.data.get(CONF_DUID) or entry.entry_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device_id)},
@@ -140,79 +150,52 @@ class SamsungFrameSlideshowContentSelect(SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        """Return the selected entity option."""
-        return self._entry.options.get(CONF_SLIDESHOW_FILTER)
+        """Return the selected matte color."""
+        return self._entry.options.get(CONF_MATTE_COLOR, DEFAULT_MATTE_COLOR)
 
     async def async_select_option(self, option: str) -> None:
-        """Change the selected option."""
+        """Change the selected matte color."""
         new_data = {**self._entry.options}
-        new_data[CONF_SLIDESHOW_FILTER] = option
-        
-        # Also sync legacy source path if it looks like a path
-        if "/" in option and self._entry.options.get(CONF_SLIDESHOW_SOURCE_TYPE) == SLIDESHOW_SOURCE_FOLDER:
-             new_data[CONF_SLIDESHOW_SOURCE_PATH] = option
-
-        self.hass.config_entries.async_update_entry(
-            self._entry, options=new_data
-        )
+        new_data[CONF_MATTE_COLOR] = option
+        self.hass.config_entries.async_update_entry(self._entry, options=new_data)
         self.async_write_ha_state()
 
-    async def async_update(self) -> None:
-        """Update options based on current source type."""
-        source_type = self._entry.options.get(CONF_SLIDESHOW_SOURCE_TYPE, SLIDESHOW_SOURCE_FOLDER)
-        
-        options = []
-        
-        if source_type == SLIDESHOW_SOURCE_FOLDER:
-            # List subfolders of the default media path
-            # We assume /media/frame is the root or what's configured
-            root_path = "/media/frame/library" 
-            
-            def _scan_folders():
-                try:
-                    # Use os.scandir to find directories
-                    if os.path.isdir(root_path):
-                         paths = [f.path for f in os.scandir(root_path) if f.is_dir()]
-                         # Also include the root itself
-                         paths.insert(0, root_path)
-                         return paths
-                except Exception as e:
-                    _LOGGER.warning("Could not scan folders: %s", e)
-                return [root_path]
 
-            options = await self.hass.async_add_executor_job(_scan_folders)
-                
-        elif source_type == SLIDESHOW_SOURCE_TAGS:
-            # Query DB for tags
-            client = self.hass.data[DOMAIN][self._entry.entry_id].get(DATA_CLIENT)
-            if client and client._db_path and os.path.exists(client._db_path):
-                 try:
-                     def _get_tags():
-                         with sqlite3.connect(client._db_path) as conn:
-                             cursor = conn.execute("SELECT DISTINCT tags FROM art_library WHERE tags IS NOT NULL AND tags != ''")
-                             return [row[0] for row in cursor]
-                     
-                     raw_tags = await self.hass.async_add_executor_job(_get_tags)
-                     # Flatten and unique (handle "tag1, tag2")
-                     all_tags = set()
-                     for t_str in raw_tags:
-                         for t in t_str.split(","):
-                             clean = t.strip()
-                             if clean:
-                                 all_tags.add(clean)
-                     options = sorted(list(all_tags))
-                 except Exception as e:
-                     _LOGGER.warning("Could not fetch tags: %s", e)
-        
-        else:
-            # Library or other
-            options = ["All"]
+class SamsungFrameMotionTimerSelect(SelectEntity):
+    """Art Mode motion timer (auto-off after motion). Backed by the TV."""
 
-        # If current value is not in options, append it so it shows up? 
-        # Or let it be (HA might show it as text). 
-        # Standard behavior: valid option required.
-        current = self._entry.options.get(CONF_SLIDESHOW_FILTER)
-        if current and current not in options:
-            options.append(current)
-            
-        self._attr_options = options
+    _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_name = "Motion Timer"
+    _attr_icon = "mdi:timer-outline"
+    _attr_options = ART_MOTION_TIMER_OPTIONS
+    _attr_should_poll = False
+
+    def __init__(self, entry: ConfigEntry, client) -> None:
+        self._entry = entry
+        self._client = client
+        self._current: str | None = None
+        self._attr_unique_id = f"{entry.entry_id}_motion_timer"
+        device_id = entry.data.get(CONF_DUID) or entry.entry_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=entry.title,
+            manufacturer="Samsung",
+            model="The Frame",
+        )
+
+    @property
+    def current_option(self) -> str | None:
+        return self._current
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        val = await self._client.async_get_artmode_setting("motion_timer")
+        val = str(val) if val is not None else None
+        self._current = val if val in self._attr_options else None
+        self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        await self._client.async_set_motion_timer(option)
+        self._current = option
+        self.async_write_ha_state()

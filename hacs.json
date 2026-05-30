@@ -1,6 +1,5 @@
 {
   "name": "Samsung Frame Art Director",
   "render_readme": true,
-  "filename": "samsung_frame_art_director",
-  "iot_class": "Local Polling"
+  "homeassistant": "2024.6.0"
 }

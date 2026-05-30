@@ -3,34 +3,30 @@
 from __future__ import annotations
 
 import logging
-import os
-import io
 
+from homeassistant.components import media_source
 from homeassistant.components.media_player import MediaPlayerEntity
 from homeassistant.components.media_player.const import MediaPlayerEntityFeature
+from homeassistant.components.media_source.models import MediaSourceItem
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_platform
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
-import voluptuous as vol
-
-from .const import CONF_DUID, DATA_CLIENT, DOMAIN, DB_DIR, DB_FILE, DEFAULT_CLEANUP_MAX_ITEMS
+from .const import CONF_DUID, DATA_CLIENT, DOMAIN, resolve_matte
 
 _LOGGER = logging.getLogger(__name__)
 
 
-from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
-from homeassistant.util import dt as dt_util
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
     """Set up the Samsung Frame media player from a config entry."""
     client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
-    
+
     async def async_update_data():
-        """Fetch data from API endpoint."""
-        status = await client.async_get_artmode_status()
-        return {"art_mode_status": status}
+        """Fetch art-mode status + current artwork over a single connection."""
+        return await client.async_get_state()
 
     coordinator = DataUpdateCoordinator(
         hass,
@@ -42,34 +38,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     await coordinator.async_config_entry_first_refresh()
 
-    entity = SamsungFrameMediaPlayer(hass, entry, coordinator)
-    async_add_entities([entity])
+    async_add_entities([SamsungFrameMediaPlayer(hass, entry, coordinator)])
+    # NOTE: the set_artmode / upload_art / rotate_art_now services are registered
+    # as domain services in __init__.py (with WoL / power-key / matte / cleanup
+    # handling) and target this entity via services.yaml. They are intentionally
+    # not registered as entity-platform services here to avoid a duplicate,
+    # divergent implementation.
 
-    platform = entity_platform.async_get_current_platform()
-    platform.async_register_entity_service(
-        "set_artmode",
-        {vol.Required("enabled"): bool},
-        "async_set_artmode_service",
-    )
-    platform.async_register_entity_service(
-        "upload_art",
-        {
-            vol.Required("path"): str,
-            vol.Optional("matte"): str,
-            vol.Optional("tags"): str,
-        },
-        "async_upload_art_service",
-    )
-    platform.async_register_entity_service(
-        "rotate_art_now",
-        {
-            vol.Optional("tags"): str,
-            vol.Optional("match_all"): bool,
-            vol.Optional("source"): vol.In(["library", "folder"]),
-            vol.Optional("path"): str,
-        },
-        "async_rotate_art_service",
-    )
 
 class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     """Representation of the Samsung Frame TV."""
@@ -79,6 +54,8 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     _attr_supported_features = (
         MediaPlayerEntityFeature.TURN_ON
         | MediaPlayerEntityFeature.TURN_OFF
+        | MediaPlayerEntityFeature.PLAY_MEDIA
+        | MediaPlayerEntityFeature.BROWSE_MEDIA
     )
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, coordinator: DataUpdateCoordinator) -> None:
@@ -102,87 +79,59 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         """Return the state of the entity based on art mode."""
         if not self._client.is_connected:
             return "off"
-        
-        status = self.coordinator.data.get("art_mode_status") if self.coordinator.data else "unknown"
+
+        status = (self.coordinator.data or {}).get("status")
         if status in ("on", "true", "1"):
             return "on"
         elif status in ("off", "false", "0"):
-             return "off"
+            return "off"
         # If we can't tell, fallback to connected assumption
         return "on" if self._client.is_connected else "off"
 
     @property
     def extra_state_attributes(self):
         """Return the state attributes."""
-        status = self.coordinator.data.get("art_mode_status") if self.coordinator.data else "unknown"
+        data = self.coordinator.data or {}
+        status = data.get("status")
         return {
-            "art_mode_status": str(status).lower() if status is not None else "unknown",
-            "connected": self._client.is_connected
+            "art_mode_status": status if status is not None else "unknown",
+            "connected": self._client.is_connected,
+            "content_id": data.get("content_id"),
         }
 
     async def async_turn_on(self) -> None:
-        """Turn the media player on."""
+        """Turn the media player on (enter Art Mode)."""
         await self._client.async_set_artmode(True)
 
     async def async_turn_off(self) -> None:
-        """Turn the media player off."""
+        """Turn the media player off (leave Art Mode)."""
         await self._client.async_set_artmode(False)
 
-    async def async_set_artmode_service(self, enabled: bool) -> None:
-        """Service to set art mode."""
-        await self._client.async_set_artmode(enabled)
+    async def async_browse_media(self, media_content_type=None, media_content_id=None):
+        """Browse media sources, limited to images (the art library)."""
+        return await media_source.async_browse_media(
+            self.hass,
+            media_content_id,
+            content_filter=lambda item: item.media_content_type.startswith("image"),
+        )
 
-    async def async_upload_art_service(self, path: str, matte: str | None = None, tags: str | None = None) -> None:
-        """Upload art service."""
+    async def async_play_media(self, media_type: str, media_id: str, **kwargs) -> None:
+        """Upload and display a library image selected from the Media panel."""
+        if not media_source.is_media_source_id(media_id):
+            raise HomeAssistantError("Only Home Assistant media-source items are supported")
+        sourced = MediaSourceItem.from_uri(self.hass, media_id, None)
+        if sourced.domain != DOMAIN:
+            raise HomeAssistantError("Only Samsung Frame Art library items can be sent to the Frame")
+
+        from urllib.parse import unquote
+
+        path = unquote(sourced.identifier)
+
         def _read() -> bytes:
-            import os
-            norm = os.path.expanduser(path)
-            if not norm.startswith("/media/") and not norm.startswith("/config/"):
-                norm = "/media/frame/library/" + norm.lstrip("/")
-            
-            abs_norm = os.path.abspath(norm)
-            allowed_media = os.path.abspath("/media")
-            allowed_config = os.path.abspath(self.hass.config.path())
-            if not abs_norm.startswith(allowed_media) and not abs_norm.startswith(allowed_config):
-                raise ValueError(f"Path traversal detected or unallowed path: {abs_norm}")
-            
-            with open(abs_norm, "rb") as f:
+            with open(path, "rb") as f:
                 return f.read()
 
         image_bytes = await self.hass.async_add_executor_job(_read)
-        
-        # Upload
-        await self._client.async_upload_image(image_bytes, matte=matte)
-        
-        from os.path import basename
-        remote_filename = basename(path) 
-        
-        # Track and cleanup
-        await self._client.async_track_art(remote_filename, tags=tags)
-        
-        cleanup_max = self._entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
-        await self._client.async_cleanup_storage(max_items=cleanup_max)
-
-    async def async_rotate_art_service(self, tags: str | None = None, match_all: bool = False, source: str = "library", path: str | None = None) -> None:
-        """Rotate art using optional tag filters or folder source."""
-        _LOGGER.debug("rotate_art_now service called for %s with tags=%s match_all=%s source=%s", self.entity_id, tags, match_all, source)
-        
-        if source == "folder":
-             # Use provided path or default from options (if accessible)
-             if not path:
-                 # Best effort default
-                 path = "/media/frame/library"
-             success = await self._client.async_rotate_from_folder(path)
-             if success:
-                 _LOGGER.info("Rotate art (folder) success on %s", self.entity_id)
-             else:
-                 _LOGGER.warning("Rotate art (folder) failed on %s", self.entity_id)
-        else:
-            tag_list = [t.strip() for t in tags.split(",")] if tags else None
-            success = await self._client.async_rotate_art(tags=tag_list, match_all=match_all)
-            
-            if success:
-                _LOGGER.info("Rotate art success on %s", self.entity_id)
-            else:
-                _LOGGER.warning("Rotate art found no matches for tags=%s", tags)
-
+        await self._client.async_upload_image(
+            image_bytes, matte=resolve_matte(self._entry.options), source_file=path
+        )

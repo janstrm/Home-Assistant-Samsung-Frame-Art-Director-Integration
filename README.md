@@ -26,9 +26,10 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 ## ✨ Capabilities
 
 - **State Verification:** Toggles Art Mode ON/OFF and verifies the state to ensure the screen displays art rather than just being powered down.
-- **Local Uploads:** Upload local images directly to the TV. Images are programmatically center-cropped and resized to 3840×2160 pixels before upload.
+- **Local Uploads:** Upload local images directly to the TV. Images are resized to 3840×2160 before upload (choose **crop** to fill or **fit** to letterbox in the options).
 - **Auto-Tagging (Optional):** Drop images into an inbox folder and run Process Inbox — Gemini analyzes, tags, and catalogs them to your local library.
 - **Gallery Sensor:** Exposes a database of your local art, allowing you to build dashboard views with the provided example YAML.
+- **Media Browser:** Browse your tagged library in Home Assistant's **Media** panel and "play" any image to the Frame (it uploads and displays it).
 - **Auto-Rotation:** Rotates art from local storage or limits selection based on assigned tags, favorites, and filters.
 - **Favorites:** Mark individual artworks as favorites. Filter the gallery or rotation to only use your favorite pieces.
 - **Storage Management:** Detects and deletes orphaned or un-favorited artworks from the TV memory to manage limited storage capacity.
@@ -52,19 +53,22 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 
 ## ⚙️ Configuration
 
-Add the integration from **Settings → Devices & Services → Add Integration** and search for "Samsung Frame Art Director".
+If your TV is on, it is usually **auto-discovered** — look for "Samsung Frame Art Director" under **Settings → Devices & Services** and click **Configure** to set it up. Otherwise add it manually from **Add Integration** and search for "Samsung Frame Art Director".
 
 ### Initial Setup
-- You will be asked for the TV's IP address and a Name.
+- You will be asked for the TV's IP address and a Name (pre-filled when discovered).
 - Follow the prompt on your TV to "Allow" the connection.
+- If the TV's IP later changes, use **Reconfigure** on the integration to update it (no need to delete and re-add); discovery also updates it automatically.
 
 ### Options Flow (Configure)
-Once installed, click **Configure** on the integration page to access advanced settings:
-- **Gemini API Key:** Required for automatic image tagging (Process Inbox & Sync Library).
-- **Slideshow Settings:** Enable rotation, set interval (minutes), and select source type (Library / Folder / Tags).
-- **Matte:** Enable/disable a polar matte border around displayed art.
-- **Wake-on-LAN:** Enter the TV's MAC address to wake it before sending commands.
-- **Cleanup Settings:** Define max items on TV, max storage age, and whether to preserve favorites.
+**Nothing here is required** — the integration works out of the box after pairing. Click **Configure** to adjust optional settings, grouped into collapsible sections:
+- **AI Image Tagging:** Add a Gemini (or OpenAI) API key to enable Process Inbox / Sync Library auto-tagging. This is the only thing most users will set.
+- **Storage Cleanup:** Max items / age to keep on the TV, preserve-current, dry-run.
+- **Folders & Image:** Inbox/library folder paths and the image fit mode (crop vs. fit/letterbox).
+- **Connection & Power:** Wake-on-LAN MAC and power-key fallback.
+- **Advanced:** AI model override and verbose logging.
+
+> **Slideshow, matte and favorites** are controlled by their own **entities** (switches/selects/number/text), not this dialog — so you can drive them from dashboards and automations.
 
 ---
 
@@ -97,6 +101,12 @@ To use the Art Gallery with popups, you will need these HACS frontend plugins:
 3. **[card-mod](https://github.com/thomasloven/lovelace-card-mod)** *(Optional)* (For visual enhancements like favorite indicators)
 
 Simply create a new Dashboard View in Home Assistant, click **Edit (Raw Configuration)**, and paste the contents of the example file! Home Assistant will automatically arrange the 3 columns on wide screens.
+
+### 🧪 Testing dashboard (no extra plugins)
+
+For exercising **every** entity and service from one screen — using only built‑in Lovelace cards (no HACS frontend plugins) — paste [`examples/testing_dashboard.yaml`](examples/testing_dashboard.yaml) into a new dashboard's **Raw configuration**. It surfaces the art preview, Art Mode toggle, brightness/color/motion settings, matte, slideshow, the library sensor, a media‑control card to browse + play to the Frame, and buttons for rotate / process inbox / sync / cleanup / diagnostics / purge.
+
+> Entity IDs in both examples assume the prefix `samsung_frame`. If your device uses a different prefix (e.g. `65_the_frame_…`), find‑replace it (check **Developer Tools → States**).
 
 ---
 
@@ -224,7 +234,7 @@ When configured, the integration creates the following entities (where `samsung_
 ### Media Player
 | Entity | Description |
 |---|---|
-| `media_player.samsung_frame` | Main control entity. State reflects TV power. Attributes include `art_mode_status`. |
+| `media_player.samsung_frame` | Main control entity. State reflects Art Mode. Attributes include `art_mode_status` and the current `content_id`. Supports browse/play from the Media panel. |
 
 ### Image
 | Entity | Description |
@@ -235,19 +245,24 @@ When configured, the integration creates the following entities (where `samsung_
 | Entity | Description |
 |---|---|
 | `switch.samsung_frame_slideshow_enabled` | Enable/disable automatic art rotation. |
-| `switch.samsung_frame_matte_enabled` | Enable/disable the polar matte border around displayed art. |
 | `switch.samsung_frame_gallery_favorites_only` | Restrict the gallery and rotation to only favorited images. |
+| `switch.samsung_frame_auto_brightness` | Art Mode auto-brightness (the TV's light sensor). |
 
 ### Select Entities
 | Entity | Description |
 |---|---|
 | `select.samsung_frame_slideshow_source` | Choose rotation source: `Library`, `Folder`, or `Tags`. |
-| `select.samsung_frame_slideshow_interval` | Quick-pick rotation interval (1, 2, 5, 10, 15, 30, 60, 120, 240 min). |
+| `select.samsung_frame_matte_style` | Matte (border) style: `none`, `modern`, `shadowbox`, `flexible`, etc. Set to `none` to disable the matte. |
+| `select.samsung_frame_matte_color` | Matte (border) color: `polar`, `apricot`, `navy`, etc. Combined with the style as `{style}_{color}` (e.g. `shadowbox_polar`). Ignored when style is `none`. |
+| `select.samsung_frame_motion_timer` | Art Mode motion auto-off timer: `off`, `5`, `15`, `30`, `60`, `120`, `240` (minutes). |
 
 ### Number Entities
 | Entity | Description |
 |---|---|
 | `number.samsung_frame_slideshow_interval` | Custom rotation interval in minutes (0–1440). |
+| `number.samsung_frame_art_mode_brightness` | Art Mode brightness (0–10). |
+| `number.samsung_frame_art_mode_color_temperature` | Art Mode color temperature (−5…5). |
+| `number.samsung_frame_motion_sensitivity` | Art Mode motion-sensor sensitivity (1–3). |
 
 ### Text Entities
 | Entity | Description |
@@ -261,17 +276,34 @@ When configured, the integration creates the following entities (where `samsung_
 
 ---
 
+## 🔔 Events
+
+The integration fires an event whenever the displayed artwork changes (upload or rotation), so you can build automations off it:
+
+```yaml
+trigger:
+  - platform: event
+    event_type: samsung_frame_art_director_art_changed
+# event.data: { host: "<tv ip>", content_id: "<id or path>" }
+```
+
+---
+
 ## 🛠️ Troubleshooting
 
 | Problem | Solution |
 |---|---|
 | Art uploads stall or fail | Ensure the TV is paired. Try turning on manually and watching for permission popups. |
 | "No Gemini API key" warning | Add your API key in **Settings → Devices → Samsung Frame Art Director → Configure**. |
-| "Local file missing" warnings during rotation | Run **Reset Database** then **Sync Library** to clean up stale entries. |
+| "Local file missing" warnings during rotation | Run **Purge Database** then **Sync Library** to clean up stale entries. |
 | Gallery shows no images | Ensure images exist in `/media/frame/library/` and run **Sync Library**. |
 | Rate limit (429) during inbox processing | Gemini free tier has request limits. Wait a few minutes and try again. |
 
 Check HA logs filtered by `samsung_frame_art_director` for detailed error messages.
+
+> [!NOTE]
+> **Art‑Mode settings (brightness, color temperature, motion, auto‑brightness) show `unknown` / don't apply.**
+> These features exist only in the **NickWaterton `samsungtvws` fork** that this integration pins. If another integration (e.g. Home Assistant's built‑in **Samsung Smart TV**) already installed the official `samsungtvws` from PyPI, HA keeps that version and ignores the pin — so those extra settings won't work. They're therefore **hidden by default**; enable **Show Art‑Mode setting entities** under the integration's options → *Advanced* (and reload) only if you have the fork. **Everything else (Art Mode on/off, uploads, slideshow, matte, gallery, Media browser) works on either version.** Check the installed version in the logs at startup (`samsungtvws package version: …`).
 
 ---
 
@@ -279,6 +311,8 @@ Check HA logs filtered by `samsung_frame_art_director` for detailed error messag
 
 Contributions, issues, and feature requests are welcome!
 Feel free to check the [issues page](https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/issues).
+
+> **Working on the code?** See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup and checks, and read [`ARCHITECTURE.md`](ARCHITECTURE.md) first — it explains the module layout, the SQLite data model, the key control flows, and (importantly) *why* the TV-API fallback logic exists before you refactor it.
 
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)

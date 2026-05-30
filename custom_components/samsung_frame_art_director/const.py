@@ -48,10 +48,107 @@ CONF_SLIDESHOW_SOURCE_PATH = "slideshow_source_dir"  # Legacy, kept for folder p
 CONF_SLIDESHOW_ENABLED = "slideshow_enabled"
 CONF_SLIDESHOW_SOURCE_TYPE = "slideshow_source_type"
 CONF_SLIDESHOW_FILTER = "slideshow_filter"
-CONF_SLIDESHOW_INTERVAL = "slideshow_interval"
+# Preconfigured default so enabling the slideshow is a single tap.
+DEFAULT_SLIDESHOW_INTERVAL = 15
 CONF_GEMINI_API_KEY = "gemini_api_key"
+CONF_OPENAI_API_KEY = "openai_api_key"
+CONF_AI_PROVIDER = "ai_provider"
+CONF_AI_MODEL = "ai_model"
 CONF_MATTE_ENABLED = "matte_enabled"
+
+# AI vision providers used for auto-tagging
+AI_PROVIDER_GEMINI = "gemini"
+AI_PROVIDER_OPENAI = "openai"
+
+# Default models per provider. gemini-2.0-flash is being shut down (2026-06-01),
+# so default to a current model; users can override via the AI Model option.
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_OPENAI_MODEL = "gpt-4o"
 
 SLIDESHOW_SOURCE_FOLDER = "folder"
 SLIDESHOW_SOURCE_TAGS = "Tags"
 SLIDESHOW_SOURCE_LIBRARY = "All Library"
+
+# Filesystem folders (configurable; these are the defaults)
+CONF_INBOX_DIR = "inbox_dir"
+CONF_LIBRARY_DIR = "library_dir"
+DEFAULT_INBOX_DIR = "/media/frame/inbox"
+DEFAULT_LIBRARY_DIR = "/media/frame/library"
+
+# Experimental: reuse one connection for the status poll (opt-in)
+CONF_USE_PERSISTENT = "use_persistent_connection"
+
+# Art-mode setting entities (brightness/color-temp/motion/auto-brightness) only
+# work with the NickWaterton samsungtvws fork; hidden by default so the common
+# official-samsungtvws setup isn't cluttered with non-functional entities.
+CONF_ENABLE_ART_SETTINGS = "enable_art_mode_settings"
+
+# Image preprocessing
+CONF_RESIZE_MODE = "resize_mode"
+RESIZE_MODE_CROP = "crop"   # scale-to-fill then center-crop (default; may trim edges)
+RESIZE_MODE_FIT = "fit"     # scale-to-fit then pad (letterbox; preserves whole image)
+DEFAULT_RESIZE_MODE = RESIZE_MODE_CROP
+
+# Matte (the digital passe-partout border the Frame draws around art).
+# A matte id is "{style}_{color}" (e.g. "shadowbox_polar"), or "none".
+# Values vary by model/firmware; these are the documented supersets.
+CONF_MATTE_STYLE = "matte_style"
+CONF_MATTE_COLOR = "matte_color"
+
+MATTE_STYLE_NONE = "none"
+MATTE_STYLES = [
+    MATTE_STYLE_NONE,
+    "modernthin",
+    "modern",
+    "modernwide",
+    "flexible",
+    "shadowbox",
+    "panoramic",
+    "triptych",
+    "mix",
+    "squares",
+]
+MATTE_COLORS = [
+    "black",
+    "neutral",
+    "antique",
+    "warm",
+    "polar",
+    "sand",
+    "seafoam",
+    "sage",
+    "burgandy",
+    "navy",
+    "apricot",
+    "byzantine",
+    "lavender",
+    "redorange",
+    "skyblue",
+    "turquoise",
+]
+DEFAULT_MATTE_STYLE = "shadowbox"
+DEFAULT_MATTE_COLOR = "polar"
+
+# Art-mode motion-timer options (minutes, or "off") supported by the TV API.
+ART_MOTION_TIMER_OPTIONS = ["off", "5", "15", "30", "60", "120", "240"]
+
+
+def resolve_matte(options) -> str:
+    """Resolve the configured matte id from entry options.
+
+    Returns a matte id like ``"shadowbox_polar"`` or ``"none"``. Mattes are
+    ``"{style}_{color}"``. Installs configured before the style/color pickers
+    existed only had the on/off ``matte_enabled`` switch, so fall back to a
+    sensible default matte when that legacy flag is set.
+    """
+    style = options.get(CONF_MATTE_STYLE)
+    if style is None:
+        # Legacy: only the boolean matte_enabled switch existed.
+        if options.get(CONF_MATTE_ENABLED):
+            return f"{DEFAULT_MATTE_STYLE}_{DEFAULT_MATTE_COLOR}"
+        return "none"
+    if not style or style == MATTE_STYLE_NONE:
+        return "none"
+    color = options.get(CONF_MATTE_COLOR) or DEFAULT_MATTE_COLOR
+    return f"{style}_{color}"
+

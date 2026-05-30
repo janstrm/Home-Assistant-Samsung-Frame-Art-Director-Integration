@@ -1,17 +1,28 @@
 {
   "domain": "samsung_frame_art_director",
   "name": "Samsung Frame Art Director",
-  "version": "1.4.0",
-  "config_flow": true,
-  "documentation": "https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration",
-  "iot_class": "local_polling",
-  "loggers": [
-    "samsungtvws"
-  ],
+  "after_dependencies": ["wake_on_lan"],
   "codeowners": [
     "@janstrm"
   ],
+  "config_flow": true,
+  "dependencies": ["http", "media_source"],
+  "dhcp": [
+    {
+      "hostname": "samsung*"
+    }
+  ],
+  "documentation": "https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/issues",
+  "loggers": [
+    "samsungtvws"
+  ],
   "requirements": [
-    "samsungtvws@git+https://github.com/NickWaterton/samsung-tv-ws-api.git"
+    "samsungtvws@git+https://github.com/NickWaterton/samsung-tv-ws-api.git@fe95ef1d784cd32f49bf9a07ec479576574eea07"
+  ],
+  "version": "1.9.8",
+  "zeroconf": [
+    "_samsungmsf._tcp.local."
   ]
 }

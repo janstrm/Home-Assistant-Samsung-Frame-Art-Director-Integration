@@ -5,12 +5,13 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, DATA_CLIENT
+from .const import DOMAIN, DATA_CLIENT, CONF_DUID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -137,13 +138,22 @@ async def async_setup_entry(
 class SamsungFrameLibrarySensor(CoordinatorEntity, SensorEntity):
     """Sensor that exposes a filtered/paged view of the Art Library."""
 
+    _attr_has_entity_name = True
+    _attr_name = "Art Library"
+    _attr_icon = "mdi:image-multiple-outline"
+
     def __init__(self, coordinator: DataUpdateCoordinator, entry: ConfigEntry) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._entry = entry
-        self._attr_name = "Samsung Frame Art Library"
         self._attr_unique_id = f"{entry.entry_id}_art_library"
-        self._attr_icon = "mdi:image-multiple-outline"
+        device_id = entry.data.get(CONF_DUID) or entry.entry_id
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=entry.title,
+            manufacturer="Samsung",
+            model="The Frame",
+        )
 
     @property
     def native_value(self) -> int:

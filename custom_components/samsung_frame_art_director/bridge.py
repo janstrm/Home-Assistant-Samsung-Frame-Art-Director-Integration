@@ -21,11 +21,9 @@ from .const import (
     CLIENT_NAME,
     RESULT_AUTH_MISSING,
     RESULT_CANNOT_CONNECT,
-    RESULT_NOT_SUPPORTED,
     RESULT_SUCCESS,
     WEBSOCKET_PORTS,
     RESULT_INVALID_PIN,
-    CONF_SESSION_ID,
 )
 
 _LOGGER = logging.getLogger(__name__)

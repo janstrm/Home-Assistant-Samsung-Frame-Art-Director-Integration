@@ -16,6 +16,22 @@
       "pairing": {
         "description": "Accept the authorization popup on {device}. After accepting, click Submit to finish pairing."
       },
+      "reauth_confirm": {
+        "title": "Re-authorize {device}",
+        "description": "The stored authorization for {device} is no longer valid. Make sure the TV is on, accept the authorization popup on the TV, then click Submit to re-pair."
+      },
+      "discovery_confirm": {
+        "title": "Set up {device}",
+        "description": "A Samsung TV ({device}) was found on your network. Set it up with Samsung Frame Art Director? You'll be asked to accept an authorization prompt on the TV next."
+      },
+      "reconfigure": {
+        "title": "Reconfigure {device}",
+        "description": "Update the TV's IP address (e.g. after a DHCP change). It must be the same TV.",
+        "data": {
+          "host": "Host",
+          "name": "Name"
+        }
+      },
       "encrypted_pairing": {
         "description": "Please enter the PIN displayed on {device}.",
         "data": {
@@ -34,28 +50,93 @@
     },
     "abort": {
       "already_in_progress": "A configuration flow is already in progress.",
-      "already_configured": "This device is already configured."
+      "already_configured": "This device is already configured.",
+      "reauth_successful": "Re-authorization was successful.",
+      "reconfigure_successful": "The TV address was updated successfully.",
+      "cannot_connect": "Cannot connect to the TV. Verify it is on and reachable on the network.",
+      "wrong_device": "That address belongs to a different TV than the one configured here."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Configure Art Director Options",
-        "data": {
-          "gemini_api_key": "Gemini API Key",
-          "slideshow_enabled": "Enable Slideshow",
-          "slideshow_interval": "Rotation Interval (minutes)",
-          "slideshow_source_type": "Rotation Source",
-          "slideshow_filter": "Slideshow Filter (Tags or Folders)",
-          "slideshow_source_path": "Local Media Path (Legacy)",
-          "mac_address": "MAC Address (for WoL)",
-          "use_wol_before_on": "Send WoL before Art ON",
-          "use_power_key_on_off": "Use Power Key as OFF fallback",
-          "cleanup_max_items": "Cleanup: Max items on TV",
-          "cleanup_max_age_days": "Cleanup: Max age (days)",
-          "cleanup_preserve_current": "Cleanup: Keep current image",
-          "cleanup_only_integration_managed": "Cleanup: Only track integration images",
-          "diagnostics_verbose": "Enable Verbose Logging"
+        "title": "Art Director Options",
+        "description": "Everything here is optional and preconfigured. Add an AI key only if you want automatic tagging. Slideshow, matte and favorites are controlled by their own entities.",
+        "sections": {
+          "ai_tagging": {
+            "name": "AI Image Tagging",
+            "description": "Optional. Used to auto-tag images dropped into the inbox.",
+            "data": {
+              "ai_provider": "Provider",
+              "gemini_api_key": "Gemini API key",
+              "openai_api_key": "OpenAI API key"
+            },
+            "data_description": {
+              "ai_provider": "Which AI vision service tags images dropped into the inbox.",
+              "gemini_api_key": "Required for Gemini. Get a free key at aistudio.google.com.",
+              "openai_api_key": "Required for OpenAI. The 'openai' Python package must be installed."
+            }
+          },
+          "cleanup": {
+            "name": "Storage Cleanup",
+            "description": "Controls how the TV's limited internal storage is pruned.",
+            "data": {
+              "cleanup_max_items": "Max items on TV",
+              "cleanup_max_age_days": "Max age",
+              "cleanup_preserve_current": "Keep the current image",
+              "cleanup_only_integration_managed": "Only delete images this integration uploaded",
+              "cleanup_dry_run": "Dry run (log only, don't delete)"
+            },
+            "data_description": {
+              "cleanup_max_items": "Maximum artworks to keep on the TV; oldest are deleted first.",
+              "cleanup_max_age_days": "Delete artworks older than this many days. 0 disables the age limit.",
+              "cleanup_only_integration_managed": "Never deletes your own or Art Store items.",
+              "cleanup_dry_run": "Preview cleanup in the logs without deleting anything."
+            }
+          },
+          "folders": {
+            "name": "Folders & Image",
+            "description": "Where images live and how they are fitted to the screen.",
+            "data": {
+              "inbox_dir": "Inbox folder",
+              "library_dir": "Library folder",
+              "resize_mode": "Image fit"
+            },
+            "data_description": {
+              "inbox_dir": "Folder watched by Process Inbox for new images to tag.",
+              "library_dir": "Permanent folder for processed images used by rotation and the gallery.",
+              "resize_mode": "'Crop' fills the screen and may trim edges; 'Fit' shows the whole image with black bars (better for portraits)."
+            }
+          },
+          "power": {
+            "name": "Connection & Power",
+            "description": "Optional Wake-on-LAN and power-key fallbacks.",
+            "data": {
+              "mac_address": "TV MAC address",
+              "use_wol_before_on": "Send Wake-on-LAN before turning Art Mode on",
+              "use_power_key_on_off": "Use the power key as an OFF fallback"
+            },
+            "data_description": {
+              "mac_address": "Needed only if you enable Wake-on-LAN.",
+              "use_power_key_on_off": "If turning Art Mode off fails, send the TV's power key as a fallback."
+            }
+          },
+          "advanced": {
+            "name": "Advanced",
+            "description": "You usually don't need to change these.",
+            "data": {
+              "ai_model": "AI model override",
+              "enable_art_mode_settings": "Show Art-Mode setting entities",
+              "use_persistent_connection": "Reuse one connection (experimental)",
+              "diagnostics_verbose": "Verbose debug logging"
+            },
+            "data_description": {
+              "ai_model": "Leave blank for the recommended default (gemini-2.5-flash / gpt-4o).",
+              "enable_art_mode_settings": "Brightness / color temp / motion / auto-brightness entities. Require the NickWaterton samsungtvws fork — leave off if you have the official samsungtvws (they won't work). Reload the integration after changing.",
+              "use_persistent_connection": "Experimental: keep a single connection open for status polling instead of reconnecting each time. Falls back automatically if it fails.",
+              "diagnostics_verbose": "Enable detailed debug logging for troubleshooting."
+            }
+          }
         }
       }
     }

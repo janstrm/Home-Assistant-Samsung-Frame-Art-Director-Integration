@@ -4,10 +4,11 @@ import logging
 from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SLIDESHOW_FILTER, DOMAIN, CONF_SLIDESHOW_SOURCE_PATH, CONF_DUID
+from .const import CONF_SLIDESHOW_FILTER, DOMAIN, CONF_DUID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ class SamsungFrameSlideshowFilterText(TextEntity):
     """Text entity to filter slideshow (Folder filters or Tag list)."""
 
     _attr_has_entity_name = True
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_name = "Slideshow Filter"
     _attr_icon = "mdi:filter-variant"
     _attr_native_min = 0
@@ -57,10 +59,6 @@ class SamsungFrameSlideshowFilterText(TextEntity):
         """Change the value."""
         new_data = {**self._entry.options}
         new_data[CONF_SLIDESHOW_FILTER] = value
-        
-        # Also sync the legacy folder path key if it looks like a path, just in case
-        if value.startswith("/") or ":" in value: 
-             new_data[CONF_SLIDESHOW_SOURCE_PATH] = value
 
         self.hass.config_entries.async_update_entry(
             self._entry, options=new_data

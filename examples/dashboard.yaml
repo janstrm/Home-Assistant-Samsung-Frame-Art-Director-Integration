@@ -93,30 +93,30 @@ views:
               - type: toggle
               
           - type: tile
-            entity: switch.samsung_frame_matte_enabled
-            name: Matte (Polar)
-            icon: mdi:picture-in-picture-bottom-right-outline
-            vertical: false
-            hide_state: true
-            features_position: inline
+            entity: select.samsung_frame_matte_style
+            name: Matte Style
+            icon: mdi:image-frame
+            features_position: bottom
             features:
-              - type: toggle
+              - type: select-options
+
+          - type: tile
+            entity: select.samsung_frame_matte_color
+            name: Matte Color
+            icon: mdi:palette
+            features_position: bottom
+            features:
+              - type: select-options
 
           - type: tile
             entity: select.samsung_frame_slideshow_source
             name: Rotation Source
             icon: mdi:source-branch
             
-          - type: horizontal-stack
-            cards:
-              - type: tile
-                entity: select.samsung_frame_slideshow_interval
-                name: Interval
-                icon: mdi:timer-cog
-              - type: tile
-                entity: number.samsung_frame_slideshow_interval
-                name: Custom
-                icon: mdi:timer-edit
+          - type: tile
+            entity: number.samsung_frame_slideshow_interval
+            name: Interval (min)
+            icon: mdi:timer-cog
 
           - type: markdown
             content: "### 🛠️ Maintenance Tools"
@@ -151,7 +151,7 @@ views:
                   target:
                     entity_id: media_player.samsung_frame
               - type: button
-                name: Reset Database
+                name: Purge Database
                 icon: mdi:database-remove
                 tap_action:
                   action: perform-action

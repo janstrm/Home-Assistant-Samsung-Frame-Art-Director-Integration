@@ -5,28 +5,44 @@ import asyncio
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
 from homeassistant.helpers import entity_registry as er, service as ha_service
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components import persistent_notification
 
 from .const import (
-    DATA_CLIENT, 
-    DOMAIN, 
-    METHOD_ENCRYPTED, 
-    CONF_SLIDESHOW_INTERVAL, 
-    CONF_SLIDESHOW_SOURCE_PATH, 
-    CONF_SLIDESHOW_ENABLED, 
-    CONF_SLIDESHOW_SOURCE_TYPE, 
-    CONF_SLIDESHOW_FILTER, 
-    SLIDESHOW_SOURCE_FOLDER, 
-    SLIDESHOW_SOURCE_TAGS, 
-    SLIDESHOW_SOURCE_LIBRARY,
+    DATA_CLIENT,
+    DOMAIN,
+    CONF_SLIDESHOW_INTERVAL,
+    CONF_SLIDESHOW_SOURCE_PATH,
+    CONF_SLIDESHOW_ENABLED,
+    CONF_SLIDESHOW_SOURCE_TYPE,
+    CONF_SLIDESHOW_FILTER,
+    SLIDESHOW_SOURCE_FOLDER,
+    SLIDESHOW_SOURCE_TAGS,
+    DEFAULT_SLIDESHOW_INTERVAL,
+    CONF_RESIZE_MODE,
+    DEFAULT_RESIZE_MODE,
+    CONF_USE_PERSISTENT,
+    CONF_INBOX_DIR,
+    DEFAULT_INBOX_DIR,
+    CONF_LIBRARY_DIR,
+    DEFAULT_LIBRARY_DIR,
     CONF_MATTE_ENABLED,
-    CONF_GEMINI_API_KEY
+    CONF_MATTE_STYLE,
+    CONF_MATTE_COLOR,
+    DEFAULT_MATTE_STYLE,
+    DEFAULT_MATTE_COLOR,
+    MATTE_STYLE_NONE,
+    resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+
+
+# This integration is configured via the UI only (config entries), not YAML.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config) -> bool:
@@ -35,6 +51,39 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old config entries to the current schema (idempotent)."""
+    if entry.version > 3:
+        # Downgrade not supported.
+        return False
+    if entry.version == 3:
+        return True
+
+    new_options = dict(entry.options or {})
+
+    # Legacy matte on/off switch -> matte style + color.
+    if CONF_MATTE_ENABLED in new_options and CONF_MATTE_STYLE not in new_options:
+        if new_options.get(CONF_MATTE_ENABLED):
+            new_options[CONF_MATTE_STYLE] = DEFAULT_MATTE_STYLE
+            new_options[CONF_MATTE_COLOR] = DEFAULT_MATTE_COLOR
+        else:
+            new_options[CONF_MATTE_STYLE] = MATTE_STYLE_NONE
+    new_options.pop(CONF_MATTE_ENABLED, None)
+
+    # Legacy slideshow_source_dir -> library_dir (only if customised).
+    legacy_dir = new_options.pop(CONF_SLIDESHOW_SOURCE_PATH, None)
+    if (
+        legacy_dir
+        and legacy_dir != DEFAULT_LIBRARY_DIR
+        and not new_options.get(CONF_LIBRARY_DIR)
+    ):
+        new_options[CONF_LIBRARY_DIR] = legacy_dir
+
+    hass.config_entries.async_update_entry(entry, options=new_options, version=3)
+    _LOGGER.info("Migrated config entry %s to version 3", entry.entry_id)
+    return True
 
 
 def _enable_verbose_logging() -> None:
@@ -63,7 +112,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
 
     # Import here to avoid blocking config_flow import on package import
-    from .api import SamsungFrameClient
+    from .api import SamsungFrameClient, PairingTimeoutError
 
     # Enable verbose logs from the beginning for diagnostics
     _enable_verbose_logging()
@@ -101,18 +150,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as e:  # noqa: BLE001
         _LOGGER.info("samsungtvws package not importable: %r", e)
 
-    # Respect diagnostics verbosity option
+    # Respect diagnostics verbosity option (off by default)
     try:
-        if entry.options.get("diagnostics_verbose", True):
+        if entry.options.get("diagnostics_verbose", False):
             _enable_verbose_logging()
     except Exception:  # noqa: BLE001
         pass
+
+    # Best-effort: create the inbox/library folders so users can drop images
+    # immediately without first running a service.
+    try:
+        import os as _os
+        for _d in (
+            entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR,
+            entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR,
+        ):
+            _os.makedirs(_d, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Could not pre-create media folders", exc_info=True)
 
     # Initialize and connect client; use persistent token file under /config
     host = entry.data.get("host")
     safe_host = str(host).replace("/", "_").replace(".", "_")
     token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
     client = SamsungFrameClient(hass, host, entry.data.get("token"), token_file_path=token_file_path, port=entry.data.get("port"))
+
+    # Persist a refreshed token whenever the TV (re)issues one during normal
+    # operation, so authorization stays valid across reconnects and the TV
+    # stops re-prompting for access. Called from worker threads, so hop back
+    # onto the event loop before touching the config entry.
+    def _persist_token(new_token: str) -> None:
+        def _update() -> None:
+            cur = hass.config_entries.async_get_entry(entry.entry_id)
+            if cur and new_token and new_token != cur.data.get("token"):
+                _LOGGER.info("Persisting refreshed token for host=%s", host)
+                hass.config_entries.async_update_entry(cur, data={**cur.data, "token": new_token})
+        hass.loop.call_soon_threadsafe(_update)
+
+    client.set_token_persister(_persist_token)
+    client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+    client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
+
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
         import os as _os
@@ -122,8 +200,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001
         pass
     try:
-        # Validate token at setup: if unauthorized, raise ConfigEntryNotReady to trigger retry
+        # Validate token at setup. PairingTimeoutError means the device identity
+        # could not be established (no token/duid) -> trigger reauth so the user
+        # can re-accept on the TV. Other failures are treated as transient.
         await client.async_connect_and_pair()
+    except PairingTimeoutError as err:
+        _LOGGER.debug("Client pairing failed (auth): %r", err, exc_info=True)
+        raise ConfigEntryAuthFailed from err
     except Exception as err:  # noqa: BLE001
         _LOGGER.debug("Client connect_and_pair failed: %r", err, exc_info=True)
         raise ConfigEntryNotReady from err
@@ -200,20 +283,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     if status in ("on", "true", "1"):
                         _LOGGER.debug("OFF fallback: sending POWER key via websocket remote")
                         try:
-                            from samsungtvws import SamsungTVWS  # type: ignore
-                            def _send_power():
-                                try:
-                                    tvp = SamsungTVWS(getattr(client, "host", None))
-                                except Exception:
-                                    return
-                                try:
-                                    # KEY_POWER for power toggle
-                                    tvp.remote().send_key("KEY_POWER")
-                                finally:
-                                    closer = getattr(tvp, "close", None)
-                                    if callable(closer):
-                                        closer()
-                            await hass.async_add_executor_job(_send_power)
+                            # Use the client's identified connection (name + token)
+                            # so this does not trigger a TV authorization popup.
+                            await client.async_send_key("KEY_POWER")
                             await asyncio.sleep(1.5)
                         except Exception:  # noqa: BLE001
                             _LOGGER.debug("OFF fallback: POWER key path unavailable")
@@ -225,10 +297,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _svc_upload_art(call: ha_service.ServiceCall) -> None:
         path = call.data.get("path")
         tags = call.data.get("tags")
-        # Get matte from call data or default to options (or 'none' if enabled is false)
-        # Find entry for options
-        matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-        matte = call.data.get("matte") or ("polar" if matte_enabled else "none")
+        # Matte from call data, else the configured style/color (or 'none').
+        matte = call.data.get("matte") or resolve_matte(entry.options)
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
@@ -322,14 +392,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.debug("Action rotate_art_now called: tags=%s match_all=%s source=%s path=%s", tags, match_all, source, path)
         
         tag_list = [t.strip() for t in tags.split(",")] if tags else None
-        
-        # Get matte from options
-        matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-        matte = "polar" if matte_enabled else "none"
 
-        found = False
+        # Get matte from configured style/color
+        matte = resolve_matte(entry.options)
+
         async for client in _resolve_clients(call):
-            found = True
             try:
                 if source == "folder":
                     # Use provided path or default from options
@@ -475,9 +542,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         elif call.service == "toggle_favorite":
             content_id = call.data.get("content_id")
+            if not content_id:
+                # Default to whatever is currently displayed on the TV.
+                try:
+                    current = await client.async_get_current_art()
+                    content_id = current.get("content_id")
+                except Exception:  # noqa: BLE001
+                    content_id = None
             if content_id:
                 new_state = await client.async_toggle_favorite(content_id)
                 _LOGGER.debug(f"Toggled favorite for {content_id}: {new_state}")
+                persistent_notification.async_create(
+                    hass,
+                    f"{'Added to' if new_state else 'Removed from'} favorites: {content_id}",
+                    title="Art Director",
+                )
+            else:
+                _LOGGER.warning("toggle_favorite: no content_id provided and no current artwork detected")
 
         elif call.service == "delete_art":
             content_id = call.data.get("content_id")
@@ -491,8 +572,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                 
         elif call.service == "rotate_favorites":
-            matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-            matte = "polar" if matte_enabled else "none"
+            matte = resolve_matte(entry.options)
             await client.async_rotate_art(source="favorites", matte=matte)
             
     hass.services.async_register(DOMAIN, "toggle_favorite", async_fav_handler)
@@ -565,6 +645,12 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # For now, we assume most option changes are slideshow related and can be hot-reloaded.
     # If connection-critical options were in 'options', we would check them here.
     
+    # Re-apply runtime client preferences
+    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if data and (client := data.get(DATA_CLIENT)):
+        client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+        client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
+
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)
     
@@ -583,7 +669,7 @@ async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> No
         data["timer_unsub"]()
         data.pop("timer_unsub")
 
-    interval = entry.options.get(CONF_SLIDESHOW_INTERVAL, 0)
+    interval = entry.options.get(CONF_SLIDESHOW_INTERVAL) or DEFAULT_SLIDESHOW_INTERVAL
     enabled = entry.options.get(CONF_SLIDESHOW_ENABLED, False)
     
     if interval > 0 and enabled:
@@ -599,10 +685,28 @@ async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> No
 
 async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Pick a random image from source_dir and upload it."""
-    client = hass.data[DOMAIN][entry.entry_id].get(DATA_CLIENT)
+    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if not data:
+        return
+    client = data.get(DATA_CLIENT)
     if not client:
         return
 
+    # Skip this tick if the previous slideshow upload is still running. Uploading
+    # over a slow Frame connection can take longer than an aggressive interval,
+    # and without this guard ticks would pile up and overwhelm the TV.
+    if data.get("slideshow_running"):
+        _LOGGER.debug("Slideshow skipped: previous rotation still in progress")
+        return
+    data["slideshow_running"] = True
+    try:
+        await _do_slideshow_rotation(hass, entry, client)
+    finally:
+        data["slideshow_running"] = False
+
+
+async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client) -> None:
+    """Perform a single slideshow rotation (guarded by ``_run_slideshow_job``)."""
     # Check if TV is in Art Mode. Do not interrupt movies or wake a fully powered off TV.
     try:
         status = await client.async_get_artmode_status()
@@ -615,9 +719,8 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
     source_type = entry.options.get(CONF_SLIDESHOW_SOURCE_TYPE, SLIDESHOW_SOURCE_FOLDER)
     filter_val = entry.options.get(CONF_SLIDESHOW_FILTER)
-    matte_enabled = entry.options.get(CONF_MATTE_ENABLED, False)
-    matte = "polar" if matte_enabled else "none"
-    
+    matte = resolve_matte(entry.options)
+
     # --- NEW LOGIC: Respect Dashboard Filters ---
     # 1. Favorites Filter
     fav_switch = hass.states.get("switch.samsung_frame_gallery_favorites_only")
@@ -627,7 +730,7 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     text_filter = hass.states.get("text.samsung_frame_slideshow_filter")
     tags_filter = []
     neg_filter = []
-    
+
     if text_filter and text_filter.state not in (None, "unknown", "", "unavailable"):
         # Split by comma if multiple tags
         raw_tags = [t.strip() for t in text_filter.state.split(",")]
@@ -641,26 +744,28 @@ async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
     if fav_only or tags_filter or neg_filter:
         _LOGGER.debug(f"Slideshow: Using Dashboard filters (Fav={fav_only}, Tags={tags_filter}, Exclude={neg_filter})")
         await client.async_rotate_art(
-            tags=tags_filter, 
+            tags=tags_filter,
             negative_tags=neg_filter,
-            source="favorites" if fav_only else "library", 
+            source="favorites" if fav_only else "library",
             matte=matte
         )
         # Cleanup and exit early (skip default logic)
         cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
         try:
             await client.async_cleanup_storage(max_items=cleanup_max, only_integration_managed=False)
-        except Exception: 
+        except Exception:
             pass
         return
     # --------------------------------------------
 
+    library_dir = entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR
+
     # Fallback if filter is empty but path exists (legacy)
     if not filter_val and source_type == SLIDESHOW_SOURCE_FOLDER:
-        filter_val = entry.options.get(CONF_SLIDESHOW_SOURCE_PATH, "/media/frame/library")
-        
+        filter_val = entry.options.get(CONF_SLIDESHOW_SOURCE_PATH, library_dir)
+
     if source_type == SLIDESHOW_SOURCE_FOLDER:
-        path = filter_val or "/media/frame/library"
+        path = filter_val or library_dir
         await client.async_rotate_from_folder(path, matte=matte)
     elif source_type == SLIDESHOW_SOURCE_TAGS:
         tags = [t.strip() for t in filter_val.split(",")] if filter_val else []

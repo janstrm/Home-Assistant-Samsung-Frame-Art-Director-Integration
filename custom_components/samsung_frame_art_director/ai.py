@@ -5,11 +5,10 @@ to analyze images and generate descriptive tags.
 It is designed to be usable standalone (for testing) or within HA.
 """
 import logging
-import asyncio
 import base64
 import time
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any
 
 # Configure logging for standalone use
 logging.basicConfig(level=logging.INFO)
@@ -38,7 +37,7 @@ class ImageAnalyzer(ABC):
         pass
 
 class GeminiAnalyzer(ImageAnalyzer):
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
         self.api_key = api_key
         self.model_name = model
         self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
@@ -170,3 +169,43 @@ class OpenAIAnalyzer(ImageAnalyzer):
         except Exception as e:
             _LOGGER.error("OpenAI analysis failed: %s", e)
             return {"error": str(e), "provider": "OpenAI"}
+
+
+def create_analyzer(
+    provider: str,
+    gemini_api_key: str = "",
+    openai_api_key: str = "",
+    model: str = "",
+) -> tuple[Optional[ImageAnalyzer], Optional[str]]:
+    """Build the configured image analyzer.
+
+    This is the single wiring point between the integration's options and the
+    concrete :class:`ImageAnalyzer` implementations. To add a new provider,
+    implement an ``ImageAnalyzer`` subclass and add a branch here.
+
+    Returns a ``(analyzer, error)`` tuple. On success ``error`` is ``None``; on
+    failure ``analyzer`` is ``None`` and ``error`` is a human-readable reason
+    suitable for logging and persistent notifications.
+    """
+    provider = (provider or "gemini").lower()
+    model = (model or "").strip()
+
+    if provider == "openai":
+        if not openai_api_key:
+            return None, (
+                "OpenAI selected but no OpenAI API key configured. "
+                "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
+            )
+        if model:
+            return OpenAIAnalyzer(openai_api_key, model_name=model), None
+        return OpenAIAnalyzer(openai_api_key), None
+
+    # Default provider: Google Gemini
+    if not gemini_api_key:
+        return None, (
+            "No Gemini API key configured. "
+            "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
+        )
+    if model:
+        return GeminiAnalyzer(gemini_api_key, model=model), None
+    return GeminiAnalyzer(gemini_api_key), None

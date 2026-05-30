@@ -11,25 +11,48 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
+from homeassistant.data_entry_flow import section
+from homeassistant.helpers.device_registry import format_mac
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .bridge import async_probe_device_info, async_try_connect, async_encrypted_start_pairing, async_encrypted_try_pin
 from .const import (
-    DOMAIN,
     CONF_DUID,
     RESULT_AUTH_MISSING,
     RESULT_CANNOT_CONNECT,
     RESULT_NOT_SUPPORTED,
     RESULT_SUCCESS,
+    RESULT_INVALID_PIN,
     ENCRYPTED_WEBSOCKET_PORT,
-    CONF_SLIDESHOW_INTERVAL,
-    CONF_SLIDESHOW_SOURCE_PATH,
-    CONF_SLIDESHOW_ENABLED,
-    CONF_SLIDESHOW_SOURCE_TYPE,
-    CONF_SLIDESHOW_FILTER,
     CONF_GEMINI_API_KEY,
-    SLIDESHOW_SOURCE_FOLDER,
-    SLIDESHOW_SOURCE_TAGS,
-    SLIDESHOW_SOURCE_LIBRARY,
+    CONF_OPENAI_API_KEY,
+    CONF_AI_PROVIDER,
+    CONF_AI_MODEL,
+    AI_PROVIDER_GEMINI,
+    AI_PROVIDER_OPENAI,
+    DEFAULT_CLEANUP_MAX_ITEMS,
+    CONF_INBOX_DIR,
+    CONF_LIBRARY_DIR,
+    DEFAULT_INBOX_DIR,
+    DEFAULT_LIBRARY_DIR,
+    CONF_RESIZE_MODE,
+    RESIZE_MODE_CROP,
+    RESIZE_MODE_FIT,
+    DEFAULT_RESIZE_MODE,
+    CONF_USE_PERSISTENT,
+    CONF_ENABLE_ART_SETTINGS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,10 +60,27 @@ _LOGGER = logging.getLogger(__name__)
 DATA_SCHEMA = vol.Schema({vol.Required(CONF_HOST): str, vol.Optional(CONF_NAME, default="Samsung Frame"): str})
 
 
+def _normalize_host(raw: str) -> str:
+    """Clean up user-entered host: trim, drop scheme/path, and a trailing port.
+
+    Accepts things like " http://192.168.1.5:8002/ " and returns "192.168.1.5".
+    Leaves bracketed IPv6 literals untouched.
+    """
+    host = (raw or "").strip()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    # Drop any path component
+    host = host.split("/", 1)[0]
+    # Strip a trailing :port for hostnames/IPv4 (but not IPv6, which has many colons)
+    if host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    return host.strip()
+
+
 class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_art_director"):
     """Handle a config flow for Samsung Frame Art Director."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         self._host: str | None = None
@@ -63,7 +103,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
         _LOGGER.debug("Flow step_user: user_input=%s", bool(user_input))
         errors: dict[str, str] | None = None
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
+            self._host = _normalize_host(user_input[CONF_HOST])
             self._name = user_input.get(CONF_NAME, "Samsung Frame")
             _LOGGER.debug("User provided host=%s name=%s", self._host, self._name)
             port, info = await async_probe_device_info(self._host)
@@ -193,6 +233,157 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             description_placeholders={"device": self._name or self._host},
         )
 
+    async def async_step_reauth(self, entry_data: dict[str, Any]):
+        """Handle re-authentication when the stored token is no longer valid."""
+        self._host = entry_data.get(CONF_HOST)
+        self._port = entry_data.get(CONF_PORT)
+        self._name = entry_data.get(CONF_NAME)
+        self._duid = entry_data.get(CONF_DUID)
+        _LOGGER.debug("Flow step_reauth: host=%s port=%s", self._host, self._port)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict | None = None):
+        """Re-pair with the TV and update the stored token."""
+        errors: dict[str, str] = {}
+        if user_input is not None and self._host:
+            safe_host = str(self._host).replace("/", "_").replace(".", "_")
+            token_file_path = self.hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
+            try:
+                os.makedirs(os.path.dirname(token_file_path), exist_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+            # Re-pair without the old token to force a fresh acceptance + token.
+            result = await async_try_connect(
+                self._host, self._port or 8002, None, token_file_path=token_file_path
+            )
+            if result.result == RESULT_SUCCESS:
+                entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+                _LOGGER.info("Reauth success: host=%s", self._host)
+                return self.async_update_reload_and_abort(
+                    entry, data={**entry.data, "token": result.token or entry.data.get("token")}
+                )
+            if result.result == RESULT_AUTH_MISSING:
+                errors = {"base": RESULT_AUTH_MISSING}
+            elif result.result == RESULT_CANNOT_CONNECT:
+                errors = {"base": RESULT_CANNOT_CONNECT}
+            else:
+                errors = {"base": RESULT_NOT_SUPPORTED}
+
+        self.context["title_placeholders"] = {"device": self._name or self._host}
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={"device": self._name or self._host},
+        )
+
+    async def async_step_dhcp(self, discovery_info):
+        """Enrich an already-configured TV with its MAC (for Wake-on-LAN).
+
+        Purely additive: if a DHCP lease matches a configured entry's host and
+        no MAC is set yet, store it as the WoL default. Never starts a
+        user-facing flow.
+        """
+        ip = getattr(discovery_info, "ip", None)
+        raw_mac = getattr(discovery_info, "macaddress", None)
+        if ip and raw_mac:
+            mac = format_mac(raw_mac)
+            for entry in self._async_current_entries():
+                if entry.data.get(CONF_HOST) == ip and not entry.options.get("mac_address"):
+                    _LOGGER.debug("DHCP: storing MAC %s for %s", mac, ip)
+                    self.hass.config_entries.async_update_entry(
+                        entry, options={**entry.options, "mac_address": mac}
+                    )
+                    break
+        return self.async_abort(reason="already_configured")
+
+    async def async_step_zeroconf(self, discovery_info):
+        """Handle a Samsung TV discovered via zeroconf (_samsungmsf._tcp)."""
+        host = _normalize_host(getattr(discovery_info, "host", "") or "")
+        if not host:
+            return self.async_abort(reason="cannot_connect")
+        props = getattr(discovery_info, "properties", {}) or {}
+        _LOGGER.debug("Zeroconf discovery: host=%s props=%s", host, props)
+
+        port, info = await async_probe_device_info(host)
+        if not port:
+            return self.async_abort(reason="cannot_connect")
+        self._host = host
+        self._port = port
+        self._device_info = info or {}
+        dev = self._device_info.get("device", {}) if isinstance(self._device_info, dict) else {}
+        self._duid = dev.get("duid") or dev.get("udn") or host
+        self._name = dev.get("name") or props.get("fn") or "Samsung Frame"
+
+        await self.async_set_unique_id(self._duid)
+        self._abort_if_unique_id_configured(updates={CONF_HOST: self._host, CONF_PORT: self._port})
+
+        self.context["title_placeholders"] = {"device": self._name or self._host}
+        return await self.async_step_discovery_confirm()
+
+    async def async_step_discovery_confirm(self, user_input: dict | None = None):
+        """Confirm setup of a discovered TV, then continue to pairing."""
+        if user_input is not None:
+            model = (self._device_info or {}).get("device", {}).get("modelName")
+            if model and isinstance(model, str) and model.upper().startswith(("H", "J")):
+                self._port = ENCRYPTED_WEBSOCKET_PORT
+                return await self.async_step_encrypted_pairing()
+            return await self.async_step_pairing()
+
+        self.context["title_placeholders"] = {"device": self._name or self._host}
+        return self.async_show_form(
+            step_id="discovery_confirm",
+            description_placeholders={"device": self._name or self._host},
+        )
+
+    async def async_step_reconfigure(self, user_input: dict | None = None):
+        """Change the TV's IP/name without removing the integration."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        errors: dict[str, str] = {}
+        if user_input is not None and entry:
+            new_host = _normalize_host(user_input[CONF_HOST])
+            port, info = await async_probe_device_info(new_host)
+            if not port:
+                errors = {"base": RESULT_CANNOT_CONNECT}
+            else:
+                dev = (info or {}).get("device", {}) if isinstance(info, dict) else {}
+                duid = dev.get("duid") or dev.get("udn") or new_host
+                # Guard against pointing the entry at a different TV.
+                if entry.unique_id and duid != entry.unique_id:
+                    return self.async_abort(reason="wrong_device")
+                new_data = {**entry.data, CONF_HOST: new_host, CONF_PORT: port}
+                if user_input.get(CONF_NAME):
+                    new_data[CONF_NAME] = user_input[CONF_NAME]
+                return self.async_update_reload_and_abort(entry, data=new_data)
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_HOST, default=(entry.data.get(CONF_HOST) if entry else "")): str,
+                vol.Optional(CONF_NAME, default=(entry.data.get(CONF_NAME, "Samsung Frame") if entry else "Samsung Frame")): str,
+            }
+        )
+        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
+
+
+# Options flow: section key -> the flat option keys it contains. Single source
+# of truth used to flatten the nested section payload on save.
+OPTION_SECTIONS: dict[str, list[str]] = {
+    "ai_tagging": [CONF_AI_PROVIDER, CONF_GEMINI_API_KEY, CONF_OPENAI_API_KEY],
+    "cleanup": [
+        "cleanup_max_items",
+        "cleanup_max_age_days",
+        "cleanup_preserve_current",
+        "cleanup_only_integration_managed",
+        "cleanup_dry_run",
+    ],
+    "folders": [CONF_INBOX_DIR, CONF_LIBRARY_DIR, CONF_RESIZE_MODE],
+    "power": ["mac_address", "use_wol_before_on", "use_power_key_on_off"],
+    "advanced": [CONF_AI_MODEL, CONF_ENABLE_ART_SETTINGS, CONF_USE_PERSISTENT, "diagnostics_verbose"],
+}
+
+_TEXT = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
+_PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
 
 # Options Flow
 class OptionsFlowHandler(config_entries.OptionsFlow):
@@ -201,28 +392,89 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input: dict | None = None):
         if user_input is not None:
-            return self.async_create_entry(title="Options", data=user_input)
+            # Section data is returned nested under each section key; flatten it
+            # back to flat option keys. Merge with existing options so settings
+            # managed by entities (slideshow, matte, favorites) are preserved.
+            flat: dict = {}
+            for value in user_input.values():
+                if isinstance(value, dict):
+                    flat.update(value)
+                # (no top-level fields in this form)
+            merged = {**(self._entry.options or {}), **flat}
+            return self.async_create_entry(title="", data=merged)
+
         opts = self._entry.options or {}
-        schema = vol.Schema(
+
+        ai_schema = vol.Schema(
             {
-                vol.Optional("mac_address", default=opts.get("mac_address", "")): str,
-                vol.Optional("use_wol_before_on", default=opts.get("use_wol_before_on", False)): bool,
-                vol.Optional("use_power_key_on_off", default=opts.get("use_power_key_on_off", False)): bool,
-                vol.Optional(CONF_SLIDESHOW_ENABLED, default=opts.get(CONF_SLIDESHOW_ENABLED, False)): bool,
-                vol.Optional(CONF_SLIDESHOW_INTERVAL, default=opts.get(CONF_SLIDESHOW_INTERVAL, 0)): int,
-                vol.Optional(CONF_SLIDESHOW_SOURCE_TYPE, default=opts.get(CONF_SLIDESHOW_SOURCE_TYPE, SLIDESHOW_SOURCE_FOLDER)): vol.In([SLIDESHOW_SOURCE_FOLDER, SLIDESHOW_SOURCE_TAGS, SLIDESHOW_SOURCE_LIBRARY]),
-                vol.Optional(CONF_SLIDESHOW_FILTER, default=opts.get(CONF_SLIDESHOW_FILTER, "")): str,
-                vol.Optional(CONF_GEMINI_API_KEY, default=opts.get(CONF_GEMINI_API_KEY, "")): str,
-                vol.Optional(CONF_SLIDESHOW_SOURCE_PATH, default=opts.get(CONF_SLIDESHOW_SOURCE_PATH, "/media/frame/library")): str,
-                vol.Optional("cleanup_max_items", default=opts.get("cleanup_max_items", 50)): int,
-                vol.Optional("cleanup_max_age_days", default=opts.get("cleanup_max_age_days", 0)): int,
-                vol.Optional("cleanup_preserve_current", default=opts.get("cleanup_preserve_current", True)): bool,
-                vol.Optional("cleanup_only_integration_managed", default=opts.get("cleanup_only_integration_managed", True)): bool,
-                vol.Optional("cleanup_dry_run", default=opts.get("cleanup_dry_run", False)): bool,
-                vol.Optional("diagnostics_verbose", default=opts.get("diagnostics_verbose", True)): bool,
+                vol.Optional(CONF_AI_PROVIDER, default=opts.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value=AI_PROVIDER_GEMINI, label="Google Gemini"),
+                            SelectOptionDict(value=AI_PROVIDER_OPENAI, label="OpenAI"),
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(CONF_GEMINI_API_KEY, default=opts.get(CONF_GEMINI_API_KEY, "")): _PASSWORD,
+                vol.Optional(CONF_OPENAI_API_KEY, default=opts.get(CONF_OPENAI_API_KEY, "")): _PASSWORD,
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
 
+        cleanup_schema = vol.Schema(
+            {
+                vol.Optional("cleanup_max_items", default=opts.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)): NumberSelector(
+                    NumberSelectorConfig(min=1, max=500, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="items")
+                ),
+                vol.Optional("cleanup_max_age_days", default=opts.get("cleanup_max_age_days", 0)): NumberSelector(
+                    NumberSelectorConfig(min=0, max=3650, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="days")
+                ),
+                vol.Optional("cleanup_preserve_current", default=opts.get("cleanup_preserve_current", True)): BooleanSelector(),
+                vol.Optional("cleanup_only_integration_managed", default=opts.get("cleanup_only_integration_managed", True)): BooleanSelector(),
+                vol.Optional("cleanup_dry_run", default=opts.get("cleanup_dry_run", False)): BooleanSelector(),
+            }
+        )
 
+        folders_schema = vol.Schema(
+            {
+                vol.Optional(CONF_INBOX_DIR, default=opts.get(CONF_INBOX_DIR, DEFAULT_INBOX_DIR)): _TEXT,
+                vol.Optional(CONF_LIBRARY_DIR, default=opts.get(CONF_LIBRARY_DIR, DEFAULT_LIBRARY_DIR)): _TEXT,
+                vol.Optional(CONF_RESIZE_MODE, default=opts.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE)): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value=RESIZE_MODE_CROP, label="Crop to fill (may trim edges)"),
+                            SelectOptionDict(value=RESIZE_MODE_FIT, label="Fit (letterbox, keeps whole image)"),
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+            }
+        )
+
+        power_schema = vol.Schema(
+            {
+                vol.Optional("mac_address", default=opts.get("mac_address", "")): _TEXT,
+                vol.Optional("use_wol_before_on", default=opts.get("use_wol_before_on", False)): BooleanSelector(),
+                vol.Optional("use_power_key_on_off", default=opts.get("use_power_key_on_off", False)): BooleanSelector(),
+            }
+        )
+
+        advanced_schema = vol.Schema(
+            {
+                vol.Optional(CONF_AI_MODEL, default=opts.get(CONF_AI_MODEL, "")): _TEXT,
+                vol.Optional(CONF_ENABLE_ART_SETTINGS, default=opts.get(CONF_ENABLE_ART_SETTINGS, False)): BooleanSelector(),
+                vol.Optional(CONF_USE_PERSISTENT, default=opts.get(CONF_USE_PERSISTENT, False)): BooleanSelector(),
+                vol.Optional("diagnostics_verbose", default=opts.get("diagnostics_verbose", False)): BooleanSelector(),
+            }
+        )
+
+        schema = vol.Schema(
+            {
+                "ai_tagging": section(ai_schema, {"collapsed": False}),
+                "cleanup": section(cleanup_schema, {"collapsed": True}),
+                "folders": section(folders_schema, {"collapsed": True}),
+                "power": section(power_schema, {"collapsed": True}),
+                "advanced": section(advanced_schema, {"collapsed": True}),
+            }
+        )
         return self.async_show_form(step_id="init", data_schema=schema)
