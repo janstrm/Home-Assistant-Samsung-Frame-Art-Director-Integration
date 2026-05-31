@@ -303,7 +303,7 @@ Check HA logs filtered by `samsung_frame_art_director` for detailed error messag
 
 > [!NOTE]
 > **Art‑Mode settings (brightness, color temperature, motion, auto‑brightness) show `unknown` / don't apply.**
-> These features exist only in the **NickWaterton `samsungtvws` fork** that this integration pins. If another integration (e.g. Home Assistant's built‑in **Samsung Smart TV**) already installed the official `samsungtvws` from PyPI, HA keeps that version and ignores the pin — so those extra settings won't work. They're therefore **hidden by default**; enable **Show Art‑Mode setting entities** under the integration's options → *Advanced* (and reload) only if you have the fork. **Everything else (Art Mode on/off, uploads, slideshow, matte, gallery, Media browser) works on either version.** Check the installed version in the logs at startup (`samsungtvws package version: …`).
+> These use the Art Mode API in `samsungtvws` ≥ 3.0.5 (installed automatically). They're **enabled by default**; if your TV or firmware rejects a particular setting, you can turn them off via the integration's options → *Advanced* → **Show Art‑Mode setting entities** (then reload). Check the installed library version in the logs at startup (`samsungtvws package version: …`).
 
 ---
 

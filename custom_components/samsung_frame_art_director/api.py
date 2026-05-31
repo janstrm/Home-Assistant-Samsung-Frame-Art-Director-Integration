@@ -61,19 +61,9 @@ class SamsungFrameClient:
         self._token_persister = None
         # Image preprocessing preference: "crop" (center-crop) or "fit" (letterbox)
         self._resize_mode = "crop"
-        # Experimental: reuse one async connection for the status poll instead of
-        # opening a fresh connection each time. Off by default; falls back to the
-        # per-call path on any error so it can never break polling.
-        self._use_persistent = False
-        self._remote = None
-        self._remote_lock: asyncio.Lock = asyncio.Lock()
 
     def set_db_path(self, path: str) -> None:
         self._db_path = path
-
-    def set_persistent(self, enabled: bool) -> None:
-        """Enable/disable reusing a persistent connection for the status poll."""
-        self._use_persistent = bool(enabled)
 
     def set_resize_mode(self, mode: str) -> None:
         """Set image preprocessing mode: 'crop' (center-crop) or 'fit' (pad)."""
@@ -162,50 +152,42 @@ class SamsungFrameClient:
             _LOGGER.debug("Failed to fire art_changed event", exc_info=True)
 
     async def _async_art(self, fn_name: str, *args):
-        """Call a method on the async art client (SamsungTVAsyncArt).
+        """Call a method on the (sync) Art API in an executor thread.
 
         Brightness / color-temperature / motion / brightness-sensor settings
-        exist only on the *async* art API on this library fork (the sync client
-        lacks them), so they are routed here. Returns the result, or None on
-        failure.
+        live on the synchronous ``SamsungTVArt`` client (``tv.art()``) in the
+        official samsungtvws package. We open a short-lived, properly-identified
+        connection, invoke the method off the event loop, persist any refreshed
+        token, and close. Returns the result, or None on failure.
         """
         try:
-            try:
-                from samsungtvws import SamsungTVAsyncArt  # type: ignore
-            except ImportError:
-                from samsungtvws.async_art import SamsungTVAsyncArt  # type: ignore
+            from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
         except Exception:  # noqa: BLE001
             return None
-        async with self._art_lock:
-            client = None
+
+        def _call():
+            tv = self._make_tv()
             try:
-                kwargs = {"host": self._host, "port": self._port or 8002, "name": self._client_name}
-                if self._token:
-                    kwargs["token"] = self._token
-                client = await asyncio.to_thread(lambda: SamsungTVAsyncArt(**kwargs))
-                try:
-                    await asyncio.wait_for(client.supported(), timeout=5)
-                except Exception:  # noqa: BLE001
-                    pass
-                fn = getattr(client, fn_name, None)
+                art = tv.art()
+                fn = getattr(art, fn_name, None)
                 if fn is None:
                     return None
-                result = await asyncio.wait_for(fn(*args), timeout=15)
-                self._capture_token(client)
-                return result
-            except Exception as e:  # noqa: BLE001
-                _LOGGER.debug("async art %s failed: %r", fn_name, e)
-                return None
+                return fn(*args)
             finally:
-                if client is not None:
+                self._capture_token(tv)
+                closer = getattr(tv, "close", None)
+                if callable(closer):
                     try:
-                        closer = getattr(client, "close", None)
-                        if callable(closer):
-                            res = closer()
-                            if asyncio.iscoroutine(res):
-                                await res
+                        closer()
                     except Exception:  # noqa: BLE001
                         pass
+
+        async with self._art_lock:
+            try:
+                return await asyncio.wait_for(asyncio.to_thread(_call), timeout=15)
+            except Exception as e:  # noqa: BLE001
+                _LOGGER.debug("art %s failed: %r", fn_name, e)
+                return None
 
     @staticmethod
     def _coerce_int(val):
@@ -232,78 +214,12 @@ class SamsungFrameClient:
         """Set Art Mode color temperature (-5..5)."""
         await self._async_art("set_color_temperature", str(int(value)))
 
-    async def _persistent_state(self) -> Optional[dict]:
-        """Status + current content id over a reused async connection.
-
-        Returns None (so the caller falls back to the per-call path) if the
-        persistent connection can't be established or used.
-        """
-        async with self._remote_lock:
-            remote = self._remote
-            try:
-                if remote is None:
-                    from samsungtvws.async_remote import SamsungTVWSAsyncRemote  # type: ignore
-                    remote = SamsungTVWSAsyncRemote(
-                        host=self._host,
-                        port=self._port or 8002,
-                        token=self._token or "",
-                        name=self._client_name,
-                        timeout=31,
-                    )
-                    await remote.open()
-                    if not hasattr(remote, "art"):
-                        await self._close_remote_obj(remote)
-                        return None
-                    self._capture_token(remote)
-                    self._remote = remote
-
-                status = await asyncio.to_thread(lambda: remote.art().get_artmode())
-                content_id = None
-                try:
-                    cur = await asyncio.to_thread(lambda: remote.art().get_current())
-                    if isinstance(cur, dict):
-                        content_id = cur.get("content_id") or cur.get("contentId")
-                except Exception:  # noqa: BLE001
-                    pass
-                return {
-                    "status": str(status).lower() if status is not None else None,
-                    "content_id": content_id,
-                }
-            except Exception as e:  # noqa: BLE001
-                _LOGGER.debug("Persistent state failed (%r); resetting connection", e)
-                await self._close_remote_obj(self._remote)
-                self._remote = None
-                return None
-
-    @staticmethod
-    async def _close_remote_obj(remote) -> None:
-        if remote is None:
-            return
-        try:
-            closer = getattr(remote, "close", None)
-            if callable(closer):
-                res = closer()
-                if asyncio.iscoroutine(res):
-                    await res
-        except Exception:  # noqa: BLE001
-            pass
-
     async def async_get_state(self) -> dict:
         """Fetch art-mode status AND current content id over a SINGLE connection.
 
         Used by the media_player coordinator so exposing the current artwork
-        adds no extra connections beyond the existing status poll. When the
-        persistent-connection option is enabled, reuses one connection and falls
-        back to the per-call path on any error.
+        adds no extra connections beyond the existing status poll.
         """
-        if self._use_persistent:
-            try:
-                result = await asyncio.wait_for(self._persistent_state(), timeout=12)
-                if result is not None:
-                    return result
-            except Exception:  # noqa: BLE001
-                self._remote = None
-
         def _read() -> dict:
             tv = self._make_tv()
             status = None
@@ -1026,10 +942,6 @@ class SamsungFrameClient:
         _LOGGER.info("Client: paired host=%s duid=%s", self._host, self._duid)
 
     async def async_disconnect(self) -> None:
-        # Close the persistent connection if one is open.
-        if self._remote is not None:
-            await self._close_remote_obj(self._remote)
-            self._remote = None
         if self._connected:
             _LOGGER.debug("Disconnecting from Samsung Frame")
             await asyncio.sleep(0.05)
@@ -1204,50 +1116,7 @@ class SamsungFrameClient:
                     return
         except Exception:
             pass
-        # Preferred path: use AsyncRemote if available
-        try:
-            from samsungtvws.async_remote import SamsungTVWSAsyncRemote  # type: ignore
-
-            async def _async_set_with_async_remote() -> None:
-                timeout = 31
-                async with SamsungTVWSAsyncRemote(
-                    host=self._host,
-                    port=self._port or 8002,
-                    token=self._token or "",
-                    name=self._client_name,
-                    timeout=timeout,
-                ) as remote:
-                    # Some installed versions do not expose remote.art(); skip if missing
-                    if not hasattr(remote, "art"):
-                        raise AttributeError("AsyncRemote missing art() API")
-                    await remote.open()
-                    self._capture_token(remote)
-                    _LOGGER.debug("ArtMode(async): sending set_artmode(%s) to %s", bool(enabled), self._host)
-
-                    def _do_set() -> None:
-                        remote.art().set_artmode(bool(enabled))
-
-                    await asyncio.to_thread(_do_set)
-
-                    # Verify a few times while the remote context is open
-                    for attempt in range(1, 3 + 1):
-                        try:
-                            status = await asyncio.to_thread(lambda: remote.art().get_artmode())
-                            _LOGGER.debug("ArtMode(async): attempt %s status=%s on %s", attempt, status, self._host)
-                            if bool(enabled) and str(status).lower() in ("on", "true", "1"):
-                                return
-                            if not bool(enabled) and str(status).lower() in ("off", "false", "0", "none"):
-                                return
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.debug("ArtMode(async): verification not available at attempt %s on %s", attempt, self._host)
-                        await asyncio.sleep(2)
-
-            await _async_set_with_async_remote()
-            return
-        except Exception as async_err:  # noqa: BLE001
-            _LOGGER.debug("AsyncRemote not available or failed, falling back to sync: %r", async_err, exc_info=True)
-
-        # Fallback path: sync client in executor
+        # Sync client in executor (official samsungtvws art() API).
         try:
             from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
         except Exception as err:  # noqa: BLE001
@@ -1401,132 +1270,6 @@ class SamsungFrameClient:
 
         # Optional preflight removed to reduce chatter; rely on upload errors for feedback
 
-        # Preferred path: use async art API when available to avoid sync websocket stalls
-        async def _async_upload_once() -> Optional[str]:
-            try:
-                try:
-                    from samsungtvws import SamsungTVAsyncArt  # type: ignore
-                except ImportError:
-                    from samsungtvws.async_art import SamsungTVAsyncArt  # type: ignore  # noqa: F401
-            except Exception as e:  # noqa: BLE001
-                _LOGGER.debug("Async art API unavailable: %r", e)
-                return None
-
-            async def _attempt_upload(port):
-                async_client = None
-                try:
-                    kwargs: dict = {
-                        "host": self._host,
-                        "port": port,
-                        "name": self._client_name,
-                    }
-                    if self._token:
-                        kwargs["token"] = self._token
-                    elif self._token_file_path:
-                        kwargs["token_file"] = self._token_file_path
-
-                    def _build_async_client():
-                        try:
-                            from samsungtvws import SamsungTVAsyncArt  # type: ignore
-                        except ImportError:
-                            from samsungtvws.async_art import SamsungTVAsyncArt  # type: ignore
-                        return SamsungTVAsyncArt(**kwargs)  # type: ignore[arg-type]
-
-                    async_client = await asyncio.to_thread(_build_async_client)
-                    
-                    # Prime it
-                    try:
-                        await asyncio.wait_for(async_client.supported(), timeout=5)
-                    except Exception:
-                        pass
-
-                    _LOGGER.debug("Upload(async): attempting port %s on %s", port, self._host)
-                    new_id = await asyncio.wait_for(
-                        async_client.upload(processed, file_type="JPEG", matte=matte), timeout=45
-                    )
-                    
-                    if not new_id:
-                        raise ValueError("No content ID returned from TV")
-
-                    # Select the image to show it. The matte was already applied
-                    # by upload(matte=...) above, so the matte calls here are
-                    # best-effort — a matte error (e.g. change_matte "-7" on
-                    # samsungtvws 3.0.5) must NOT fail an otherwise-successful
-                    # upload, or every rotation retries for ~40s.
-                    tv_matte = matte if matte else "none"
-                    sel_matte = None if tv_matte == "none" else tv_matte
-                    shown = False
-                    try:
-                        await asyncio.wait_for(async_client.select_image(new_id, show=True, matte=sel_matte), timeout=15)
-                        shown = True
-                    except Exception:  # noqa: BLE001
-                        try:
-                            await asyncio.wait_for(async_client.select_image(new_id, show=True), timeout=10)
-                            shown = True
-                        except Exception as e:  # noqa: BLE001
-                            _LOGGER.debug("Upload(async): select_image failed: %r", e)
-                    if not shown:
-                        raise ValueError("select_image failed after upload")
-                    if sel_matte and hasattr(async_client, "change_matte"):
-                        try:
-                            await asyncio.wait_for(
-                                async_client.change_matte(new_id, matte_id=tv_matte, portrait_matte=tv_matte),
-                                timeout=10,
-                            )
-                        except Exception as e:  # noqa: BLE001
-                            _LOGGER.debug("Upload(async): change_matte best-effort failed: %r", e)
-
-                    return new_id, async_client
-                except Exception:
-                    # Cleanup if failed
-                    if async_client:
-                        try:
-                            # Close if possible (though 3.0.5 might not have it)
-                            close_fn = getattr(async_client, "close", None)
-                            if callable(close_fn):
-                                await close_fn()
-                        except Exception:
-                            pass
-                    raise
-
-            # --- Try 8002 (SSL) then 8001 (Non-SSL) ---
-            new_content_id = None
-            final_client = None
-            try:
-                new_content_id, final_client = await _attempt_upload(8002)
-            except Exception as e:
-                _LOGGER.debug("Upload(async): Port 8002 failed, retrying 8001: %r", e)
-                try:
-                    new_content_id, final_client = await _attempt_upload(8001)
-                except Exception as e2:
-                    _LOGGER.debug("Upload(async): Both ports failed for %s: %r", self._host, e2)
-                    return None
-
-            try:
-                # Track and finish
-                await self.async_track_art(new_content_id, source_file=source_file)
-
-                # Persist any refreshed token the async client picked up
-                if final_client:
-                    self._capture_token(final_client)
-
-                # Final cleanup
-                if final_client:
-                    try:
-                        close_fn = getattr(final_client, "close", None)
-                        if callable(close_fn):
-                            await close_fn()
-                    except Exception:
-                        pass
-                
-                return str(new_content_id)
-            except Exception as e:  # noqa: BLE001
-                _LOGGER.debug("Upload(async) failed on %s: %r", self._host, e)
-                return None
-            finally:
-                # final_client already closed in success path or _attempt_upload error path
-                pass
-
         try:
             from samsungtvws import SamsungTVWS  # type: ignore
         except Exception as err:  # noqa: BLE001
@@ -1581,21 +1324,6 @@ class SamsungFrameClient:
                     pass
 
         async with self._art_lock:
-            # Try async upload first (up to 2 attempts) before falling back to sync path
-            for attempt_async in range(1, 2 + 1):
-                new_id = await _async_upload_once()
-                if new_id:
-                    _LOGGER.info("Upload(success, async) on host=%s (attempt %s)", self._host, attempt_async)
-                    self._fire_art_changed(new_id)
-                    try:
-                        diag_ok = await self.async_art_diagnostics(max_ids=1)
-                        _LOGGER.debug("Upload(async) post-check on %s: current=%s", self._host, diag_ok.get("current"))
-                    except Exception:
-                        pass
-                    return
-                if attempt_async < 2:
-                    await asyncio.sleep(1.0)
-
             # Retry a few times on transient art channel ConnectionFailure
             backoff_seconds = [0.75, 1.5, 2.5, 4.0]
             for attempt in range(1, 5 + 1):

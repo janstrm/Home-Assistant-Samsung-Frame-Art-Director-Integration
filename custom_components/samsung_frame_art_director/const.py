@@ -75,12 +75,8 @@ CONF_LIBRARY_DIR = "library_dir"
 DEFAULT_INBOX_DIR = "/media/frame/inbox"
 DEFAULT_LIBRARY_DIR = "/media/frame/library"
 
-# Experimental: reuse one connection for the status poll (opt-in)
-CONF_USE_PERSISTENT = "use_persistent_connection"
-
-# Art-mode setting entities (brightness/color-temp/motion/auto-brightness) only
-# work with the NickWaterton samsungtvws fork; hidden by default so the common
-# official-samsungtvws setup isn't cluttered with non-functional entities.
+# Art-mode setting entities (brightness/color-temp/motion/auto-brightness).
+# Enabled by default; users can turn them off if their TV/firmware rejects them.
 CONF_ENABLE_ART_SETTINGS = "enable_art_mode_settings"
 
 # Image preprocessing

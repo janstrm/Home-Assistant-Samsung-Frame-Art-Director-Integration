@@ -51,7 +51,6 @@ from .const import (
     RESIZE_MODE_CROP,
     RESIZE_MODE_FIT,
     DEFAULT_RESIZE_MODE,
-    CONF_USE_PERSISTENT,
     CONF_ENABLE_ART_SETTINGS,
 )
 
@@ -378,7 +377,7 @@ OPTION_SECTIONS: dict[str, list[str]] = {
     ],
     "folders": [CONF_INBOX_DIR, CONF_LIBRARY_DIR, CONF_RESIZE_MODE],
     "power": ["mac_address", "use_wol_before_on", "use_power_key_on_off"],
-    "advanced": [CONF_AI_MODEL, CONF_ENABLE_ART_SETTINGS, CONF_USE_PERSISTENT, "diagnostics_verbose"],
+    "advanced": [CONF_AI_MODEL, CONF_ENABLE_ART_SETTINGS, "diagnostics_verbose"],
 }
 
 _TEXT = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
@@ -462,8 +461,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         advanced_schema = vol.Schema(
             {
                 vol.Optional(CONF_AI_MODEL, default=opts.get(CONF_AI_MODEL, "")): _TEXT,
-                vol.Optional(CONF_ENABLE_ART_SETTINGS, default=opts.get(CONF_ENABLE_ART_SETTINGS, False)): BooleanSelector(),
-                vol.Optional(CONF_USE_PERSISTENT, default=opts.get(CONF_USE_PERSISTENT, False)): BooleanSelector(),
+                vol.Optional(CONF_ENABLE_ART_SETTINGS, default=opts.get(CONF_ENABLE_ART_SETTINGS, True)): BooleanSelector(),
                 vol.Optional("diagnostics_verbose", default=opts.get("diagnostics_verbose", False)): BooleanSelector(),
             }
         )
