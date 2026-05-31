@@ -313,6 +313,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         except Exception as wol_err:  # noqa: BLE001
                             _LOGGER.warning("WoL send to %s failed: %r", mac, wol_err)
                 await client.async_set_artmode(enabled)
+                if enabled and opts and opts.get("use_power_key_on_off"):
+                    # A fully powered-off Frame accepts set_artmode over the art
+                    # channel but won't physically light the panel. If it still
+                    # reports off, send the POWER key to wake it, then re-assert
+                    # Art Mode so it lands on art rather than live TV.
+                    status = await client.async_get_artmode_status()
+                    if status in ("off", "false", "0", "none", None):
+                        _LOGGER.debug("ON wake: TV still off; sending POWER key to wake")
+                        try:
+                            await client.async_send_key("KEY_POWER")
+                            await asyncio.sleep(3)
+                            await client.async_set_artmode(True)
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug("ON wake: POWER key path unavailable")
                 if not enabled and opts and opts.get("use_power_key_on_off"):
                     # Re-check quickly; if still on, attempt POWER key once
                     status = await client.async_get_artmode_status()
