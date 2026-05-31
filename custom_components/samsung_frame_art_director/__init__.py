@@ -52,11 +52,15 @@ PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sen
 _LOGGER = logging.getLogger(__name__)
 
 
-def _send_magic_packet(mac: str) -> None:
-    """Send a Wake-on-LAN magic packet to ``mac`` via a UDP broadcast.
+def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None:
+    """Send a Wake-on-LAN magic packet to ``mac`` via UDP broadcast.
 
     Self-contained so it doesn't require the ``wake_on_lan`` integration to be
     set up. Raises on malformed MAC or socket failure so the caller can log it.
+
+    Broadcasts to both the global broadcast address and any provided
+    subnet-directed broadcast (e.g. 192.168.68.255), since some switch/AP
+    setups only forward the directed broadcast to a sleeping device.
     """
     import socket
 
@@ -64,11 +68,19 @@ def _send_magic_packet(mac: str) -> None:
     if len(hexmac) != 12:
         raise ValueError(f"Invalid MAC address: {mac!r}")
     payload = bytes.fromhex("FF" * 6 + hexmac * 16)
+    targets = ["255.255.255.255"]
+    for ip in broadcast_ips or []:
+        if ip and ip not in targets:
+            targets.append(ip)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        # Broadcast to the standard WoL ports on the local segment.
-        sock.sendto(payload, ("255.255.255.255", 9))
-        sock.sendto(payload, ("255.255.255.255", 7))
+        # Standard WoL ports (9 and 7) on every target broadcast address.
+        for ip in targets:
+            for port in (9, 7):
+                try:
+                    sock.sendto(payload, (ip, port))
+                except OSError:
+                    pass
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -287,8 +299,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     mac = opts.get("mac_address")
                     if mac:
                         try:
-                            await hass.async_add_executor_job(_send_magic_packet, mac)
-                            _LOGGER.debug("Sent WoL to %s, sleeping before Art ON", mac)
+                            # Derive the subnet-directed broadcast from the TV's
+                            # IP (e.g. 192.168.68.61 -> 192.168.68.255) so the
+                            # packet reaches the TV even when global broadcast
+                            # isn't forwarded to a sleeping device.
+                            bcasts = []
+                            host_ip = getattr(client, "host", None)
+                            if host_ip and host_ip.count(".") == 3:
+                                bcasts.append(host_ip.rsplit(".", 1)[0] + ".255")
+                            await hass.async_add_executor_job(_send_magic_packet, mac, bcasts)
+                            _LOGGER.debug("Sent WoL to %s (broadcasts=%s), sleeping before Art ON", mac, bcasts)
                             await asyncio.sleep(3)
                         except Exception as wol_err:  # noqa: BLE001
                             _LOGGER.warning("WoL send to %s failed: %r", mac, wol_err)
