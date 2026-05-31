@@ -25,7 +25,7 @@ async def async_setup_entry(
         SamsungFrameSlideshowInterval(entry),
         SamsungFrameGalleryPage(entry),
     ]
-    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, True):
         entities += [
             SamsungFrameBrightness(entry, client),
             SamsungFrameColorTemperature(entry, client),

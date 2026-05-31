@@ -34,13 +34,23 @@ async def test_get_state_falls_back_gracefully_without_tv(hass):
     assert await client.async_get_state() == {"status": None, "content_id": None}
 
 
-async def test_persistent_flag_falls_back_when_connection_fails(hass):
-    # With persistence on but no TV, _persistent_state returns None and the
-    # per-call fallback still yields a safe result.
-    client = SamsungFrameClient(hass, "127.0.0.1")
-    client.set_persistent(True)
-    assert client._use_persistent is True
-    assert await client.async_get_state() == {"status": None, "content_id": None}
+def test_manifest_requires_pypi_samsungtvws():
+    # HACS/hassfest discourage git+ requirements. Guard against regressing to a
+    # VCS dependency: the requirement must resolve from PyPI.
+    import json
+    from pathlib import Path
+
+    manifest = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "custom_components"
+            / "samsung_frame_art_director"
+            / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    reqs = manifest["requirements"]
+    assert any(r.startswith("samsungtvws") for r in reqs)
+    assert not any("git+" in r or "@git" in r for r in reqs), reqs
 
 
 async def test_local_art_crud(hass, tmp_path):

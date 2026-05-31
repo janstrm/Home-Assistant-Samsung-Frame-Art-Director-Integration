@@ -25,7 +25,6 @@ from .const import (
     DEFAULT_SLIDESHOW_INTERVAL,
     CONF_RESIZE_MODE,
     DEFAULT_RESIZE_MODE,
-    CONF_USE_PERSISTENT,
     CONF_INBOX_DIR,
     DEFAULT_INBOX_DIR,
     CONF_LIBRARY_DIR,
@@ -51,6 +50,37 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None:
+    """Send a Wake-on-LAN magic packet to ``mac`` via UDP broadcast.
+
+    Self-contained so it doesn't require the ``wake_on_lan`` integration to be
+    set up. Raises on malformed MAC or socket failure so the caller can log it.
+
+    Broadcasts to both the global broadcast address and any provided
+    subnet-directed broadcast (e.g. 192.168.68.255), since some switch/AP
+    setups only forward the directed broadcast to a sleeping device.
+    """
+    import socket
+
+    hexmac = mac.replace(":", "").replace("-", "").replace(".", "").strip()
+    if len(hexmac) != 12:
+        raise ValueError(f"Invalid MAC address: {mac!r}")
+    payload = bytes.fromhex("FF" * 6 + hexmac * 16)
+    targets = ["255.255.255.255"]
+    for ip in broadcast_ips or []:
+        if ip and ip not in targets:
+            targets.append(ip)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # Standard WoL ports (9 and 7) on every target broadcast address.
+        for ip in targets:
+            for port in (9, 7):
+                try:
+                    sock.sendto(payload, (ip, port))
+                except OSError:
+                    pass
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -189,7 +219,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     client.set_token_persister(_persist_token)
     client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
-    client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
@@ -270,13 +299,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     mac = opts.get("mac_address")
                     if mac:
                         try:
-                            from homeassistant.components.wake_on_lan import async_send_magic_packet
-                            await async_send_magic_packet(mac)
+                            # Derive the subnet-directed broadcast from the TV's
+                            # IP (e.g. 192.168.68.61 -> 192.168.68.255) so the
+                            # packet reaches the TV even when global broadcast
+                            # isn't forwarded to a sleeping device.
+                            bcasts = []
+                            host_ip = getattr(client, "host", None)
+                            if host_ip and host_ip.count(".") == 3:
+                                bcasts.append(host_ip.rsplit(".", 1)[0] + ".255")
+                            await hass.async_add_executor_job(_send_magic_packet, mac, bcasts)
+                            _LOGGER.debug("Sent WoL to %s (broadcasts=%s), sleeping before Art ON", mac, bcasts)
                             await asyncio.sleep(3)
-                            _LOGGER.debug("Sent WoL to %s, sleeping before Art ON", mac)
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.debug("WoL send failed or module unavailable")
+                        except Exception as wol_err:  # noqa: BLE001
+                            _LOGGER.warning("WoL send to %s failed: %r", mac, wol_err)
                 await client.async_set_artmode(enabled)
+                if enabled and opts and opts.get("use_power_key_on_off"):
+                    # A fully powered-off Frame accepts set_artmode over the art
+                    # channel but won't physically light the panel. If it still
+                    # reports off, send the POWER key to wake it, then re-assert
+                    # Art Mode so it lands on art rather than live TV.
+                    status = await client.async_get_artmode_status()
+                    if status in ("off", "false", "0", "none", None):
+                        _LOGGER.debug("ON wake: TV still off; sending POWER key to wake")
+                        try:
+                            await client.async_send_key("KEY_POWER")
+                            await asyncio.sleep(3)
+                            await client.async_set_artmode(True)
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug("ON wake: POWER key path unavailable")
                 if not enabled and opts and opts.get("use_power_key_on_off"):
                     # Re-check quickly; if still on, attempt POWER key once
                     status = await client.async_get_artmode_status()
@@ -649,7 +699,6 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if data and (client := data.get(DATA_CLIENT)):
         client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
-        client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
 
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)

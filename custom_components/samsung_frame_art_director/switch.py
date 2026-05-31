@@ -25,7 +25,7 @@ async def async_setup_entry(
         SamsungFrameSlideshowSwitch(entry),
         SamsungFrameFavoritesSwitch(entry),
     ]
-    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, True):
         entities.append(SamsungFrameBrightnessSensorSwitch(entry, client))
     async_add_entities(entities, True)
 
