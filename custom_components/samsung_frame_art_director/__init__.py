@@ -52,6 +52,25 @@ PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sen
 _LOGGER = logging.getLogger(__name__)
 
 
+def _send_magic_packet(mac: str) -> None:
+    """Send a Wake-on-LAN magic packet to ``mac`` via a UDP broadcast.
+
+    Self-contained so it doesn't require the ``wake_on_lan`` integration to be
+    set up. Raises on malformed MAC or socket failure so the caller can log it.
+    """
+    import socket
+
+    hexmac = mac.replace(":", "").replace("-", "").replace(".", "").strip()
+    if len(hexmac) != 12:
+        raise ValueError(f"Invalid MAC address: {mac!r}")
+    payload = bytes.fromhex("FF" * 6 + hexmac * 16)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # Broadcast to the standard WoL ports on the local segment.
+        sock.sendto(payload, ("255.255.255.255", 9))
+        sock.sendto(payload, ("255.255.255.255", 7))
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Migrate old config entries to the current schema (idempotent)."""
     if entry.version > 3:
@@ -268,12 +287,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     mac = opts.get("mac_address")
                     if mac:
                         try:
-                            from homeassistant.components.wake_on_lan import async_send_magic_packet
-                            await async_send_magic_packet(mac)
-                            await asyncio.sleep(3)
+                            await hass.async_add_executor_job(_send_magic_packet, mac)
                             _LOGGER.debug("Sent WoL to %s, sleeping before Art ON", mac)
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.debug("WoL send failed or module unavailable")
+                            await asyncio.sleep(3)
+                        except Exception as wol_err:  # noqa: BLE001
+                            _LOGGER.warning("WoL send to %s failed: %r", mac, wol_err)
                 await client.async_set_artmode(enabled)
                 if not enabled and opts and opts.get("use_power_key_on_off"):
                     # Re-check quickly; if still on, attempt POWER key once
