@@ -115,8 +115,11 @@ upload_art:
     path:
       name: Path
       description: >-
-        Path to the image. Use absolute /media paths (e.g. /media/frame/library/example.jpg).
-        You may also pass just a filename and it will assume /media/frame/library/<filename>.
+        Path or URL to the image. Use absolute /media paths (e.g.
+        /media/frame/library/example.jpg); you may also pass just a filename and it
+        will assume /media/frame/library/<filename>. An http(s):// URL is also
+        accepted and fetched directly (handy when the image is rendered on another
+        host on the network).
       example: /media/frame/library/example.jpg
       required: true
       selector:

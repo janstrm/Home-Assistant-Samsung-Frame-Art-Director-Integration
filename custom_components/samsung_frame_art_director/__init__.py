@@ -107,6 +107,60 @@ def _enable_verbose_logging() -> None:
         pass
 
 
+async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
+    """Return the image bytes to upload, from an http(s) URL or a local path.
+
+    A render host can live elsewhere on the LAN (e.g. a Mac drawing a dashboard),
+    so an ``http(s)://`` URL is fetched via HA's shared aiohttp client and never
+    has to be written to this host's filesystem first. Local paths keep the
+    existing ``/media``/``/config`` sandboxing and are read off-loop in an
+    executor.
+    """
+    if path.startswith(("http://", "https://")):
+        from aiohttp import ClientTimeout
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        session = async_get_clientsession(hass)
+        async with session.get(path, timeout=ClientTimeout(total=30)) as resp:
+            resp.raise_for_status()
+            return await resp.read()
+
+    def _read() -> bytes:
+        import os
+        # Accept absolute /media/... or /config/...; else assume under /media/frame/library/
+        norm = os.path.expanduser(path)
+        if not norm.startswith("/media/") and not norm.startswith("/config/"):
+            norm = "/media/frame/library/" + norm.lstrip("/")
+
+        # Security: Prevent path traversal by resolving the absolute path
+        # and ensuring it's within the allowed directories
+        abs_norm = os.path.abspath(norm)
+        allowed_media = os.path.abspath("/media")
+        allowed_config = os.path.abspath(hass.config.path())
+        if not abs_norm.startswith(allowed_media) and not abs_norm.startswith(allowed_config):
+            raise ValueError(f"Path traversal detected or unallowed path: {abs_norm}")
+
+        _LOGGER.debug("upload_art: resolved path=%s", abs_norm)
+        # Map /media to real FS under HA config; hass.config.path maps /config
+        # Supervisor mounts /media; opening /media/... directly should work. Keep as-is.
+        with open(abs_norm, "rb") as f:
+            return f.read()
+
+    return await hass.async_add_executor_job(_read)
+
+
+def _remote_filename(path: str) -> str:
+    """Derive the basename to track on the TV from a local path or URL.
+
+    ``urlsplit().path`` drops any ``?cache-bust`` query from URLs; for a plain
+    local path ``urlsplit(path).path == path``, so this is a no-op there.
+    """
+    from os.path import basename
+    from urllib.parse import urlsplit
+
+    return basename(urlsplit(path).path)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Samsung Frame Art Director from a config entry."""
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
@@ -302,29 +356,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
-        # Read file in executor to avoid blocking
-        def _read(p: str) -> bytes:
-            import os
-            # Accept absolute /media/... or /config/...; else assume under /media/frame/library/
-            norm = os.path.expanduser(p)
-            if not norm.startswith("/media/") and not norm.startswith("/config/"):
-                norm = "/media/frame/library/" + norm.lstrip("/")
-            
-            # Security: Prevent path traversal by resolving the absolute path
-            # and ensuring it's within the allowed directories
-            abs_norm = os.path.abspath(norm)
-            allowed_media = os.path.abspath("/media")
-            allowed_config = os.path.abspath(hass.config.path())
-            if not abs_norm.startswith(allowed_media) and not abs_norm.startswith(allowed_config):
-                raise ValueError(f"Path traversal detected or unallowed path: {abs_norm}")
-            
-            _LOGGER.debug("upload_art: resolved path=%s", abs_norm)
-            # Map /media to real FS under HA config; hass.config.path maps /config
-            # Supervisor mounts /media; opening /media/... directly should work. Keep as-is.
-            with open(abs_norm, "rb") as f:
-                return f.read()
-
-        image_bytes = await hass.async_add_executor_job(_read, path)
+        # Read the image (http(s) URL fetched via the shared aiohttp client; a
+        # local path is sandboxed + read off-loop in an executor).
+        image_bytes = await _async_read_image_bytes(hass, path)
         found = False
         async for client in _resolve_clients(call):
             found = True
@@ -334,8 +368,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Track and cleanup
                 # We assume the file uploaded is the basename
                 # Ideally async_upload_image would return the content_id/filename it uploaded.
-                from os.path import basename
-                remote_filename = basename(path)
+                remote_filename = _remote_filename(path)
                 await client.async_track_art(remote_filename, tags=tags)
                 
                 # Run automatic cleanup (defaults from const)
