@@ -26,7 +26,8 @@ Samsung API; everything here is reverse-engineered and confirmed working on the
 Core capabilities:
 
 - Toggle Art Mode on/off **with state verification**.
-- Upload local images (auto center-cropped/resized to 3840×2160).
+- Upload local images or fetch trusted HTTP(S) image URLs (auto
+  center-cropped/resized to 3840×2160).
 - Maintain a **local SQLite library** of art with AI-generated tags.
 - **Rotate** displayed art on a schedule, filtered by tags / favorites / folder.
 - **Clean up** the TV's limited internal storage.
@@ -279,14 +280,18 @@ strips a `scheme://`, path, and trailing `:port`) before probing.
 
 ### Upload an image
 
+The `upload_art` service obtains the source bytes, then calls
 `async_upload_image(bytes, matte, source_file)`:
 
-1. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
+1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch a trusted
+   HTTP(S) URL through Home Assistant's shared aiohttp client with a 30-second
+   timeout and 20 MiB limit.
+2. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
    **3840×2160**, JPEG q85.
-2. Under `_art_lock`: try the **async art API** twice (ports 8002→8001), each
+3. Under `_art_lock`: try the **async art API** twice (ports 8002→8001), each
    attempt uploading + selecting + applying matte. Track the new `content_id` in
    `art_library` with its `source_file`.
-3. If async fails, fall back to the **sync** path with up to 5 retries and
+4. If async fails, fall back to the **sync** path with up to 5 retries and
    exponential backoff, priming the art channel before each attempt and
    recreating the client on `ConnectionFailure`.
 
@@ -443,7 +448,8 @@ the [README](README.md#-services).
 - TV art-channel operations are serialized with `SamsungFrameClient._art_lock`.
 - SQLite is accessed with short-lived per-call connections inside executor jobs
   (`_get_db()` / `sqlite3.connect`), avoiding cross-thread connection sharing.
-- Network calls are wrapped in `asyncio.wait_for` timeouts (typically 10–120s).
+- Network calls use explicit timeouts, either `asyncio.wait_for` or a
+  client-specific timeout such as `aiohttp.ClientTimeout` (typically 10–120s).
 
 ---
 

@@ -119,7 +119,8 @@ upload_art:
         /media/frame/library/example.jpg); you may also pass just a filename and it
         will assume /media/frame/library/<filename>. An http(s):// URL is also
         accepted and fetched directly (handy when the image is rendered on another
-        host on the network).
+        host on the network). Remote downloads have a 30-second timeout and a 20 MiB
+        limit. Only use URLs from hosts you trust.
       example: /media/frame/library/example.jpg
       required: true
       selector:

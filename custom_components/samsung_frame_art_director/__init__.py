@@ -5,7 +5,7 @@ import asyncio
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed, ServiceValidationError
 from homeassistant.helpers import entity_registry as er, service as ha_service
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
@@ -51,6 +51,8 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
 _LOGGER = logging.getLogger(__name__)
+
+MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -111,19 +113,31 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
     """Return the image bytes to upload, from an http(s) URL or a local path.
 
     A render host can live elsewhere on the LAN (e.g. a Mac drawing a dashboard),
-    so an ``http(s)://`` URL is fetched via HA's shared aiohttp client and never
-    has to be written to this host's filesystem first. Local paths keep the
-    existing ``/media``/``/config`` sandboxing and are read off-loop in an
-    executor.
+    so a trusted ``http(s)://`` URL is fetched via HA's shared aiohttp client
+    with a 30-second timeout and 20 MiB limit. It never has to be written to this
+    host's filesystem first. Local paths keep the existing ``/media``/``/config``
+    sandboxing and are read off-loop in an executor.
     """
-    if path.startswith(("http://", "https://")):
+    from urllib.parse import urlsplit
+
+    if urlsplit(path).scheme.lower() in ("http", "https"):
         from aiohttp import ClientTimeout
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
         session = async_get_clientsession(hass)
         async with session.get(path, timeout=ClientTimeout(total=30)) as resp:
             resp.raise_for_status()
-            return await resp.read()
+            if (
+                resp.content_length is not None
+                and resp.content_length > MAX_REMOTE_IMAGE_BYTES
+            ):
+                raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
+            image_bytes = bytearray()
+            async for chunk in resp.content.iter_chunked(64 * 1024):
+                if len(image_bytes) + len(chunk) > MAX_REMOTE_IMAGE_BYTES:
+                    raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
+                image_bytes.extend(chunk)
+            return bytes(image_bytes)
 
     def _read() -> bytes:
         import os
@@ -158,7 +172,10 @@ def _remote_filename(path: str) -> str:
     from os.path import basename
     from urllib.parse import urlsplit
 
-    return basename(urlsplit(path).path)
+    filename = basename(urlsplit(path).path)
+    if not filename:
+        raise ServiceValidationError("Image source must include a filename")
+    return filename
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -356,6 +373,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
+        remote_filename = _remote_filename(path)
         # Read the image (http(s) URL fetched via the shared aiohttp client; a
         # local path is sandboxed + read off-loop in an executor).
         image_bytes = await _async_read_image_bytes(hass, path)
@@ -368,7 +386,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # Track and cleanup
                 # We assume the file uploaded is the basename
                 # Ideally async_upload_image would return the content_id/filename it uploaded.
-                remote_filename = _remote_filename(path)
                 await client.async_track_art(remote_filename, tags=tags)
                 
                 # Run automatic cleanup (defaults from const)

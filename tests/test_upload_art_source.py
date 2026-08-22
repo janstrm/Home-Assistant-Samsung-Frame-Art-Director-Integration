@@ -1,17 +1,42 @@
 """Tests for upload_art image sourcing: http(s) URL vs local path."""
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
-from custom_components.samsung_frame_art_director import (
-    _async_read_image_bytes,
-    _remote_filename,
-)
+import pytest
+from homeassistant.exceptions import ServiceValidationError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.samsung_frame_art_director import async_setup_entry
+from custom_components.samsung_frame_art_director.const import DOMAIN
+
+
+_DEFAULT_CONTENT_LENGTH = object()
+
+
+class _FakeContent:
+    """Minimal streamed response body."""
+
+    def __init__(self, chunks: list[bytes]):
+        self._chunks = chunks
+
+    async def iter_chunked(self, _chunk_size: int):
+        for chunk in self._chunks:
+            yield chunk
 
 
 class _FakeResponse:
     """Minimal aiohttp response stand-in (async context manager body)."""
 
-    def __init__(self, data: bytes):
+    def __init__(
+        self,
+        data: bytes,
+        content_length: int | None | object = _DEFAULT_CONTENT_LENGTH,
+        chunks: list[bytes] | None = None,
+    ):
         self._data = data
+        self.content_length = (
+            len(data) if content_length is _DEFAULT_CONTENT_LENGTH else content_length
+        )
+        self.content = _FakeContent(chunks if chunks is not None else [data])
         self.raised = False
 
     def raise_for_status(self) -> None:
@@ -44,28 +69,147 @@ class _FakeSession:
         return _FakeGet(self._resp)
 
 
-async def test_read_image_bytes_fetches_http_url(hass):
-    # An http(s) URL is fetched via the shared aiohttp client (no real network).
+@pytest.fixture
+async def upload_service(hass):
+    """Register upload_art with the TV and network boundaries replaced."""
+    hass.http = MagicMock()
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "token"
+    client.async_connect_and_pair = AsyncMock()
+    client.async_upload_image = AsyncMock()
+    client.async_track_art = AsyncMock()
+    client.async_cleanup_storage = AsyncMock()
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "token": "token"},
+        options={},
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+    ):
+        assert await async_setup_entry(hass, entry)
+
+    yield client
+
+
+async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_service):
+    """The public service accepts URL schemes regardless of letter case."""
     resp = _FakeResponse(b"JPEGDATA")
     session = _FakeSession(resp)
     with patch(
         "homeassistant.helpers.aiohttp_client.async_get_clientsession",
         return_value=session,
     ):
-        out = await _async_read_image_bytes(hass, "https://render.local/wakeup.jpg?cache=42")
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "HTTPS://render.local/wakeup.jpg?cache=42"},
+            blocking=True,
+        )
 
-    assert out == b"JPEGDATA"
-    assert session.requested_url == "https://render.local/wakeup.jpg?cache=42"
-    assert resp.raised is True  # raise_for_status() is honored
-    assert session.timeout is not None  # a 30s ClientTimeout is passed
+    assert session.requested_url == "HTTPS://render.local/wakeup.jpg?cache=42"
+    assert session.timeout.total == 30
+    assert resp.raised is True
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"JPEGDATA",
+        matte="none",
+    )
+    upload_service.async_track_art.assert_awaited_once_with("wakeup.jpg", tags=None)
 
 
-def test_remote_filename_strips_url_query():
-    # A ?cache-bust query must not leak into the filename tracked on the TV.
-    assert _remote_filename("https://render.local/wakeup.jpg?cache=42") == "wakeup.jpg"
+async def test_upload_art_rejects_declared_oversized_download(hass, upload_service):
+    """The public service rejects a remote image larger than 20 MiB."""
+    resp = _FakeResponse(b"", content_length=20 * 1024 * 1024 + 1)
+    session = _FakeSession(resp)
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="20 MiB"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/oversized.jpg"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
 
 
-def test_remote_filename_plain_path_is_noop():
-    # For a local path urlsplit(path).path == path, so basename is unchanged.
-    assert _remote_filename("/media/frame/library/sunset.png") == "sunset.png"
-    assert _remote_filename("sunset.png") == "sunset.png"
+async def test_upload_art_rejects_streamed_oversized_download(hass, upload_service):
+    """The size limit also applies when the server omits Content-Length."""
+    one_mib = b"x" * (1024 * 1024)
+    resp = _FakeResponse(b"", content_length=None, chunks=[one_mib] * 21)
+    session = _FakeSession(resp)
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="20 MiB"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/streamed.jpg"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_rejects_url_without_filename(hass, upload_service):
+    """A remote source needs a filename that can be tracked on the TV."""
+    resp = _FakeResponse(b"JPEGDATA")
+    session = _FakeSession(resp)
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="filename"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/"},
+            blocking=True,
+        )
+
+    assert session.requested_url is None
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
+    """A bare filename still resolves through the existing local file path."""
+    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "sunset.png"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"LOCALIMAGE",
+        matte="none",
+    )
+    upload_service.async_track_art.assert_awaited_once_with("sunset.png", tags=None)
