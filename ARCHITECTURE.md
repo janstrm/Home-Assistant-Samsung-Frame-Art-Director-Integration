@@ -283,7 +283,7 @@ strips a `scheme://`, path, and trailing `:port`) before probing.
 ### Upload an image
 
 The `upload_art` service obtains the source bytes, then calls
-`async_upload_image(bytes, matte, source_file)`:
+`async_upload_image(bytes, matte, source_file, tags) -> content_id | None`:
 
 1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch a trusted
    HTTP(S) URL through Home Assistant's shared aiohttp client with a 30-second
@@ -293,8 +293,11 @@ The `upload_art` service obtains the source bytes, then calls
 3. Under `_art_lock`, use the synchronous Art API on port 8002 in a worker
    thread to upload, select, and apply the matte.
 4. Retry up to 5× with exponential backoff, priming the art channel before
-   each attempt and recreating the client on `ConnectionFailure`. Track the new
-   `content_id` in `art_library` with its `source_file`.
+   each attempt and recreating the client on `ConnectionFailure`.
+5. Track the exact TV-returned `content_id` once in `art_library`, together with
+   its tags and source path/URL, and return it to the service. With Home
+   Assistant's optional service response enabled, callers receive `content_id`
+   for a single target and `content_ids` for all targets.
 
 ### Process Inbox {#process-inbox}
 

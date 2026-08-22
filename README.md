@@ -146,10 +146,15 @@ target:
   entity_id: media_player.samsung_frame
 data:
   path: https://render-host.local/example.jpg
+  tags: "dashboard, morning"
+response_variable: upload_result
 ```
 
 Local paths must reside in `/media` or `/config`. Only configure remote URLs
 from hosts you trust; Home Assistant fetches the URL directly from its network.
+When `response_variable` is requested, `upload_result.content_id` contains the
+exact TV content ID for a single target and `upload_result.content_ids` contains
+all returned IDs when multiple Frames are targeted.
 
 #### rotate_art_now
 Force an immediate rotation of the displayed art. Picks a random image from the library (optionally filtered by tags). Automatically retries if a selected image no longer exists on disk.

@@ -129,8 +129,10 @@ async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_ser
     upload_service.async_upload_image.assert_awaited_once_with(
         b"JPEGDATA",
         matte="none",
+        source_file="HTTPS://render.local/wakeup.jpg?cache=42",
+        tags=None,
     )
-    upload_service.async_track_art.assert_awaited_once_with("wakeup.jpg", tags=None)
+    upload_service.async_track_art.assert_not_awaited()
 
 
 async def test_upload_art_rejects_declared_oversized_download(hass, upload_service):
@@ -214,8 +216,50 @@ async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
     upload_service.async_upload_image.assert_awaited_once_with(
         b"LOCALIMAGE",
         matte="none",
+        source_file="sunset.png",
+        tags=None,
     )
-    upload_service.async_track_art.assert_awaited_once_with("sunset.png", tags=None)
+    upload_service.async_track_art.assert_not_awaited()
+
+
+async def test_upload_art_returns_real_tv_content_id(hass, upload_service):
+    """Callers can request the exact content ID as a service response."""
+    upload_service.async_upload_image.return_value = "MY-CONTENT-123"
+
+    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+        response = await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "sunset.png", "tags": "morning"},
+            blocking=True,
+            return_response=True,
+        )
+
+    assert response == {
+        "content_id": "MY-CONTENT-123",
+        "content_ids": ["MY-CONTENT-123"],
+    }
+
+
+async def test_upload_art_tracks_tags_on_the_real_content_id(hass, upload_service):
+    """Tracking inputs travel with the upload instead of a basename upsert."""
+    upload_service.async_upload_image.return_value = "MY-CONTENT-123"
+
+    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "sunset.png", "tags": "morning"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"LOCALIMAGE",
+        matte="none",
+        source_file="sunset.png",
+        tags="morning",
+    )
+    upload_service.async_track_art.assert_not_awaited()
 
 
 async def test_power_key_wake_requires_explicit_off_status(hass, upload_service):

@@ -1263,8 +1263,14 @@ class SamsungFrameClient:
 
         return await asyncio.to_thread(_process)
 
-    async def async_upload_image(self, image_bytes: bytes, matte: str = "none", source_file: Optional[str] = None) -> None:
-        """Upload preprocessed image to the TV and select it with optional matte."""
+    async def async_upload_image(
+        self,
+        image_bytes: bytes,
+        matte: str = "none",
+        source_file: Optional[str] = None,
+        tags: Optional[str] = None,
+    ) -> Optional[str]:
+        """Upload an image, select it, and return the TV content ID."""
         processed = await self.async_preprocess_image(image_bytes)
         _LOGGER.debug("Upload: processed image size=%s bytes for host=%s", len(processed), self._host)
 
@@ -1358,7 +1364,11 @@ class SamsungFrameClient:
                     res = await asyncio.wait_for(asyncio.to_thread(_upload_once), timeout=120)
                     _LOGGER.info("Upload success on host=%s (attempt %s, content_id=%s)", self._host, attempt, res)
                     if res:
-                        await self.async_track_art(res, source_file=source_file)
+                        await self.async_track_art(
+                            res,
+                            tags=tags,
+                            source_file=source_file,
+                        )
                         self._fire_art_changed(res)
                     try:
                         # Confirm selection by logging current content id
@@ -1366,6 +1376,8 @@ class SamsungFrameClient:
                         _LOGGER.debug("Upload post-check on %s: current=%s", self._host, diag_ok.get("current"))
                     except Exception:
                         pass
+                    if res:
+                        return str(res)
                     break
                 except asyncio.TimeoutError:
                     _LOGGER.warning("Upload timed out on host=%s (attempt %s)", self._host, attempt)
@@ -1381,6 +1393,7 @@ class SamsungFrameClient:
                         tv = await asyncio.to_thread(_make_client)
                         continue
                     raise
+        return None
 
     async def async_art_diagnostics(self, max_ids: int = 10) -> dict:
         """Collect Art Mode diagnostics via samsungtvws.

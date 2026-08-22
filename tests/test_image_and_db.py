@@ -1,5 +1,8 @@
 """Tests for image preprocessing and the local-art DB helpers."""
 import io
+import sys
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -26,6 +29,52 @@ async def test_preprocess_fit_outputs_target_size(hass):
     out = await client.async_preprocess_image(_jpeg(1000, 1500))
     with Image.open(io.BytesIO(out)) as im:
         assert im.size == (3840, 2160)
+
+
+async def test_upload_image_returns_tv_content_id(hass):
+    """Callers receive the exact content ID returned by the TV library."""
+
+    class FakeArt:
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def get_current(self):
+            return {"content_id": "MY-CONTENT-123"}
+
+        def available(self):
+            return []
+
+        def upload(self, _image, **_kwargs):
+            return "MY-CONTENT-123"
+
+        def select_image(self, _content_id, *, show=True):
+            return show
+
+        def change_matte(self, *_args, **_kwargs):
+            return True
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    client = SamsungFrameClient(hass, "1.2.3.4")
+
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(_jpeg(100, 100))
+
+    assert content_id == "MY-CONTENT-123"
 
 
 async def test_get_state_falls_back_gracefully_without_tv(hass):

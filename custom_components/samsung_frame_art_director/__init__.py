@@ -4,7 +4,7 @@ import logging
 import asyncio
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed, ServiceValidationError
 from homeassistant.helpers import entity_registry as er, service as ha_service
 import homeassistant.helpers.config_validation as cv
@@ -420,7 +420,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not found:
             _LOGGER.debug("set_artmode: no target client resolved; nothing executed")
 
-    async def _svc_upload_art(call: ha_service.ServiceCall) -> None:
+    async def _svc_upload_art(call: ha_service.ServiceCall) -> dict | None:
         path = call.data.get("path")
         tags = call.data.get("tags")
         # Matte from call data, else the configured style/color (or 'none').
@@ -428,21 +428,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
-        remote_filename = _remote_filename(path)
+        # Preserve the established validation that a source has a usable name.
+        _remote_filename(path)
         # Read the image (http(s) URL fetched via the shared aiohttp client; a
         # local path is sandboxed + read off-loop in an executor).
         image_bytes = await _async_read_image_bytes(hass, path)
         found = False
+        content_ids: list[str] = []
         async for client in _resolve_clients(call):
             found = True
             _LOGGER.debug("upload_art: invoking client on host=%s", getattr(client, "host", "?"))
             try:
-                await client.async_upload_image(image_bytes, matte=matte)
-                # Track and cleanup
-                # We assume the file uploaded is the basename
-                # Ideally async_upload_image would return the content_id/filename it uploaded.
-                await client.async_track_art(remote_filename, tags=tags)
-                
+                content_id = await client.async_upload_image(
+                    image_bytes,
+                    matte=matte,
+                    source_file=path,
+                    tags=tags,
+                )
+                if content_id:
+                    content_ids.append(str(content_id))
+
                 # Run automatic cleanup (defaults from const)
                 # We do this asynchronously to not block the service return too long, 
                 # though here we await it for simplicity as the user expects "done" state.
@@ -457,6 +462,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
         if not found:
             _LOGGER.debug("upload_art: no target client resolved; nothing executed")
+        if call.return_response:
+            return {
+                "content_id": content_ids[0] if len(content_ids) == 1 else None,
+                "content_ids": content_ids,
+            }
+        return None
 
     # Schema for services
     hass.services.async_register(
@@ -475,6 +486,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             vol.Optional("tags"): str,
             vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
         }),
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     async def _svc_art_diagnostics(call: ha_service.ServiceCall) -> None:
