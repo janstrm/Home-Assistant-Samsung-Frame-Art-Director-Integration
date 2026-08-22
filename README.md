@@ -10,7 +10,7 @@
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=janstrm&repository=Home-Assistant-Samsung-Frame-Art-Director-Integration&category=integration)
 
-Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload local images with automatic resizing, rotate art on a schedule, manage TV storage, and build gallery dashboards. Optionally integrates with Google Gemini to auto-tag images dropped into an inbox folder.
+Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload local images or fetch them from trusted HTTP(S) URLs with automatic resizing, rotate art on a schedule, manage TV storage, and build gallery dashboards. Optionally integrates with Google Gemini to auto-tag images dropped into an inbox folder.
 
 ---
 
@@ -26,7 +26,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 ## ✨ Capabilities
 
 - **State Verification:** Toggles Art Mode ON/OFF and verifies the state to ensure the screen displays art rather than just being powered down.
-- **Local Uploads:** Upload local images directly to the TV. Images are resized to 3840×2160 before upload (choose **crop** to fill or **fit** to letterbox in the options).
+- **Image Uploads:** Upload local images or fetch them from a trusted HTTP(S) URL. Images are resized to 3840×2160 before upload (choose **crop** to fill or **fit** to letterbox in the options).
 - **Auto-Tagging (Optional):** Drop images into an inbox folder and run Process Inbox — Gemini analyzes, tags, and catalogs them to your local library.
 - **Gallery Sensor:** Exposes a database of your local art, allowing you to build dashboard views with the provided example YAML.
 - **Media Browser:** Browse your tagged library in Home Assistant's **Media** panel and "play" any image to the Frame (it uploads and displays it).
@@ -127,7 +127,10 @@ data:
 ```
 
 #### upload_art
-Upload and immediately display an image from your HA filesystem.
+Upload and immediately display an image from your HA filesystem or a trusted
+HTTP(S) URL. Remote downloads have a 30-second timeout and a 20 MiB size limit.
+
+Local file:
 ```yaml
 service: samsung_frame_art_director.upload_art
 target:
@@ -135,7 +138,18 @@ target:
 data:
   path: /media/frame/library/example.jpg
 ```
-*(Paths must reside in `/media` or `/config` for security).*
+
+Remote file:
+```yaml
+service: samsung_frame_art_director.upload_art
+target:
+  entity_id: media_player.samsung_frame
+data:
+  path: https://render-host.local/example.jpg
+```
+
+Local paths must reside in `/media` or `/config`. Only configure remote URLs
+from hosts you trust; Home Assistant fetches the URL directly from its network.
 
 #### rotate_art_now
 Force an immediate rotation of the displayed art. Picks a random image from the library (optionally filtered by tags). Automatically retries if a selected image no longer exists on disk.
