@@ -52,6 +52,7 @@ from .const import (
     RESIZE_MODE_FIT,
     DEFAULT_RESIZE_MODE,
     CONF_ENABLE_ART_SETTINGS,
+    DEFAULT_ENABLE_ART_SETTINGS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -461,7 +462,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         advanced_schema = vol.Schema(
             {
                 vol.Optional(CONF_AI_MODEL, default=opts.get(CONF_AI_MODEL, "")): _TEXT,
-                vol.Optional(CONF_ENABLE_ART_SETTINGS, default=opts.get(CONF_ENABLE_ART_SETTINGS, True)): BooleanSelector(),
+                vol.Optional(
+                    CONF_ENABLE_ART_SETTINGS,
+                    default=opts.get(
+                        CONF_ENABLE_ART_SETTINGS, DEFAULT_ENABLE_ART_SETTINGS
+                    ),
+                ): BooleanSelector(),
                 vol.Optional("diagnostics_verbose", default=opts.get("diagnostics_verbose", False)): BooleanSelector(),
             }
         )

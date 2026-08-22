@@ -26,6 +26,7 @@ from .const import (
     DEFAULT_MATTE_COLOR,
     ART_MOTION_TIMER_OPTIONS,
     CONF_ENABLE_ART_SETTINGS,
+    DEFAULT_ENABLE_ART_SETTINGS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ async def async_setup_entry(
         SamsungFrameMatteStyleSelect(entry),
         SamsungFrameMatteColorSelect(entry),
     ]
-    if entry.options.get(CONF_ENABLE_ART_SETTINGS, True):
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, DEFAULT_ENABLE_ART_SETTINGS):
         entities.append(SamsungFrameMotionTimerSelect(entry, client))
     async_add_entities(entities, True)
 

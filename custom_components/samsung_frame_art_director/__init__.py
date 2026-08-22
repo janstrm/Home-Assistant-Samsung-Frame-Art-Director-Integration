@@ -76,13 +76,18 @@ def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None
             targets.append(ip)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sent = False
+        last_error: OSError | None = None
         # Standard WoL ports (9 and 7) on every target broadcast address.
         for ip in targets:
             for port in (9, 7):
                 try:
                     sock.sendto(payload, (ip, port))
-                except OSError:
-                    pass
+                    sent = True
+                except OSError as err:
+                    last_error = err
+        if not sent and last_error is not None:
+            raise last_error
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -370,10 +375,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     mac = opts.get("mac_address")
                     if mac:
                         try:
-                            # Derive the subnet-directed broadcast from the TV's
-                            # IP (e.g. 192.168.68.61 -> 192.168.68.255) so the
-                            # packet reaches the TV even when global broadcast
-                            # isn't forwarded to a sleeping device.
+                            # Also try the common /24 broadcast candidate derived
+                            # from the TV's IP (e.g. .61 -> .255). The global
+                            # broadcast remains the portable fallback because
+                            # the TV does not expose its subnet mask here.
                             bcasts = []
                             host_ip = getattr(client, "host", None)
                             if host_ip and host_ip.count(".") == 3:
@@ -390,7 +395,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # reports off, send the POWER key to wake it, then re-assert
                     # Art Mode so it lands on art rather than live TV.
                     status = await client.async_get_artmode_status()
-                    if status in ("off", "false", "0", "none", None):
+                    if status in ("off", "false", "0", "none"):
                         _LOGGER.debug("ON wake: TV still off; sending POWER key to wake")
                         try:
                             await client.async_send_key("KEY_POWER")

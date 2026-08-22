@@ -19,8 +19,8 @@ The Frame TV. It is installable via HACS as a custom repository.
 
 It communicates with the TV exclusively over Samsung's **internal WebSocket
 API**, via the [`samsungtvws`](https://github.com/xchwarze/samsung-tv-ws-api)
-library (official PyPI release `samsungtvws[async]>=3.0.5`, which added full Art
-Mode support). There is no official Samsung API; everything here is
+library (official PyPI release `samsungtvws[async,encrypted]>=3.0.5`, which
+added full Art Mode support). There is no official Samsung API; everything here is
 reverse-engineered and confirmed working on the **Q65LS03DAU**. Other
 models/years may behave differently.
 
@@ -478,7 +478,7 @@ the [README](README.md#-services).
 
 ## 12. Development notes
 
-- **Dependency:** `samsungtvws[async]>=3.0.5` from PyPI (the official
+- **Dependency:** `samsungtvws[async,encrypted]>=3.0.5` from PyPI (the official
   [xchwarze](https://github.com/xchwarze/samsung-tv-ws-api) package, which gained
   full Art Mode support in the 3.0 line). All art calls go through the sync
   `SamsungTVWS.art()` API run in executor threads; `bridge.py` uses the async

@@ -78,6 +78,7 @@ DEFAULT_LIBRARY_DIR = "/media/frame/library"
 # Art-mode setting entities (brightness/color-temp/motion/auto-brightness).
 # Enabled by default; users can turn them off if their TV/firmware rejects them.
 CONF_ENABLE_ART_SETTINGS = "enable_art_mode_settings"
+DEFAULT_ENABLE_ART_SETTINGS = True
 
 # Image preprocessing
 CONF_RESIZE_MODE = "resize_mode"

@@ -1,5 +1,5 @@
 """Tests for upload_art image sourcing: http(s) URL vs local path."""
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, call, mock_open, patch
 
 import pytest
 from homeassistant.exceptions import ServiceValidationError
@@ -77,6 +77,9 @@ async def upload_service(hass):
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
+    client.async_get_artmode_status = AsyncMock()
+    client.async_send_key = AsyncMock()
+    client.async_set_artmode = AsyncMock()
     client.async_upload_image = AsyncMock()
     client.async_track_art = AsyncMock()
     client.async_cleanup_storage = AsyncMock()
@@ -84,7 +87,7 @@ async def upload_service(hass):
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "frame.local", "token": "token"},
-        options={},
+        options={"use_power_key_on_off": True},
     )
     entry.add_to_hass(hass)
 
@@ -213,3 +216,40 @@ async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
         matte="none",
     )
     upload_service.async_track_art.assert_awaited_once_with("sunset.png", tags=None)
+
+
+async def test_power_key_wake_requires_explicit_off_status(hass, upload_service):
+    """An unknown status must not trigger the toggle-style POWER key."""
+    upload_service.async_get_artmode_status.return_value = None
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_artmode",
+        {"enabled": True},
+        blocking=True,
+    )
+
+    upload_service.async_set_artmode.assert_awaited_once_with(True)
+    upload_service.async_send_key.assert_not_awaited()
+
+
+async def test_power_key_wakes_tv_after_explicit_off_status(hass, upload_service):
+    """An explicitly off TV gets POWER and Art Mode is reasserted."""
+    upload_service.async_get_artmode_status.return_value = "off"
+
+    with patch(
+        "custom_components.samsung_frame_art_director.asyncio.sleep",
+        AsyncMock(),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_artmode",
+            {"enabled": True},
+            blocking=True,
+        )
+
+    assert upload_service.async_set_artmode.await_args_list == [
+        call(True),
+        call(True),
+    ]
+    upload_service.async_send_key.assert_awaited_once_with("KEY_POWER")
