@@ -51,7 +51,6 @@ coverage.xml
 # Personal & Unwanted Project Folders
 HA Testing/
 HA logs/
-docs/
 test/
 
 # Keep the relevant files and folders for HACS
