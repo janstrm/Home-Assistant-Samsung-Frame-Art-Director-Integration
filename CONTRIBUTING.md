@@ -13,10 +13,18 @@ Thanks for your interest in improving **Samsung Frame Art Director**!
 ## Dev setup & checks
 ```bash
 # from the repo root
-pip install -r requirements_test.txt   # ruff + pytest-homeassistant-custom-component
-ruff check custom_components            # lint (pyflakes-level)
-pytest                                  # unit tests
+pip install -r requirements_test.lock  # fully pinned Python 3.13/Linux test stack
+ruff check custom_components tests     # lint (pyflakes-level)
+pytest                                 # unit tests
 ```
+
+`requirements_test.txt` contains the direct test tools. The generated
+`requirements_test.lock` pins their complete dependency graph so fresh local
+and CI installs use the same Home Assistant test environment. Regenerate the
+lock on Linux/WSL with `uv pip compile --python-version 3.13.14
+requirements_test.txt -o requirements_test.lock` when intentionally upgrading
+the test stack.
+
 CI runs the same `ruff` + `pytest`, plus **hassfest** and **HACS** validation on
 every push/PR. Please make sure all four are green.
 
