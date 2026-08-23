@@ -1286,41 +1286,48 @@ class SamsungFrameClient:
             # Force SSL websocket port 8002 for upload operations
             return self._make_tv(port=8002)
 
-        tv = await asyncio.to_thread(_make_client)
-
         def _upload_once():
+            tv = _make_client()
             try:
                 _LOGGER.debug("Upload: starting art.upload on %s (matte=%s)", self._host, matte)
                 # Pass matte to upload so it applies immediately if supported
                 remote_filename = tv.art().upload(processed, file_type="JPEG", matte=matte)
                 _LOGGER.debug("Upload: art.upload returned filename=%s on %s", remote_filename, self._host)
-                if remote_filename:
-                    # CRITICAL: For change_matte and 3.0.5, "none" is the literal string expected,
-                    # but select_image prefers None to clear it.
-                    tv_matte = matte if matte else "none"
-                    art_client = tv.art()
-                    try:
-                        # For select_image, we use None for "none"
-                        sel_matte = None if tv_matte == "none" else tv_matte
-                        art_client.select_image(remote_filename, show=True, matte=sel_matte)
-                        _LOGGER.debug("Upload: select_image success on %s (matte=%s)", self._host, tv_matte)
-                    except TypeError:
-                        # Fallback for older library versions that don't support 'matte' keyword
-                        _LOGGER.debug("Upload: select_image does not support 'matte' keyword, falling back")
-                        art_client.select_image(remote_filename, show=True)
-                        # Secondary fallback: use change_matte which is supported in 3.0.5
-                        if hasattr(art_client, "change_matte"):
-                            try:
-                                # Apply to both landscape and portrait. 
-                                # Use literal "none" string to force removal. None often implies "no change".
-                                final_matte = "none" if tv_matte == "none" else tv_matte
-                                art_client.change_matte(remote_filename, matte_id=final_matte, portrait_matte=final_matte)
-                            except Exception as e:
-                                _LOGGER.debug("Upload: change_matte failed: %r", e)
-                    except Exception as e:
-                        _LOGGER.debug("Upload: select_image failed for %s: %r", remote_filename, e)
-                    
-                    return remote_filename
+                return remote_filename
+            finally:
+                try:
+                    close_fn = getattr(tv, "close", None)
+                    if callable(close_fn):
+                        close_fn()
+                except Exception:
+                    pass
+
+        def _select_once(remote_filename: str) -> None:
+            """Select an uploaded image without ever repeating the upload."""
+            tv = _make_client()
+            try:
+                # For change_matte and 3.0.5, "none" is the literal string
+                # expected, while select_image prefers None to clear it.
+                tv_matte = matte if matte else "none"
+                art_client = tv.art()
+                try:
+                    sel_matte = None if tv_matte == "none" else tv_matte
+                    art_client.select_image(remote_filename, show=True, matte=sel_matte)
+                    _LOGGER.debug("Upload: select_image success on %s (matte=%s)", self._host, tv_matte)
+                except TypeError:
+                    # Fallback for older library versions without the matte keyword.
+                    _LOGGER.debug("Upload: select_image does not support 'matte' keyword, falling back")
+                    art_client.select_image(remote_filename, show=True)
+                    if hasattr(art_client, "change_matte"):
+                        try:
+                            final_matte = "none" if tv_matte == "none" else tv_matte
+                            art_client.change_matte(
+                                remote_filename,
+                                matte_id=final_matte,
+                                portrait_matte=final_matte,
+                            )
+                        except Exception as err:  # noqa: BLE001
+                            _LOGGER.debug("Upload: change_matte failed: %r", err)
             finally:
                 try:
                     close_fn = getattr(tv, "close", None)
@@ -1369,6 +1376,26 @@ class SamsungFrameClient:
                             tags=tags,
                             source_file=source_file,
                         )
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(_select_once, str(res)),
+                                timeout=30,
+                            )
+                        except asyncio.TimeoutError:
+                            _LOGGER.warning(
+                                "Upload selection timed out on host=%s for content_id=%s; "
+                                "not repeating the completed upload",
+                                self._host,
+                                res,
+                            )
+                        except Exception as err:  # noqa: BLE001
+                            _LOGGER.warning(
+                                "Upload selection failed on host=%s for content_id=%s: %r; "
+                                "not repeating the completed upload",
+                                self._host,
+                                res,
+                                err,
+                            )
                         self._fire_art_changed(res)
                     try:
                         # Confirm selection by logging current content id
@@ -1380,17 +1407,22 @@ class SamsungFrameClient:
                         return str(res)
                     break
                 except asyncio.TimeoutError:
-                    _LOGGER.warning("Upload timed out on host=%s (attempt %s)", self._host, attempt)
-                    if attempt >= 5:
-                        raise
+                    # asyncio.to_thread cannot cancel the synchronous upload.
+                    # Retrying could therefore create a duplicate if the TV
+                    # accepted the first request before the local timeout.
+                    _LOGGER.warning(
+                        "Upload timed out on host=%s (attempt %s); outcome unknown, "
+                        "not retrying to avoid a duplicate",
+                        self._host,
+                        attempt,
+                    )
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     # Detect samsungtvws ConnectionFailure without importing globally
                     exc_name = type(exc).__name__
                     if exc_name == "ConnectionFailure" and attempt < 5:
                         _LOGGER.debug("Upload ConnectionFailure on %s, retrying (attempt %s)", self._host, attempt)
                         await asyncio.sleep(backoff_seconds[min(attempt - 1, len(backoff_seconds) - 1)])
-                        # Recreate client for a clean connection next try
-                        tv = await asyncio.to_thread(_make_client)
                         continue
                     raise
         return None

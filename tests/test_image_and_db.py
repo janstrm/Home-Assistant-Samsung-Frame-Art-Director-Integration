@@ -1,6 +1,8 @@
 """Tests for image preprocessing and the local-art DB helpers."""
+import asyncio
 import io
 import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -75,6 +77,61 @@ async def test_upload_image_returns_tv_content_id(hass):
         content_id = await client.async_upload_image(_jpeg(100, 100))
 
     assert content_id == "MY-CONTENT-123"
+
+
+async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
+    """A post-upload selection timeout must not upload the image again."""
+    upload_calls = 0
+
+    class FakeArt:
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return f"MY-CONTENT-{upload_calls}"
+
+        def select_image(self, _content_id, *, show=True):
+            assert show is True
+            time.sleep(0.2)
+
+        def change_matte(self, *_args, **_kwargs):
+            return True
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    real_wait_for = asyncio.wait_for
+
+    async def short_wait_for(awaitable, timeout):
+        return await real_wait_for(awaitable, timeout=0.05)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}),
+        patch(
+            "custom_components.samsung_frame_art_director.api.asyncio.wait_for",
+            side_effect=short_wait_for,
+        ),
+    ):
+        content_id = await client.async_upload_image(_jpeg(100, 100))
+
+    assert content_id == "MY-CONTENT-1"
+    assert upload_calls == 1
 
 
 async def test_get_state_falls_back_gracefully_without_tv(hass):
