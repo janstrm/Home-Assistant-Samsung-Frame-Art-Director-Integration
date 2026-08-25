@@ -39,6 +39,10 @@ class PairResult:
         self.session_id = session_id
 
 
+# Seconds allowed for the REST device-info probe.
+PROBE_TIMEOUT = 10
+
+
 async def async_probe_device_info(host: str) -> Tuple[int | None, dict[str, Any] | None]:
     """Try to fetch device info to determine a working port.
 
@@ -48,15 +52,15 @@ async def async_probe_device_info(host: str) -> Tuple[int | None, dict[str, Any]
 
     def _get_info_with_port(port: int) -> dict[str, Any] | None:
         try:
-            from samsungtvws import SamsungTVWS  # type: ignore
+            # REST only, deliberately. Constructing SamsungTVWS calls
+            # get_model_year() and then, on model year >= 24 with no stored
+            # token, opens a websocket from inside __init__ -- which makes the
+            # TV show an on-screen approval dialog just to read device info.
+            # SamsungTVRest performs the same rest_device_info() call without
+            # ever opening a socket.
+            from samsungtvws.rest import SamsungTVRest  # type: ignore
 
-            tv = SamsungTVWS(host, port=port, name=CLIENT_NAME)
-            try:
-                return tv.rest_device_info()
-            finally:
-                close_fn = getattr(tv, "close", None)
-                if callable(close_fn):
-                    close_fn()
+            return SamsungTVRest(host, port, PROBE_TIMEOUT).rest_device_info()
         except Exception:
             return None
 
