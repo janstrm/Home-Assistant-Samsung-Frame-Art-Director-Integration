@@ -115,7 +115,15 @@ class SamsungFrameClient:
     def _capture_token(self, tv) -> None:
         """Capture a token the TV may have (re)issued on this connection and
         persist it, so authorization stays valid across reconnects instead of
-        drifting and re-triggering the approval popup."""
+        drifting and re-triggering the approval popup.
+
+        IMPORTANT: pass the object that actually owns the socket which would
+        have received a rotated token. ``tv.art()`` constructs a SEPARATE
+        ``SamsungTVArt`` with its own connection on every call, so a rotation
+        lands on that child's ``.token``, never on the parent ``tv``'s.
+        Callers that go through ``tv.art()`` must capture from the child or the
+        rotation is silently discarded.
+        """
         try:
             new = getattr(tv, "token", None)
         except Exception:  # noqa: BLE001
@@ -308,18 +316,35 @@ class SamsungFrameClient:
             tv = self._make_tv()
             status = None
             content_id = None
+            art_client = None
             try:
                 try:
-                    status = tv.art().get_artmode()
+                    art_client = tv.art()
                 except Exception:  # noqa: BLE001
-                    pass
-                try:
-                    cur = tv.art().get_current()
-                    if isinstance(cur, dict):
-                        content_id = cur.get("content_id") or cur.get("contentId")
-                except Exception:  # noqa: BLE001
-                    pass
+                    art_client = None
+                if art_client is not None:
+                    try:
+                        status = art_client.get_artmode()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        cur = art_client.get_current()
+                        if isinstance(cur, dict):
+                            content_id = cur.get("content_id") or cur.get("contentId")
+                    except Exception:  # noqa: BLE001
+                        pass
             finally:
+                # tv.art() builds a NEW SamsungTVArt with its own websocket on
+                # every call, and tv.close() does not touch it. So a token the
+                # TV rotates during an art call lands on THAT object's .token,
+                # not the parent's -- capture from it before closing, and close
+                # it, or both the rotation and the socket are lost.
+                if art_client is not None:
+                    self._capture_token(art_client)
+                    try:
+                        art_client.close()
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._capture_token(tv)
                 closer = getattr(tv, "close", None)
                 if callable(closer):
