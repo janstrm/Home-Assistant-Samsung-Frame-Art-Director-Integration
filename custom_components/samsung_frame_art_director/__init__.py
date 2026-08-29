@@ -506,20 +506,21 @@ async def async_setup_entry(
     async def _svc_upload_art(call: ServiceCall) -> dict | None:
         path = call.data.get("path")
         tags = call.data.get("tags")
-        # Matte from call data, else the configured style/color (or 'none').
-        matte = call.data.get("matte") or resolve_matte(entry.options)
+        requested_matte = call.data.get("matte")
         if not path:
             return
-        _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
-        clients = [client async for client in _resolve_clients(call)]
-        if not clients:
-            _LOGGER.debug("upload_art: no target client resolved; nothing executed")
-            return None
+        _LOGGER.debug(
+            "Action upload_art called: path=%s matte=%s tags=%s",
+            path,
+            requested_matte,
+            tags,
+        )
+        targets = await async_resolve_action_targets(hass, call)
 
         if is_local_media_identifier(path):
             artwork = None
-            for client in clients:
-                if artwork := await client.async_read_local_art(path):
+            for target in targets:
+                if artwork := await target.runtime.client.async_read_local_art(path):
                     break
             if not artwork:
                 raise ServiceValidationError(
@@ -536,7 +537,9 @@ async def async_setup_entry(
             source_file = path
 
         content_ids: list[str] = []
-        for client in clients:
+        for target in targets:
+            client = target.runtime.client
+            matte = requested_matte or resolve_matte(target.entry.options)
             _LOGGER.debug("upload_art: invoking client on host=%s", getattr(client, "host", "?"))
             try:
                 content_id = await client.async_upload_image(
@@ -552,7 +555,7 @@ async def async_setup_entry(
                 # We do this asynchronously to not block the service return too long, 
                 # though here we await it for simplicity as the user expects "done" state.
                 # If performance is an issue, we could fire a task.
-                await client.async_cleanup_storage(**_cleanup_params(entry))
+                await client.async_cleanup_storage(**_cleanup_params(target.entry))
                 
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
