@@ -17,6 +17,7 @@ from .file_access import (
     image_content_type,
     is_local_media_identifier,
     media_identifier,
+    resolve_upload_source,
 )
 from typing import Optional, TYPE_CHECKING
 
@@ -35,6 +36,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CONNECTION_ATTEMPT_TIMEOUT_SECONDS = 10
 ART_OPERATION_TIMEOUT_SECONDS = 15
+ART_LIBRARY_SCHEMA_VERSION = 1
 
 
 def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
@@ -46,6 +48,33 @@ def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
         (file_path for (file_path,) in rows if media_identifier(file_path) == media_id),
         None,
     )
+
+
+def _canonical_source_identity(hass: HomeAssistant, source: str) -> str:
+    """Return a stable identity for harmless aliases of one artwork source."""
+    import posixpath
+    from urllib.parse import urlsplit, urlunsplit
+
+    parsed = urlsplit(source)
+    scheme = parsed.scheme.lower()
+    if scheme in ("http", "https"):
+        hostname = (parsed.hostname or "").lower()
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
+        port = parsed.port
+        if port and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            hostname = f"{hostname}:{port}"
+        path = posixpath.normpath(parsed.path or "/")
+        if parsed.path.endswith("/") and not path.endswith("/"):
+            path += "/"
+        return urlunsplit((scheme, hostname, path, parsed.query, ""))
+    try:
+        return str(resolve_upload_source(hass, source))
+    except UnsafeLocalPathError:
+        return os.path.realpath(os.path.expanduser(source))
 
 
 class AuthenticationRejectedError(Exception):
@@ -414,6 +443,56 @@ class SamsungFrameClient:
                     if "source_file" not in existing_cols:
                         _LOGGER.info("DB Sync: adding 'source_file' column to art_library")
                         conn.execute("ALTER TABLE art_library ADD COLUMN source_file TEXT")
+                    if "width" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'width' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN width INTEGER")
+                    if "height" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'height' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN height INTEGER")
+
+                    # Preserve provenance and timestamps from the oldest schema.
+                    # COALESCE keeps any newer value that was already populated.
+                    if "date_added" in existing_cols:
+                        conn.execute(
+                            "UPDATE art_library SET created_at = "
+                            "COALESCE(created_at, date_added)"
+                        )
+                    if "last_seen" in existing_cols:
+                        conn.execute(
+                            "UPDATE art_library SET last_displayed_at = "
+                            "COALESCE(last_displayed_at, last_seen)"
+                        )
+                    if "source" in existing_cols:
+                        conn.execute(
+                            "UPDATE art_library SET source_file = "
+                            "COALESCE(NULLIF(TRIM(source_file), ''), "
+                            "NULLIF(TRIM(source), ''))"
+                        )
+
+                    # Existing source identities predate alias normalization.
+                    # Run this data migration once; future writes are normalized
+                    # by async_track_art/async_upload_image before persistence.
+                    schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
+                    if schema_version < ART_LIBRARY_SCHEMA_VERSION:
+                        source_rows = conn.execute(
+                            "SELECT content_id, source_file FROM art_library "
+                            "WHERE source_file IS NOT NULL "
+                            "AND TRIM(source_file) != ''"
+                        ).fetchall()
+                        for content_id, source_file in source_rows:
+                            canonical_source = _canonical_source_identity(
+                                self.hass,
+                                source_file,
+                            )
+                            if canonical_source != source_file:
+                                conn.execute(
+                                    "UPDATE art_library SET source_file = ? "
+                                    "WHERE content_id = ?",
+                                    (canonical_source, content_id),
+                                )
+                        conn.execute(
+                            f"PRAGMA user_version = {ART_LIBRARY_SCHEMA_VERSION}"
+                        )
 
                     # Migration: local_art
                     local_cols = [row[1] for row in conn.execute("PRAGMA table_info(local_art)")]
@@ -424,8 +503,13 @@ class SamsungFrameClient:
                     conn.commit()
             except Exception as e:
                 _LOGGER.error("DB Init failed: %s", e)
+                raise
 
         await asyncio.to_thread(_init_db)
+
+    async def async_initialize_database(self) -> None:
+        """Create or migrate the library database, raising on failure."""
+        await self._ensure_db()
 
 
 
@@ -433,6 +517,12 @@ class SamsungFrameClient:
         """Track a new upload in the local DB with optional tags and source_file."""
         if not self._db_path or not content_id:
             return
+        if source_file:
+            source_file = await asyncio.to_thread(
+                _canonical_source_identity,
+                self.hass,
+                source_file,
+            )
         
         await self._ensure_db()
 
@@ -1403,6 +1493,13 @@ class SamsungFrameClient:
         tags: Optional[str] = None,
     ) -> Optional[str]:
         """Upload an image, select it, and return the TV content ID."""
+        if source_file:
+            source_file = await asyncio.to_thread(
+                _canonical_source_identity,
+                self.hass,
+                source_file,
+            )
+
         async def _reuse_existing_upload() -> Optional[str]:
             if not source_file or not self._db_path:
                 return None
@@ -1738,6 +1835,21 @@ class SamsungFrameClient:
                 ART_OPERATION_TIMEOUT_SECONDS,
             )
 
+        if preserve_current and not current_id:
+            return {
+                "current": None,
+                "on_tv": len(on_tv_ids),
+                "candidates": 0,
+                "to_delete": [],
+                "deleted": [],
+                "skipped_current": [],
+                "skipped_favorites": [],
+                "errors": [
+                    "Current artwork could not be determined; deletion aborted"
+                ],
+                "dry_run": bool(dry_run),
+            }
+
         # Destructive cleanup is always provenance-gated. DB sync also records
         # manually uploaded TV art, so mere DB presence is not proof that this
         # integration owns an item. Only a non-empty source_file marks an image
@@ -1821,7 +1933,7 @@ class SamsungFrameClient:
                 return meta.get("last_displayed_at") or meta.get("created_at") or ""
             ordered = sorted(aged, key=_sort_key)  # oldest first
             # Determine how many to delete to reach the limit
-            excess = max(0, len(on_tv_ids) - int(max_items))
+            excess = max(0, len(to_consider) - int(max_items))
             if excess > 0:
                 ordered = ordered[:excess]
             else:
@@ -1849,7 +1961,7 @@ class SamsungFrameClient:
             "dry_run": bool(dry_run),
         }
 
-        if dry_run or not to_delete:
+        if not to_delete:
             _LOGGER.info("Cleanup(dry_run=%s): would delete %s ids on %s (sample=%s)", dry_run, len(to_delete), self._host, to_delete[:10])
             return summary
 
@@ -1883,6 +1995,13 @@ class SamsungFrameClient:
                     )
                     summary["to_delete"] = []
                     return summary
+                if not latest_current:
+                    summary["errors"].append(
+                        "Current artwork could not be revalidated; deletion aborted"
+                    )
+                    summary["to_delete"] = []
+                    return summary
+                summary["current"] = latest_current
                 if latest_current in to_delete:
                     to_delete = [
                         content_id
@@ -1894,6 +2013,15 @@ class SamsungFrameClient:
                         summary["skipped_current"].append(latest_current)
                 if not to_delete:
                     return summary
+
+            if dry_run:
+                _LOGGER.info(
+                    "Cleanup(dry_run=True): would delete %s ids on %s (sample=%s)",
+                    len(to_delete),
+                    self._host,
+                    to_delete[:10],
+                )
+                return summary
 
             try:
                 from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401

@@ -60,6 +60,28 @@ MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_REMOTE_REDIRECTS = 5
 
 
+def _cleanup_params(entry: ConfigEntry, overrides=None) -> dict:
+    """Build one cleanup policy from config-entry options and call overrides."""
+    params = {
+        "max_items": entry.options.get(
+            "cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS
+        ),
+        "max_age_days": entry.options.get("cleanup_max_age_days") or None,
+        "preserve_current": entry.options.get(
+            "cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT
+        ),
+        "only_integration_managed": entry.options.get(
+            "cleanup_only_integration_managed",
+            DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
+        ),
+        "dry_run": entry.options.get("cleanup_dry_run", DEFAULT_CLEANUP_DRY_RUN),
+    }
+    for key, value in (overrides or {}).items():
+        if key in params:
+            params[key] = value
+    return params
+
+
 def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None:
     """Send a Wake-on-LAN magic packet to ``mac`` via UDP broadcast.
 
@@ -369,8 +391,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         db_dir = hass.config.path(DB_DIR)
         _os.makedirs(db_dir, exist_ok=True)
         client.set_db_path(hass.config.path(f"{DB_DIR}/{DB_FILE}"))
-    except Exception:  # noqa: BLE001
-        pass
+        await client.async_initialize_database()
+    except Exception as err:  # noqa: BLE001
+        raise ConfigEntryNotReady(
+            f"Library database initialization failed: {err}"
+        ) from err
     try:
         # Validate the saved token without opening a new pairing flow. Only an
         # explicit authentication failure starts reauth; reachability and
@@ -536,11 +561,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # We do this asynchronously to not block the service return too long, 
                 # though here we await it for simplicity as the user expects "done" state.
                 # If performance is an issue, we could fire a task.
-                await client.async_cleanup_storage(
-                    max_items=DEFAULT_CLEANUP_MAX_ITEMS, 
-                    only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-                    preserve_current=DEFAULT_CLEANUP_PRESERVE_CURRENT
-                )
+                await client.async_cleanup_storage(**_cleanup_params(entry))
                 
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
@@ -633,13 +654,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     async def _svc_cleanup_storage(call: ha_service.ServiceCall) -> None:
-        params = {
-            "max_items": call.data.get("max_items", entry.options.get("cleanup_max_items")),
-            "max_age_days": call.data.get("max_age_days", (entry.options.get("cleanup_max_age_days") or None) ),
-            "preserve_current": call.data.get("preserve_current", entry.options.get("cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT)),
-            "only_integration_managed": call.data.get("only_integration_managed", entry.options.get("cleanup_only_integration_managed", DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED)),
-            "dry_run": call.data.get("dry_run", entry.options.get("cleanup_dry_run", DEFAULT_CLEANUP_DRY_RUN)),
-        }
+        params = _cleanup_params(entry, call.data)
         _LOGGER.debug("Action cleanup_storage called: %s", params)
         async for client in _resolve_clients(call):
             try:
@@ -699,18 +714,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             client = stored.get(DATA_CLIENT)
             curator = ContentCurator(hass, entry, client)
             result = await curator.async_sync_library()
-            
+
             if result.get("error"):
                 persistent_notification.async_create(
                     hass,
                     f"Library Sync Failed: {result['error']}",
-                    title="Art Director"
+                    title="Art Director",
                 )
             else:
+                duplicates = result["duplicates_removed"]
                 persistent_notification.async_create(
                     hass,
-                    f"Synced {result['count']} untracked images to the database.",
-                    title="Art Director"
+                    f"Library sync complete: {result['added']} added, "
+                    f"{result['stale_removed']} stale removed, "
+                    f"{duplicates} "
+                    f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
+                    title="Art Director",
                 )
             return
 
@@ -956,12 +975,8 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
             matte=matte
         )
         # Cleanup and exit early (skip default logic)
-        cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
         try:
-            await client.async_cleanup_storage(
-                max_items=cleanup_max,
-                only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-            )
+            await client.async_cleanup_storage(**_cleanup_params(entry))
         except Exception:
             pass
         return
@@ -988,12 +1003,8 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
 
     # Force cleanup to keep integration-managed TV storage within the configured
     # limit. Manual and Art Store images are never deletion-eligible.
-    cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
     try:
-        await client.async_cleanup_storage(
-            max_items=cleanup_max,
-            only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-        )
+        await client.async_cleanup_storage(**_cleanup_params(entry))
     except Exception as e:
         _LOGGER.warning("Slideshow cleanup failed: %s", e)
 

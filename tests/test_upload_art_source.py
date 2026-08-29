@@ -88,6 +88,7 @@ async def upload_service(hass):
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
+    client.async_initialize_database = AsyncMock()
     client.async_get_artmode_status = AsyncMock()
     client.async_send_key = AsyncMock()
     client.async_set_artmode = AsyncMock()
@@ -100,7 +101,13 @@ async def upload_service(hass):
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "frame.local", "token": "token"},
-        options={"use_power_key_on_off": True},
+        options={
+            "use_power_key_on_off": True,
+            "cleanup_max_items": 7,
+            "cleanup_max_age_days": 14,
+            "cleanup_preserve_current": False,
+            "cleanup_dry_run": True,
+        },
     )
     entry.add_to_hass(hass)
 
@@ -119,6 +126,31 @@ async def upload_service(hass):
         assert await async_setup_entry(hass, entry)
 
     yield client
+
+
+async def test_upload_art_cleanup_uses_configured_options(hass, upload_service):
+    """Automatic cleanup after upload uses the same configured policy."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    upload_service.async_upload_image.return_value = "MY-UPLOADED"
+    session = _FakeSession(_FakeResponse(b"JPEGDATA"))
+    with patch(
+        "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+        return_value=session,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/art.jpg"},
+            blocking=True,
+        )
+
+    upload_service.async_cleanup_storage.assert_awaited_once_with(
+        max_items=7,
+        max_age_days=14,
+        preserve_current=False,
+        only_integration_managed=True,
+        dry_run=True,
+    )
 
 
 async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_service):

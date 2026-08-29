@@ -200,7 +200,9 @@ art preview, brightness, color temperature) stay primary. Notable:
 
 The DB lives at `<config>/samsung_frame_director/art_library.db`
 (`DB_DIR`/`DB_FILE` in `const.py`). It is opened **per operation** (no long-lived
-connection) and initialized lazily via `_ensure_db()`.
+connection). Config-entry setup eagerly creates or migrates it through
+`async_initialize_database()` so a broken DB stops setup visibly; public DB
+operations still call `_ensure_db()` defensively.
 
 There are **two tables**, and understanding the split is key:
 
@@ -242,8 +244,10 @@ The columns the code actually reads/writes are: `content_id` (PK), `tags`,
 > places** — the `CREATE TABLE` (for fresh installs) and an
 > `if "<col>" not in existing_cols` migration (for existing installs).
 > Databases created by a much older schema (`date_added`/`last_seen`/`source`)
-> keep those now-unused columns as harmless leftovers; the migrations fill in
-> everything the current code needs.
+> keep those old columns as harmless leftovers; their values are copied into
+> `created_at`/`last_displayed_at`/`source_file`. Existing source identities are
+> canonicalized once in place, and the SQLite `user_version` records that data
+> migration without deleting rows.
 
 ### Why two tables?
 
@@ -304,8 +308,10 @@ The `upload_art` service obtains the source bytes, then calls
    aiohttp client with a 30-second timeout and 20 MiB streaming limit. Redirects
    are followed manually (maximum five) and each destination is revalidated;
    embedded credentials and unsupported schemes are rejected before I/O.
-2. Look up every tracked `content_id` for the exact `source_file`. Because the
-   database is shared by all configured Frames, ask the target TV for its
+2. Canonicalize the source identity (local path aliases resolve to one absolute
+   path; URL scheme/host/default ports/path aliases normalize while the query is
+   preserved), then look up every tracked `content_id` for that identity. Because
+   the database is shared by all configured Frames, ask the target TV for its
    available art (30-second socket timeout) and fast-select the first matching
    ID. The blocking worker is cancellation-contained: its caller retains
    `_art_lock` until the worker exits, so it cannot perform a late selection
@@ -371,8 +377,12 @@ restricts deletion candidates to rows with a non-empty `source_file` (proof of
 integration upload provenance). Missing or unreadable provenance fails closed,
 so manual *My Photos* and Art Store items cannot be deleted. It **preserves
 favorites and the current image**, applies optional age and `max_items` limits
-(deleting oldest first), then deletes via `delete_list` (fallback: per-id
-`delete`) and reconciles the `on_tv` flags in the DB. Supports `dry_run`.
+(counting only deletion-eligible integration uploads and deleting oldest first),
+then deletes via `delete_list` (fallback: per-id `delete`) and reconciles the
+`on_tv` flags in the DB. If current art is unknown initially or at the final
+pre-delete check, it deletes nothing. `dry_run` follows that same planning path.
+Saved cleanup options are used consistently after uploads, slideshows, and the
+manual cleanup action unless that action explicitly overrides a value.
 
 ---
 
