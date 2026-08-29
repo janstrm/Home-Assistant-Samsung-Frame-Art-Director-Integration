@@ -373,7 +373,6 @@ OPTION_SECTIONS: dict[str, list[str]] = {
         "cleanup_max_items",
         "cleanup_max_age_days",
         "cleanup_preserve_current",
-        "cleanup_only_integration_managed",
         "cleanup_dry_run",
     ],
     "folders": [CONF_INBOX_DIR, CONF_LIBRARY_DIR, CONF_RESIZE_MODE],
@@ -430,7 +429,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                     NumberSelectorConfig(min=0, max=3650, step=1, mode=NumberSelectorMode.BOX, unit_of_measurement="days")
                 ),
                 vol.Optional("cleanup_preserve_current", default=opts.get("cleanup_preserve_current", True)): BooleanSelector(),
-                vol.Optional("cleanup_only_integration_managed", default=opts.get("cleanup_only_integration_managed", True)): BooleanSelector(),
                 vol.Optional("cleanup_dry_run", default=opts.get("cleanup_dry_run", False)): BooleanSelector(),
             }
         )
