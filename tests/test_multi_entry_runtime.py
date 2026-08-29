@@ -249,7 +249,7 @@ async def test_websocket_library_selects_one_frame_by_config_entry_id(hass):
         assert await async_setup(hass, {})
         websocket_command = register_command.call_args.args[1]
         connection = MagicMock()
-        await websocket_command(
+        websocket_command(
             hass,
             connection,
             {
@@ -258,6 +258,7 @@ async def test_websocket_library_selects_one_frame_by_config_entry_id(hass):
                 "config_entry_id": second_entry.entry_id,
             },
         )
+        await hass.async_block_till_done()
 
     first_client.async_get_library_data.assert_not_awaited()
     second_client.async_get_library_data.assert_awaited_once_with()
