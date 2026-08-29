@@ -391,8 +391,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         db_dir = hass.config.path(DB_DIR)
         _os.makedirs(db_dir, exist_ok=True)
         client.set_db_path(hass.config.path(f"{DB_DIR}/{DB_FILE}"))
-    except Exception:  # noqa: BLE001
-        pass
+        await client.async_initialize_database()
+    except Exception as err:  # noqa: BLE001
+        raise ConfigEntryNotReady(
+            f"Library database initialization failed: {err}"
+        ) from err
     try:
         # Validate the saved token without opening a new pairing flow. Only an
         # explicit authentication failure starts reauth; reachability and

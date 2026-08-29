@@ -573,6 +573,7 @@ async def test_setup_maps_auth_and_reachability_failures_separately(
     )
     entry.add_to_hass(hass)
     client = MagicMock()
+    client.async_initialize_database = AsyncMock()
     client.async_connect_and_pair = AsyncMock(side_effect=client_error)
 
     with (

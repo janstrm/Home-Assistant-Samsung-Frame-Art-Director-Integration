@@ -88,6 +88,7 @@ async def upload_service(hass):
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
+    client.async_initialize_database = AsyncMock()
     client.async_get_artmode_status = AsyncMock()
     client.async_send_key = AsyncMock()
     client.async_set_artmode = AsyncMock()

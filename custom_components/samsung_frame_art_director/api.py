@@ -430,8 +430,13 @@ class SamsungFrameClient:
                     conn.commit()
             except Exception as e:
                 _LOGGER.error("DB Init failed: %s", e)
+                raise
 
         await asyncio.to_thread(_init_db)
+
+    async def async_initialize_database(self) -> None:
+        """Create or migrate the library database, raising on failure."""
+        await self._ensure_db()
 
 
 

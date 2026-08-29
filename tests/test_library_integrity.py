@@ -26,6 +26,7 @@ async def test_sync_library_action_reports_curator_result(hass):
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
+    client.async_initialize_database = AsyncMock()
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "frame.local", "token": "token"},
@@ -110,6 +111,7 @@ async def test_manual_cleanup_action_uses_complete_default_policy(hass):
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
+    client.async_initialize_database = AsyncMock()
     client.async_cleanup_storage = AsyncMock()
     entry = MockConfigEntry(
         domain=DOMAIN,
