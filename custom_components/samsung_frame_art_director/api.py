@@ -1288,6 +1288,55 @@ class SamsungFrameClient:
         tags: Optional[str] = None,
     ) -> Optional[str]:
         """Upload an image, select it, and return the TV content ID."""
+        if source_file and self._db_path:
+            await self._ensure_db()
+
+            def _find_existing_content_id() -> Optional[str]:
+                import sqlite3
+
+                try:
+                    with sqlite3.connect(self._db_path) as conn:
+                        row = conn.execute(
+                            """
+                            SELECT content_id
+                            FROM art_library
+                            WHERE source_file = ? AND on_tv = 1
+                            ORDER BY COALESCE(last_displayed_at, created_at) DESC
+                            LIMIT 1
+                            """,
+                            (source_file,),
+                        ).fetchone()
+                    return str(row[0]) if row else None
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Upload: existing source lookup failed for %s: %r",
+                        source_file,
+                        err,
+                    )
+                    return None
+
+            existing_content_id = await asyncio.to_thread(
+                _find_existing_content_id
+            )
+            if existing_content_id:
+                async with self._art_lock:
+                    await self._async_select_image_id(
+                        existing_content_id,
+                        matte=matte,
+                    )
+                await self.async_track_art(
+                    existing_content_id,
+                    tags=tags,
+                    source_file=source_file,
+                )
+                _LOGGER.info(
+                    "Upload: reused existing content_id=%s for source=%s on host=%s",
+                    existing_content_id,
+                    source_file,
+                    self._host,
+                )
+                return existing_content_id
+
         processed = await self.async_preprocess_image(image_bytes)
         _LOGGER.debug("Upload: processed image size=%s bytes for host=%s", len(processed), self._host)
 
