@@ -730,13 +730,35 @@ class SamsungFrameClient:
         _LOGGER.warning("Rotate: Could not find a valid image after %d attempts", max_attempts)
         return False
         
-    async def _async_select_image_id(self, content_id: str, matte: str = "none") -> None:
+    async def _async_select_image_id(
+        self,
+        content_id: str,
+        matte: str = "none",
+        require_available: bool = False,
+    ) -> bool:
         """Helper to select an image by ID (best effort)."""
          # Fallback logic similar to upload select
         def _do_select():
             tv = self._make_tv()
+            art_client = None
             try:
                 art_client = tv.art()
+                if require_available:
+                    available_ids: set[str] = set()
+                    for item in art_client.available() or []:
+                        if isinstance(item, dict):
+                            available_id = (
+                                item.get("id")
+                                or item.get("content_id")
+                                or item.get("contentId")
+                            )
+                        else:
+                            available_id = str(item)
+                        if available_id:
+                            available_ids.add(str(available_id))
+                    if content_id not in available_ids:
+                        return False
+
                 # CRITICAL: For change_matte and 3.0.5, "none" is often the literal string expected,
                 # but select_image prefers None to clear it.
                 tv_matte = matte if matte else "none"
@@ -760,19 +782,17 @@ class SamsungFrameClient:
                                     art_client.change_matte(content_id, matte_id="none", portrait_matte="none")
                                 except Exception:
                                     pass
+                return True
             except Exception as e:
                 _LOGGER.debug("Select failed: %s", e)
+                return False
             finally:
-                self._capture_token(tv)
-                try:
-                    c = getattr(tv, "close", None)
-                    if callable(c):
-                        c()
-                except Exception:
-                    pass
+                self._close_art_connection(tv, art_client)
 
-        await asyncio.to_thread(_do_select)
-        self._fire_art_changed(content_id)
+        selected = await asyncio.to_thread(_do_select)
+        if selected:
+            self._fire_art_changed(content_id)
+        return selected
 
     async def async_rotate_from_folder(self, source_dir: str, matte: str = "none") -> bool:
         """Rotate art by picking a random file from a folder and uploading it."""
@@ -1320,22 +1340,29 @@ class SamsungFrameClient:
             )
             if existing_content_id:
                 async with self._art_lock:
-                    await self._async_select_image_id(
+                    selected = await self._async_select_image_id(
                         existing_content_id,
                         matte=matte,
+                        require_available=True,
                     )
-                await self.async_track_art(
+                if selected:
+                    await self.async_track_art(
+                        existing_content_id,
+                        tags=tags,
+                        source_file=source_file,
+                    )
+                    _LOGGER.info(
+                        "Upload: reused existing content_id=%s for source=%s on host=%s",
+                        existing_content_id,
+                        source_file,
+                        self._host,
+                    )
+                    return existing_content_id
+                _LOGGER.debug(
+                    "Upload: tracked content_id=%s is absent from target host=%s; uploading",
                     existing_content_id,
-                    tags=tags,
-                    source_file=source_file,
-                )
-                _LOGGER.info(
-                    "Upload: reused existing content_id=%s for source=%s on host=%s",
-                    existing_content_id,
-                    source_file,
                     self._host,
                 )
-                return existing_content_id
 
         processed = await self.async_preprocess_image(image_bytes)
         _LOGGER.debug("Upload: processed image size=%s bytes for host=%s", len(processed), self._host)
