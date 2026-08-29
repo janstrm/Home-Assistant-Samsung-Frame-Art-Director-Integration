@@ -106,6 +106,22 @@ async def test_targeted_actions_use_only_the_selected_frames_runtime_and_options
     second_client.async_upload_image.assert_not_awaited()
     second_client.async_cleanup_storage.assert_not_awaited()
 
+    first_client.async_cleanup_storage.reset_mock()
+    await hass.services.async_call(
+        DOMAIN,
+        "cleanup_storage",
+        {"entity_id": entity.entity_id},
+        blocking=True,
+    )
+    first_client.async_cleanup_storage.assert_awaited_once_with(
+        max_items=11,
+        max_age_days=None,
+        preserve_current=True,
+        only_integration_managed=True,
+        dry_run=False,
+    )
+    second_client.async_cleanup_storage.assert_not_awaited()
+
     await hass.services.async_call(
         DOMAIN,
         "purge_database",
