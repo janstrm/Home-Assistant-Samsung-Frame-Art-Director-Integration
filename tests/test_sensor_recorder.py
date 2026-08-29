@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.const import MATCH_ALL
 from homeassistant.helpers import entity_registry as er
@@ -59,7 +59,11 @@ async def test_library_sensor_uses_renamed_filter_owned_by_its_entry(hass):
     hass.states.async_set(filter_entity.entity_id, "nature")
     add_entities = MagicMock()
 
-    await async_setup_entry(hass, entry, add_entities)
+    with patch(
+        "custom_components.samsung_frame_art_director.sensor.signed_thumbnail_url",
+        return_value="/thumbnail",
+    ):
+        await async_setup_entry(hass, entry, add_entities)
 
     sensor = add_entities.call_args.args[0][0]
     assert sensor.coordinator.data["filtered_count"] == 1
