@@ -62,6 +62,58 @@ async def test_media_player_coordinator_is_owned_by_its_config_entry(hass):
     add_entities.assert_called_once()
 
 
+async def test_change_gallery_page_uses_renamed_controls_of_targeted_frame(hass):
+    """Gallery paging follows stable entry ownership after entity renames."""
+    hass.http = MagicMock()
+    assert await async_setup(hass, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "token": "SAVED"},
+        unique_id="frame-gallery",
+    )
+    entry.add_to_hass(hass)
+    entry.runtime_data = SamsungFrameRuntimeData(client=_client("frame.local"))
+
+    registry = er.async_get(hass)
+    target = registry.async_get_or_create(
+        "media_player",
+        DOMAIN,
+        "frame-gallery",
+        config_entry=entry,
+        suggested_object_id="renamed_frame",
+    )
+    page = registry.async_get_or_create(
+        "number",
+        DOMAIN,
+        f"{entry.entry_id}_gallery_page",
+        config_entry=entry,
+        suggested_object_id="renamed_gallery_page",
+    )
+    library = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        f"{entry.entry_id}_art_library",
+        config_entry=entry,
+        suggested_object_id="renamed_art_library",
+    )
+    hass.states.async_set(page.entity_id, "2")
+    hass.states.async_set(library.entity_id, "60")
+
+    set_value = AsyncMock()
+    hass.services.async_register("number", "set_value", set_value)
+    await hass.services.async_call(
+        DOMAIN,
+        "change_gallery_page",
+        {"entity_id": target.entity_id, "step": 1},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    set_value.assert_awaited_once()
+    set_value_call = set_value.await_args.args[0]
+    assert set_value_call.data == {"entity_id": page.entity_id, "value": 3}
+
+
 async def test_targeted_actions_use_only_the_selected_frames_runtime_and_options(
     hass,
 ):
