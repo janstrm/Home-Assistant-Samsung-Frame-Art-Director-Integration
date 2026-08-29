@@ -220,12 +220,19 @@ class SamsungFrameClient:
         def _send():
             tv = self._make_tv()
             try:
-                try:
-                    tv.remote().send_key(key)
-                except Exception:  # noqa: BLE001
-                    send_fn = getattr(tv, "send_key", None)
-                    if callable(send_fn):
-                        send_fn(key)
+                # samsungtvws exposes send_key() directly on SamsungTVWS; there
+                # is no remote() accessor in the official library, so that
+                # path always raised AttributeError and every key silently
+                # went through the fallback. Prefer the direct method and keep
+                # remote() only as a guarded path for forks that provide it.
+                send_fn = getattr(tv, "send_key", None)
+                if not callable(send_fn):
+                    remote_fn = getattr(tv, "remote", None)
+                    remote = remote_fn() if callable(remote_fn) else None
+                    send_fn = getattr(remote, "send_key", None)
+                if not callable(send_fn):
+                    raise RuntimeError("TV client exposes no send_key()")
+                send_fn(key)
             finally:
                 self._capture_token(tv)
                 closer = getattr(tv, "close", None)
