@@ -367,6 +367,7 @@ async def test_upload_checks_all_source_ids_for_the_target_tv(hass, tmp_path):
 async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
     """A transient target-TV check failure must not trigger a fresh upload."""
     upload_calls = 0
+    client_timeouts = []
     configured_timeouts = []
 
     class FakeArt:
@@ -386,7 +387,8 @@ async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
     class FakeTV:
         token = "token"
 
-        def __init__(self, *_args, **_kwargs):
+        def __init__(self, *_args, **kwargs):
+            client_timeouts.append(kwargs.get("timeout"))
             self._art = FakeArt()
 
         def art(self):
@@ -421,7 +423,30 @@ async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
         )
 
     assert upload_calls == 0
+    assert client_timeouts == [25]
     assert configured_timeouts == [30]
+
+
+async def test_upload_does_not_proceed_when_source_lookup_fails(hass, tmp_path):
+    """A DB error cannot be mistaken for proof that the source is absent."""
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    with (
+        patch("sqlite3.connect", side_effect=sqlite3.OperationalError("locked")),
+        patch.object(
+            client,
+            "async_preprocess_image",
+            side_effect=AssertionError("upload path reached"),
+        ),
+        pytest.raises(sqlite3.OperationalError, match="locked"),
+    ):
+        await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
 
 
 async def test_concurrent_uploads_create_only_one_tv_copy(hass, tmp_path):
