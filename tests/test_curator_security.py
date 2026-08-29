@@ -25,7 +25,7 @@ def _curator(hass, *, inbox_dir: Path, library_dir: Path):
     )
     curator = ContentCurator(hass, entry, api)
     analyzer = SimpleNamespace(analyze_image=AsyncMock(return_value={"tags": []}))
-    curator._build_analyzer = lambda: (analyzer, None)
+    curator._build_analyzer = lambda: (analyzer, "test-key", None)
     return curator, api, analyzer
 
 

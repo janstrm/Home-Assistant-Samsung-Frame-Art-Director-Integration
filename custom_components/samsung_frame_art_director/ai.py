@@ -90,7 +90,11 @@ class GeminiAnalyzer(ImageAnalyzer):
         structured_prompt = (
             f"{prompt}\n"
             "Return exactly 15 descriptive keywords or short phrases separated by commas. "
-            "Include visual style, subject, weather, lighting, and mood."
+            "Include visual style (e.g. oil painting), subject (e.g. mountains), "
+            "and explicitly infer: Weather (e.g. sunny, rainy), "
+            "Lighting (e.g. golden hour, dark), and Mood (e.g. calm, energetic). "
+            "Example: landscape, mountains, sunny, clear sky, morning light, calm, "
+            "nature, river, clouds, impressionism, bright, blue, summer, peaceful, outdoors"
         )
         payload = {
             "contents": [

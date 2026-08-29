@@ -36,6 +36,10 @@ _LOGGER = logging.getLogger(__name__)
 MAX_AI_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_AI_IMAGE_PIXELS = 40_000_000
 MAX_AI_IMAGE_DIMENSION = 16_384
+_PROVIDER_CREDENTIALS = {
+    AI_PROVIDER_GEMINI: (CONF_GEMINI_API_KEY, "Gemini"),
+    AI_PROVIDER_OPENAI: (CONF_OPENAI_API_KEY, "OpenAI"),
+}
 
 
 class UnsafeAIImageError(ValueError):
@@ -86,38 +90,41 @@ class ContentCurator:
         self._inbox_dir = entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR
         self._library_dir = entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR
 
-    def _configured_provider_and_key(self) -> tuple[str, str]:
-        """Return the selected provider and its credential for one request."""
-        provider = self.entry.options.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)
-        if provider.lower() == AI_PROVIDER_OPENAI:
-            return provider, self.entry.options.get(CONF_OPENAI_API_KEY, "")
-        return provider, self.entry.options.get(CONF_GEMINI_API_KEY, "")
+    def _configured_provider(self) -> tuple[str, str, str]:
+        """Return provider, matching credential and display name atomically."""
+        provider = self.entry.options.get(
+            CONF_AI_PROVIDER,
+            AI_PROVIDER_GEMINI,
+        ).lower()
+        credential_option, display_name = _PROVIDER_CREDENTIALS.get(
+            provider,
+            _PROVIDER_CREDENTIALS[AI_PROVIDER_GEMINI],
+        )
+        return provider, self.entry.options.get(credential_option, ""), display_name
 
     def _build_analyzer(self):
         """Build the AI analyzer for the configured provider.
 
-        Returns ``(analyzer, error)``; ``error`` is ``None`` on success.
+        Returns ``(analyzer, api_key, error)`` from one options snapshot.
         """
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        provider, api_key = self._configured_provider_and_key()
+        provider, api_key, provider_name = self._configured_provider()
         if not api_key:
-            provider_name = (
-                "OpenAI" if provider.lower() == AI_PROVIDER_OPENAI else "Gemini"
-            )
-            return None, (
+            return None, "", (
                 f"No {provider_name} API key configured. "
                 "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
             )
-        return create_analyzer(
+        analyzer, error = create_analyzer(
             provider,
             model=self.entry.options.get(CONF_AI_MODEL, ""),
             session=async_get_clientsession(self.hass),
         )
+        return analyzer, api_key, error
 
     async def async_process_inbox(self):
         """Process all images in the inbox."""
-        analyzer, analyzer_err = self._build_analyzer()
+        analyzer, api_key, analyzer_err = self._build_analyzer()
         if analyzer_err:
             _LOGGER.warning("Process Inbox: %s", analyzer_err)
             return {"count": 0, "error": analyzer_err}
@@ -166,7 +173,6 @@ class ContentCurator:
                     self.hass,
                     source_path,
                 )
-                _, api_key = self._configured_provider_and_key()
                 result = await analyzer.analyze_image(
                     image.data,
                     prompt="Describe this image",
@@ -288,7 +294,7 @@ class ContentCurator:
             db_paths = await self.api.async_get_local_art_paths()
 
         # ── Phase 3: Add untracked files (on disk but not in DB) ────────
-        analyzer, analyzer_err = self._build_analyzer()
+        analyzer, api_key, analyzer_err = self._build_analyzer()
 
         def _get_disk_files():
             library_dir = ensure_allowed_local_path(self.hass, self._library_dir)
@@ -339,7 +345,6 @@ class ContentCurator:
                         path,
                     )
                     
-                    _, api_key = self._configured_provider_and_key()
                     result = await analyzer.analyze_image(
                         image.data,
                         prompt="Describe this image",
