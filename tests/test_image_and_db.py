@@ -148,6 +148,55 @@ async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
     assert upload_calls == 1
 
 
+async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
+    """Automatic cleanup only deletes art with integration provenance."""
+    deleted_ids = []
+
+    class FakeArt:
+        def get_current(self):
+            return None
+
+        def available(self):
+            return [
+                {"content_id": "MY-MANUAL"},
+                {"content_id": "MY-INTEGRATION"},
+            ]
+
+        def delete_list(self, content_ids):
+            deleted_ids.extend(content_ids)
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-MANUAL")
+    await client.async_track_art(
+        "MY-INTEGRATION",
+        source_file="/media/frame/library/managed.jpg",
+    )
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            only_integration_managed=False,
+            preserve_current=False,
+        )
+
+    assert summary["deleted"] == ["MY-INTEGRATION"]
+    assert deleted_ids == ["MY-INTEGRATION"]
+
+
 async def test_get_state_falls_back_gracefully_without_tv(hass):
     # No TV reachable: the per-call path must degrade to a safe empty result.
     client = SamsungFrameClient(hass, "127.0.0.1")
