@@ -1738,6 +1738,21 @@ class SamsungFrameClient:
                 ART_OPERATION_TIMEOUT_SECONDS,
             )
 
+        if preserve_current and not current_id:
+            return {
+                "current": None,
+                "on_tv": len(on_tv_ids),
+                "candidates": 0,
+                "to_delete": [],
+                "deleted": [],
+                "skipped_current": [],
+                "skipped_favorites": [],
+                "errors": [
+                    "Current artwork could not be determined; deletion aborted"
+                ],
+                "dry_run": bool(dry_run),
+            }
+
         # Destructive cleanup is always provenance-gated. DB sync also records
         # manually uploaded TV art, so mere DB presence is not proof that this
         # integration owns an item. Only a non-empty source_file marks an image
