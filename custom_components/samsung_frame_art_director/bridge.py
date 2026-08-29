@@ -28,6 +28,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+PROBE_TIMEOUT = 10
+
 
 class PairResult:
     """Simple container for pair attempt results."""
@@ -48,15 +50,9 @@ async def async_probe_device_info(host: str) -> Tuple[int | None, dict[str, Any]
 
     def _get_info_with_port(port: int) -> dict[str, Any] | None:
         try:
-            from samsungtvws import SamsungTVWS  # type: ignore
+            from samsungtvws.rest import SamsungTVRest  # type: ignore
 
-            tv = SamsungTVWS(host, port=port, name=CLIENT_NAME)
-            try:
-                return tv.rest_device_info()
-            finally:
-                close_fn = getattr(tv, "close", None)
-                if callable(close_fn):
-                    close_fn()
+            return SamsungTVRest(host, port, PROBE_TIMEOUT).rest_device_info()
         except Exception:
             return None
 

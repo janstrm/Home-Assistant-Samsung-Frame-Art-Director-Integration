@@ -71,7 +71,10 @@ Two external boundaries dominate the design:
 
 1. **The TV** — reached through `samsungtvws`. Connections are short-lived,
    created per-operation, and wrapped in timeouts/retries. The library is
-   partly synchronous, so blocking calls are pushed to threads.
+   partly synchronous, so blocking calls are pushed to threads. Device-info
+   discovery uses the REST client directly so it cannot trigger WebSocket
+   pairing. `SamsungTVWS.art()` creates a separate child connection; capture
+   its refreshed token and close it before closing the parent TV client.
 2. **The AI provider** — Gemini (default) or OpenAI, reached over HTTPS for
    image → tag analysis. Optional; only used by the curator.
 
@@ -499,9 +502,8 @@ the [README](README.md#-services).
   python3 -c "import json,glob; [json.load(open(f)) for f in glob.glob('custom_components/samsung_frame_art_director/**/*.json', recursive=True)]"
   ```
 - **Versioning:** bump `manifest.json` `version` on user-facing changes.
-- **No automated test suite exists yet.** The AI layer (`ai.py`) and pure
-  helpers (preprocessing, tag filtering, DB dedup) are the most testable units
-  if you want to start adding coverage.
+- **Automated tests:** `pytest` covers service behavior, TV-client boundaries,
+  preprocessing, tag filtering, and DB helpers; Ruff and pytest run in CI.
 - **Logs are the primary debugging tool** — filter HA logs by
   `samsung_frame_art_director`. Keep the existing debug breadcrumbs intact.
 </content>

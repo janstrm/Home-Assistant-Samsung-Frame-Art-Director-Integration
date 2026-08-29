@@ -120,6 +120,27 @@ class SamsungFrameClient:
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug("Token persister failed", exc_info=True)
 
+    def _close_art_connection(self, tv, art=None) -> None:
+        """Persist the freshest token and close Art before its parent client."""
+        token_source = tv
+        if art is not None:
+            try:
+                if getattr(art, "token", None):
+                    token_source = art
+            except Exception:  # noqa: BLE001
+                pass
+        self._capture_token(token_source)
+
+        for client in (art, tv):
+            if client is None:
+                continue
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def async_send_key(self, key: str) -> None:
         """Send a remote key over a properly-identified connection."""
         def _send():
@@ -222,27 +243,23 @@ class SamsungFrameClient:
         """
         def _read() -> dict:
             tv = self._make_tv()
+            art = None
             status = None
             content_id = None
             try:
+                art = tv.art()
                 try:
-                    status = tv.art().get_artmode()
+                    status = art.get_artmode()
                 except Exception:  # noqa: BLE001
                     pass
                 try:
-                    cur = tv.art().get_current()
+                    cur = art.get_current()
                     if isinstance(cur, dict):
                         content_id = cur.get("content_id") or cur.get("contentId")
                 except Exception:  # noqa: BLE001
                     pass
             finally:
-                self._capture_token(tv)
-                closer = getattr(tv, "close", None)
-                if callable(closer):
-                    try:
-                        closer()
-                    except Exception:  # noqa: BLE001
-                        pass
+                self._close_art_connection(tv, art)
             return {
                 "status": str(status).lower() if status is not None else None,
                 "content_id": content_id,
@@ -1288,23 +1305,21 @@ class SamsungFrameClient:
 
         def _upload_once():
             tv = _make_client()
+            art_client = None
             try:
                 _LOGGER.debug("Upload: starting art.upload on %s (matte=%s)", self._host, matte)
                 # Pass matte to upload so it applies immediately if supported
-                remote_filename = tv.art().upload(processed, file_type="JPEG", matte=matte)
+                art_client = tv.art()
+                remote_filename = art_client.upload(processed, file_type="JPEG", matte=matte)
                 _LOGGER.debug("Upload: art.upload returned filename=%s on %s", remote_filename, self._host)
                 return remote_filename
             finally:
-                try:
-                    close_fn = getattr(tv, "close", None)
-                    if callable(close_fn):
-                        close_fn()
-                except Exception:
-                    pass
+                self._close_art_connection(tv, art_client)
 
         def _select_once(remote_filename: str) -> None:
             """Select an uploaded image without ever repeating the upload."""
             tv = _make_client()
+            art_client = None
             try:
                 # For change_matte and 3.0.5, "none" is the literal string
                 # expected, while select_image prefers None to clear it.
@@ -1329,12 +1344,7 @@ class SamsungFrameClient:
                         except Exception as err:  # noqa: BLE001
                             _LOGGER.debug("Upload: change_matte failed: %r", err)
             finally:
-                try:
-                    close_fn = getattr(tv, "close", None)
-                    if callable(close_fn):
-                        close_fn()
-                except Exception:
-                    pass
+                self._close_art_connection(tv, art_client)
 
         async with self._art_lock:
             # Retry a few times on transient art channel ConnectionFailure
@@ -1346,23 +1356,19 @@ class SamsungFrameClient:
                         from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
                         def _prime():
                             tvp = self._make_tv()
+                            art_client = None
                             try:
+                                art_client = tvp.art()
                                 try:
-                                    tvp.art().supported()
+                                    art_client.supported()
                                 except Exception:
                                     pass
                                 try:
-                                    tvp.art().get_artmode()
+                                    art_client.get_artmode()
                                 except Exception:
                                     pass
                             finally:
-                                self._capture_token(tvp)
-                                try:
-                                    c = getattr(tvp, "close", None)
-                                    if callable(c):
-                                        c()
-                                except Exception:
-                                    pass
+                                self._close_art_connection(tvp, art_client)
                         await asyncio.to_thread(_prime)
                         await asyncio.sleep(0.3)
                     except Exception:
@@ -1440,38 +1446,47 @@ class SamsungFrameClient:
 
         def _collect() -> dict:
             tv = self._make_tv()
+            art = None
             result: dict = {"host": self._host}
             try:
-                result["supported"] = tv.art().supported()
-            except Exception as e:  # noqa: BLE001
-                result["supported_error"] = repr(e)
-            try:
-                status = tv.art().get_artmode()
-                result["status"] = status
-            except Exception as e:  # noqa: BLE001
-                result["status_error"] = repr(e)
-            try:
-                current = tv.art().get_current()
-                result["current"] = current
-            except Exception as e:  # noqa: BLE001
-                result["current_error"] = repr(e)
-            try:
-                avail = tv.art().available() or []
-                ids: list[str] = []
-                for item in avail:
-                    image_id = None
-                    if isinstance(item, dict):
-                        image_id = item.get("id") or item.get("content_id") or item.get("contentId")
-                    elif isinstance(item, str):
-                        image_id = item
-                    if image_id:
-                        ids.append(image_id)
-                    if len(ids) >= max_ids:
-                        break
-                result["available_ids"] = ids
-            except Exception as e:  # noqa: BLE001
-                result["available_error"] = repr(e)
-            return result
+                try:
+                    art = tv.art()
+                except Exception as e:  # noqa: BLE001
+                    result["connection_error"] = repr(e)
+                    return result
+                try:
+                    result["supported"] = art.supported()
+                except Exception as e:  # noqa: BLE001
+                    result["supported_error"] = repr(e)
+                try:
+                    status = art.get_artmode()
+                    result["status"] = status
+                except Exception as e:  # noqa: BLE001
+                    result["status_error"] = repr(e)
+                try:
+                    current = art.get_current()
+                    result["current"] = current
+                except Exception as e:  # noqa: BLE001
+                    result["current_error"] = repr(e)
+                try:
+                    avail = art.available() or []
+                    ids: list[str] = []
+                    for item in avail:
+                        image_id = None
+                        if isinstance(item, dict):
+                            image_id = item.get("id") or item.get("content_id") or item.get("contentId")
+                        elif isinstance(item, str):
+                            image_id = item
+                        if image_id:
+                            ids.append(image_id)
+                        if len(ids) >= max_ids:
+                            break
+                    result["available_ids"] = ids
+                except Exception as e:  # noqa: BLE001
+                    result["available_error"] = repr(e)
+                return result
+            finally:
+                self._close_art_connection(tv, art)
 
         data = await asyncio.to_thread(_collect)
         _LOGGER.info("Diagnostics(Art): %s", data)
