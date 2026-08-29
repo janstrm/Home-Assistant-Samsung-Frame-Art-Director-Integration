@@ -299,7 +299,7 @@ class ContentCurator:
                     description = result.get("description", "")
 
                     await self.api.async_add_local_art(
-                        file_path=path,
+                        file_path=str(path),
                         tags=tags,
                         description=description,
                         width=width,
