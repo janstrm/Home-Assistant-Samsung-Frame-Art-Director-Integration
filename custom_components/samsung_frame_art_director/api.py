@@ -17,6 +17,7 @@ from .file_access import (
     image_content_type,
     is_local_media_identifier,
     media_identifier,
+    resolve_upload_source,
 )
 from typing import Optional, TYPE_CHECKING
 
@@ -46,6 +47,18 @@ def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
         (file_path for (file_path,) in rows if media_identifier(file_path) == media_id),
         None,
     )
+
+
+def _canonical_source_identity(hass: HomeAssistant, source: str) -> str:
+    """Return a stable identity for harmless aliases of one local source."""
+    from urllib.parse import urlsplit
+
+    if urlsplit(source).scheme.lower() in ("http", "https"):
+        return source
+    try:
+        return str(resolve_upload_source(hass, source))
+    except UnsafeLocalPathError:
+        return os.path.realpath(os.path.expanduser(source))
 
 
 class AuthenticationRejectedError(Exception):
@@ -444,6 +457,8 @@ class SamsungFrameClient:
         """Track a new upload in the local DB with optional tags and source_file."""
         if not self._db_path or not content_id:
             return
+        if source_file:
+            source_file = _canonical_source_identity(self.hass, source_file)
         
         await self._ensure_db()
 
@@ -1414,6 +1429,9 @@ class SamsungFrameClient:
         tags: Optional[str] = None,
     ) -> Optional[str]:
         """Upload an image, select it, and return the TV content ID."""
+        if source_file:
+            source_file = _canonical_source_identity(self.hass, source_file)
+
         async def _reuse_existing_upload() -> Optional[str]:
             if not source_file or not self._db_path:
                 return None
