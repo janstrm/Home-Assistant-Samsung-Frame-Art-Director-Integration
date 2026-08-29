@@ -32,12 +32,17 @@ class _FakeResponse:
         data: bytes,
         content_length: int | None | object = _DEFAULT_CONTENT_LENGTH,
         chunks: list[bytes] | None = None,
+        *,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
     ):
         self._data = data
         self.content_length = (
             len(data) if content_length is _DEFAULT_CONTENT_LENGTH else content_length
         )
         self.content = _FakeContent(chunks if chunks is not None else [data])
+        self.status = status
+        self.headers = headers or {}
         self.raised = False
 
     def raise_for_status(self) -> None:
@@ -59,15 +64,19 @@ class _FakeGet:
 
 
 class _FakeSession:
-    def __init__(self, resp: _FakeResponse):
-        self._resp = resp
+    def __init__(self, resp: _FakeResponse | list[_FakeResponse]):
+        self._responses = list(resp) if isinstance(resp, list) else [resp]
         self.requested_url = None
+        self.requested_urls = []
         self.timeout = None
+        self.allow_redirects = None
 
-    def get(self, url, timeout=None):
+    def get(self, url, timeout=None, allow_redirects=None):
         self.requested_url = url
+        self.requested_urls.append(url)
         self.timeout = timeout
-        return _FakeGet(self._resp)
+        self.allow_redirects = allow_redirects
+        return _FakeGet(self._responses.pop(0))
 
 
 @pytest.fixture
@@ -160,6 +169,110 @@ async def test_upload_art_rejects_an_untrusted_remote_host(hass, upload_service)
 
     assert session.requested_url is None
     upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_rejects_credentials_in_a_remote_url(hass, upload_service):
+    """A trusted host still cannot receive credentials embedded in its URL."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    session = _FakeSession(_FakeResponse(b"JPEGDATA"))
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="credentials"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://user:secret@render.local/image.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_urls == []
+
+
+async def test_upload_art_rejects_an_unsupported_remote_scheme(hass, upload_service):
+    """URL-like sources must use HTTP or HTTPS."""
+    with pytest.raises(ServiceValidationError, match="Unsupported image URL scheme"):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "ftp://render.local/image.jpg"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_revalidates_redirects_before_following_them(
+    hass,
+    upload_service,
+):
+    """A trusted source cannot redirect the shared client to an untrusted host."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    session = _FakeSession(
+        [
+            _FakeResponse(
+                b"",
+                status=302,
+                headers={"Location": "https://untrusted.example/image.jpg"},
+            ),
+            _FakeResponse(b"ESCAPED"),
+        ]
+    )
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="allowlist_external_urls"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/start.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_urls == ["https://render.local/start.jpg"]
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_follows_a_trusted_relative_redirect(hass, upload_service):
+    """Redirect validation preserves legitimate renderer redirects."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    session = _FakeSession(
+        [
+            _FakeResponse(b"", status=302, headers={"Location": "/final.jpg"}),
+            _FakeResponse(b"JPEGDATA"),
+        ]
+    )
+
+    with patch(
+        "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+        return_value=session,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/start.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_urls == [
+        "https://render.local/start.jpg",
+        "https://render.local/final.jpg",
+    ]
+    assert session.allow_redirects is False
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"JPEGDATA",
+        matte="none",
+        source_file="https://render.local/start.jpg",
+        tags=None,
+    )
 
 
 async def test_upload_art_rejects_declared_oversized_download(hass, upload_service):
