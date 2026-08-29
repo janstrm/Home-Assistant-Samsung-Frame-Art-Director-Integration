@@ -156,6 +156,12 @@ When `response_variable` is requested, `upload_result.content_id` contains the
 exact TV content ID for a single target and `upload_result.content_ids` contains
 all returned IDs when multiple Frames are targeted.
 
+Repeated calls with the same path or URL reuse the image already stored on the
+target Frame instead of uploading another copy. The integration verifies the
+stored content ID against each target TV, so a mapping from a different Frame
+cannot suppress a required upload. If the image was removed from that TV, it is
+uploaded again automatically.
+
 #### rotate_art_now
 Force an immediate rotation of the displayed art. Picks a random image from the library (optionally filtered by tags). Automatically retries if a selected image no longer exists on disk.
 ```yaml
