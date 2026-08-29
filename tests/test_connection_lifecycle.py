@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import (
     _enable_verbose_logging,
+    async_setup,
     async_setup_entry,
     async_unload_entry,
 )
@@ -26,6 +27,15 @@ from custom_components.samsung_frame_art_director.const import DOMAIN
 
 def _fake_module(tv_type):
     return SimpleNamespace(SamsungTVWS=tv_type)
+
+
+async def test_domain_setup_registers_thumbnail_view(hass):
+    """The domain owns the shared thumbnail HTTP interface."""
+    hass.http = MagicMock()
+
+    assert await async_setup(hass, {})
+
+    hass.http.register_view.assert_called_once()
 
 
 async def test_startup_reuses_saved_token_without_token_file_pairing(
