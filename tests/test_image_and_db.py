@@ -3,6 +3,7 @@ import asyncio
 import io
 import sqlite3
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -368,7 +369,6 @@ async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
     """A transient target-TV check failure must not trigger a fresh upload."""
     upload_calls = 0
     client_timeouts = []
-    configured_timeouts = []
 
     class FakeArt:
         token = "token"
@@ -403,18 +403,8 @@ async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
     await client.async_track_art("MY-EXISTING", source_file=source_file)
 
     fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
-    real_wait_for = asyncio.wait_for
-
-    async def recording_wait_for(awaitable, timeout):
-        configured_timeouts.append(timeout)
-        return await real_wait_for(awaitable, timeout=timeout)
-
     with (
         patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}),
-        patch(
-            "custom_components.samsung_frame_art_director.api.asyncio.wait_for",
-            side_effect=recording_wait_for,
-        ),
         pytest.raises(ConnectionError, match="target TV unavailable"),
     ):
         await client.async_upload_image(
@@ -423,8 +413,7 @@ async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
         )
 
     assert upload_calls == 0
-    assert client_timeouts == [25]
-    assert configured_timeouts == [30]
+    assert client_timeouts == [30]
 
 
 async def test_upload_does_not_proceed_when_source_lookup_fails(hass, tmp_path):
@@ -447,6 +436,68 @@ async def test_upload_does_not_proceed_when_source_lookup_fails(hass, tmp_path):
             _jpeg(100, 100),
             source_file=source_file,
         )
+
+
+async def test_cancelled_reuse_check_does_not_leave_an_art_worker(hass, tmp_path):
+    """Cancellation waits for the blocking Art worker before releasing lock."""
+    check_started = threading.Event()
+    release_check = threading.Event()
+    worker_finished = threading.Event()
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            check_started.set()
+            release_check.wait(timeout=1)
+            return [{"content_id": "MY-EXISTING"}]
+
+        def select_image(self, _content_id, *, show=True, **_kwargs):
+            assert show is True
+            worker_finished.set()
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        task = asyncio.create_task(
+            client.async_upload_image(
+                _jpeg(100, 100),
+                source_file=source_file,
+            )
+        )
+        await asyncio.to_thread(check_started.wait, 1)
+        assert check_started.is_set()
+
+        task.cancel()
+        await asyncio.sleep(0.05)
+        worker_is_contained = not task.done()
+        release_check.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.to_thread(worker_finished.wait, 1)
+
+    assert worker_is_contained
+    assert worker_finished.is_set()
 
 
 async def test_concurrent_uploads_create_only_one_tv_copy(hass, tmp_path):
