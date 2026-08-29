@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from PIL import Image
@@ -25,7 +25,7 @@ def _curator(hass, *, inbox_dir: Path, library_dir: Path):
     )
     curator = ContentCurator(hass, entry, api)
     analyzer = SimpleNamespace(analyze_image=AsyncMock(return_value={"tags": []}))
-    curator._build_analyzer = lambda: (analyzer, None)
+    curator._build_analyzer = lambda: (analyzer, "test-key", None)
     return curator, api, analyzer
 
 
@@ -93,3 +93,50 @@ async def test_sync_library_registers_an_in_root_file_as_a_canonical_string(hass
     assert api.async_add_local_art.await_args.kwargs["file_path"] == str(
         image_path.resolve()
     )
+
+
+async def test_process_inbox_rejects_oversized_input_before_ai(hass):
+    """Inbox files are byte-bounded before any provider sees their contents."""
+    inbox = Path(hass.config.path("www", "oversized-inbox"))
+    library = Path(hass.config.path("www", "oversized-library"))
+    inbox.mkdir(parents=True, exist_ok=True)
+    image_path = inbox / "large.png"
+    Image.new("RGB", (2, 2), (10, 20, 30)).save(image_path, "PNG")
+    curator, api, analyzer = _curator(
+        hass,
+        inbox_dir=inbox,
+        library_dir=library,
+    )
+
+    with patch(
+        "custom_components.samsung_frame_art_director.curator.MAX_AI_IMAGE_BYTES",
+        32,
+    ):
+        result = await curator.async_process_inbox()
+
+    assert result == {"count": 0, "skipped": 1}
+    analyzer.analyze_image.assert_not_awaited()
+    api.async_add_local_art.assert_not_awaited()
+
+
+async def test_sync_library_rejects_excessive_dimensions_before_ai(hass):
+    """Decoded dimensions are bounded before an untracked image reaches AI."""
+    library = Path(hass.config.path("www", "dimension-library"))
+    library.mkdir(parents=True, exist_ok=True)
+    image_path = library / "bomb.png"
+    Image.new("RGB", (2, 2), (10, 20, 30)).save(image_path, "PNG")
+    curator, api, analyzer = _curator(
+        hass,
+        inbox_dir=Path(hass.config.path("www", "dimension-inbox")),
+        library_dir=library,
+    )
+
+    with patch(
+        "custom_components.samsung_frame_art_director.curator.MAX_AI_IMAGE_PIXELS",
+        3,
+    ):
+        result = await curator.async_sync_library()
+
+    assert result["added"] == 0
+    analyzer.analyze_image.assert_not_awaited()
+    api.async_add_local_art.assert_not_awaited()

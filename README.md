@@ -160,8 +160,21 @@ data:
 response_variable: upload_result
 ```
 
-Local paths must reside in `/media` or `/config`. Only configure remote URLs
-from hosts you trust; Home Assistant fetches the URL directly from its network.
+Before using a remote source, explicitly trust its URL prefix in Home
+Assistant's `configuration.yaml`, then restart Home Assistant:
+
+```yaml
+homeassistant:
+  allowlist_external_urls:
+    - "https://render-host.local/"
+    - "http://192.168.68.20:8080/"
+```
+
+Local paths must reside in `/media` or `/config`. Home Assistant fetches remote
+URLs directly from its network, rejects embedded credentials and non-HTTP(S)
+schemes, and rechecks every redirect against `allowlist_external_urls`. Keep the
+allowed prefix as narrow as your renderer permits. The 30-second timeout and
+20 MiB streaming limit also apply when a server omits or misreports its size.
 When `response_variable` is requested, `upload_result.content_id` contains the
 exact TV content ID for a single target and `upload_result.content_ids` contains
 all returned IDs when multiple Frames are targeted.
@@ -199,7 +212,11 @@ Scan `/media/frame/inbox`, analyze each image with Gemini, move to `/media/frame
 ```yaml
 service: samsung_frame_art_director.process_inbox
 ```
-> **Note:** Requires a Gemini API key in the integration options. If rate-limited (HTTP 429), processing pauses and logs how many images were completed.
+> **Note:** Requires a Gemini API key in the integration options. JPEG, PNG and
+> WebP inputs are validated before upload to the provider and limited to 20 MiB,
+> 40 megapixels and 16,384 pixels on either side. If rate-limited (HTTP 429),
+> processing pauses and logs how many images were completed. Provider errors do
+> not include API keys or response bodies.
 
 #### sync_library
 Full bidirectional sync of the library database:

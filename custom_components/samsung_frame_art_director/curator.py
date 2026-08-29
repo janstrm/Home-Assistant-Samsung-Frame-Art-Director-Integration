@@ -9,14 +9,17 @@ This module handles:
 import os
 import shutil
 import logging
+from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
 
-from .ai import create_analyzer
+from .ai import create_analyzer, detect_image_mime
 from .api import SamsungFrameClient
 from .const import (
     AI_PROVIDER_GEMINI,
+    AI_PROVIDER_OPENAI,
     CONF_AI_PROVIDER,
     CONF_AI_MODEL,
     CONF_GEMINI_API_KEY,
@@ -30,6 +33,55 @@ from .file_access import UnsafeLocalPathError, ensure_allowed_local_path
 
 _LOGGER = logging.getLogger(__name__)
 
+MAX_AI_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_AI_IMAGE_PIXELS = 40_000_000
+MAX_AI_IMAGE_DIMENSION = 16_384
+_PROVIDER_CREDENTIALS = {
+    AI_PROVIDER_GEMINI: (CONF_GEMINI_API_KEY, "Gemini"),
+    AI_PROVIDER_OPENAI: (CONF_OPENAI_API_KEY, "OpenAI"),
+}
+
+
+class UnsafeAIImageError(ValueError):
+    """Raised when an image is unsafe to submit to an AI provider."""
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedAIImage:
+    """Validated image payload and metadata passed through the curator."""
+
+    data: bytes
+    width: int
+    height: int
+    file_size: int
+
+
+def _read_and_validate_ai_image(hass, path: Path) -> ValidatedAIImage:
+    """Read and validate an AI input while running in HA's executor."""
+    trusted_path = ensure_allowed_local_path(hass, path)
+    if trusted_path.stat().st_size > MAX_AI_IMAGE_BYTES:
+        raise UnsafeAIImageError("Image exceeds the 20 MiB AI input limit")
+
+    with trusted_path.open("rb") as file_handle:
+        data = file_handle.read(MAX_AI_IMAGE_BYTES + 1)
+    if len(data) > MAX_AI_IMAGE_BYTES:
+        raise UnsafeAIImageError("Image exceeds the 20 MiB AI input limit")
+
+    detect_image_mime(data)
+    with Image.open(BytesIO(data)) as image:
+        width, height = image.size
+        if (
+            width <= 0
+            or height <= 0
+            or width > MAX_AI_IMAGE_DIMENSION
+            or height > MAX_AI_IMAGE_DIMENSION
+            or width * height > MAX_AI_IMAGE_PIXELS
+        ):
+            raise UnsafeAIImageError("Image dimensions exceed the AI input limit")
+        image.verify()
+
+    return ValidatedAIImage(data, width, height, len(data))
+
 class ContentCurator:
     def __init__(self, hass, entry, api: SamsungFrameClient):
         self.hass = hass
@@ -38,22 +90,41 @@ class ContentCurator:
         self._inbox_dir = entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR
         self._library_dir = entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR
 
+    def _configured_provider(self) -> tuple[str, str, str]:
+        """Return provider, matching credential and display name atomically."""
+        provider = self.entry.options.get(
+            CONF_AI_PROVIDER,
+            AI_PROVIDER_GEMINI,
+        ).lower()
+        credential_option, display_name = _PROVIDER_CREDENTIALS.get(
+            provider,
+            _PROVIDER_CREDENTIALS[AI_PROVIDER_GEMINI],
+        )
+        return provider, self.entry.options.get(credential_option, ""), display_name
+
     def _build_analyzer(self):
         """Build the AI analyzer for the configured provider.
 
-        Returns ``(analyzer, error)``; ``error`` is ``None`` on success.
+        Returns ``(analyzer, api_key, error)`` from one options snapshot.
         """
-        provider = self.entry.options.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)
-        return create_analyzer(
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        provider, api_key, provider_name = self._configured_provider()
+        if not api_key:
+            return None, "", (
+                f"No {provider_name} API key configured. "
+                "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
+            )
+        analyzer, error = create_analyzer(
             provider,
-            gemini_api_key=self.entry.options.get(CONF_GEMINI_API_KEY, ""),
-            openai_api_key=self.entry.options.get(CONF_OPENAI_API_KEY, ""),
             model=self.entry.options.get(CONF_AI_MODEL, ""),
+            session=async_get_clientsession(self.hass),
         )
+        return analyzer, api_key, error
 
     async def async_process_inbox(self):
         """Process all images in the inbox."""
-        analyzer, analyzer_err = self._build_analyzer()
+        analyzer, api_key, analyzer_err = self._build_analyzer()
         if analyzer_err:
             _LOGGER.warning("Process Inbox: %s", analyzer_err)
             return {"count": 0, "error": analyzer_err}
@@ -97,13 +168,16 @@ class ContentCurator:
             
             # 1. Analyze (Atomic: Stop here if fails)
             try:
-                def _read_file():
-                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
-                    with trusted_source.open("rb") as file_handle:
-                        return file_handle.read()
-                
-                data = await self.hass.async_add_executor_job(_read_file)
-                result = await analyzer.analyze_image(data, prompt="Describe this image")
+                image = await self.hass.async_add_executor_job(
+                    _read_and_validate_ai_image,
+                    self.hass,
+                    source_path,
+                )
+                result = await analyzer.analyze_image(
+                    image.data,
+                    prompt="Describe this image",
+                    api_key=api_key,
+                )
                 
                 if "error" in result:
                     error_str = str(result['error'])
@@ -126,16 +200,7 @@ class ContentCurator:
                 
                 _LOGGER.info("Process Inbox: AI tagged '%s' -> Tags: %s", filename, tags)
 
-                # 2. Probe Metadata (Executor)
-                def _probe():
-                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
-                    with Image.open(trusted_source) as img:
-                        w, h = img.size
-                    return w, h, len(data)
-
-                width, height, file_size = await self.hass.async_add_executor_job(_probe)
-
-                # 3. Move to Library (Executor)
+                # 2. Move to Library (Executor)
                 def _move():
                     trusted_source = ensure_allowed_local_path(self.hass, source_path)
                     # Ensure unique filename in library
@@ -169,9 +234,9 @@ class ContentCurator:
                     file_path=dest_path,
                     tags=tags,
                     description=description,
-                    width=width,
-                    height=height,
-                    file_size=file_size
+                    width=image.width,
+                    height=image.height,
+                    file_size=image.file_size
                 )
                 processed_count += 1
                 
@@ -229,7 +294,7 @@ class ContentCurator:
             db_paths = await self.api.async_get_local_art_paths()
 
         # ── Phase 3: Add untracked files (on disk but not in DB) ────────
-        analyzer, analyzer_err = self._build_analyzer()
+        analyzer, api_key, analyzer_err = self._build_analyzer()
 
         def _get_disk_files():
             library_dir = ensure_allowed_local_path(self.hass, self._library_dir)
@@ -274,17 +339,17 @@ class ContentCurator:
 
             for path in missing_files:
                 try:
-                    def _read_and_probe():
-                        trusted_path = ensure_allowed_local_path(self.hass, path)
-                        with trusted_path.open("rb") as file_handle:
-                            data = file_handle.read()
-                        with Image.open(trusted_path) as img:
-                            w, h = img.size
-                        return data, w, h, len(data)
-
-                    data, width, height, size = await self.hass.async_add_executor_job(_read_and_probe)
+                    image = await self.hass.async_add_executor_job(
+                        _read_and_validate_ai_image,
+                        self.hass,
+                        path,
+                    )
                     
-                    result = await analyzer.analyze_image(data, prompt="Describe this image")
+                    result = await analyzer.analyze_image(
+                        image.data,
+                        prompt="Describe this image",
+                        api_key=api_key,
+                    )
                     if "error" in result:
                         error_str = str(result['error'])
                         if "429" in error_str:
@@ -302,9 +367,9 @@ class ContentCurator:
                         file_path=str(path),
                         tags=tags,
                         description=description,
-                        width=width,
-                        height=height,
-                        file_size=size
+                        width=image.width,
+                        height=image.height,
+                        file_size=image.file_size
                     )
                     added_count += 1
                     _LOGGER.info("Sync Library: Added '%s' -> Tags: %s", os.path.basename(path), tags)

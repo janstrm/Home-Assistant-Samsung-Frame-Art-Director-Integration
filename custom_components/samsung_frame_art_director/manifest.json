@@ -21,7 +21,7 @@
   "requirements": [
     "samsungtvws[async,encrypted]>=3.0.5"
   ],
-  "version": "1.10.5",
+  "version": "1.10.6",
   "zeroconf": [
     "_samsungmsf._tcp.local."
   ]

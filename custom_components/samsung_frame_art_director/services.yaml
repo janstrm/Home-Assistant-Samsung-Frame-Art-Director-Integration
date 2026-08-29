@@ -117,7 +117,8 @@ upload_art:
         will assume /media/frame/library/<filename>. An http(s):// URL is also
         accepted and fetched directly (handy when the image is rendered on another
         host on the network). Remote downloads have a 30-second timeout and a 20 MiB
-        limit. Only use URLs from hosts you trust.
+        limit. The URL and every redirect must match Home Assistant's
+        allowlist_external_urls; embedded credentials are rejected.
       example: /media/frame/library/example.jpg
       required: true
       selector:

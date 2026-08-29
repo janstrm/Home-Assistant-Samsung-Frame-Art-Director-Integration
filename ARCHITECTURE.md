@@ -294,9 +294,11 @@ strips a `scheme://`, path, and trailing `:port`) before probing.
 The `upload_art` service obtains the source bytes, then calls
 `async_upload_image(bytes, matte, source_file, tags) -> content_id | None`:
 
-1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch a trusted
-   HTTP(S) URL through Home Assistant's shared aiohttp client with a 30-second
-   timeout and 20 MiB limit.
+1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch an HTTP(S)
+   URL allowed by Home Assistant's `allowlist_external_urls` through its shared
+   aiohttp client with a 30-second timeout and 20 MiB streaming limit. Redirects
+   are followed manually (maximum five) and each destination is revalidated;
+   embedded credentials and unsupported schemes are rejected before I/O.
 2. Look up every tracked `content_id` for the exact `source_file`. Because the
    database is shared by all configured Frames, ask the target TV for its
    available art (30-second socket timeout) and fast-select the first matching
@@ -427,17 +429,26 @@ and keep the debug logging — it is the only diagnostic tool users have.
 
 `ai.py` defines:
 
-- `ImageAnalyzer` (ABC) — `analyze_image(bytes, prompt) -> dict` returning
+- `ImageAnalyzer` (ABC) — `analyze_image(bytes, prompt, api_key=...) -> dict`
+  returning
   `{tags, description, provider, model, duration}` or `{error}`.
-- `GeminiAnalyzer` — Google Gemini via REST (`aiohttp`), default model
-  `gemini-2.0-flash`. Prompts for ~15 keywords including weather/lighting/mood.
-- `OpenAIAnalyzer` — GPT-4o vision via the `openai` SDK. **Optional dependency:**
-  `openai` is *not* in `manifest.json` requirements, so selecting OpenAI requires
-  the package to be installed; the analyzer degrades gracefully (returns an
-  error dict) if it's missing.
-- `create_analyzer(provider, gemini_api_key, openai_api_key)` — the **factory**
-  and the only place that maps the `ai_provider` option to a concrete class.
-  Returns `(analyzer, error)`.
+- `GeminiAnalyzer` — Google Gemini via REST over Home Assistant's shared aiohttp
+  session, default model `gemini-2.5-flash`. The API key travels in the
+  `x-goog-api-key` header, never in the request URL or analyzer state.
+  Prompts for ~15 keywords including weather/lighting/mood.
+- `OpenAIAnalyzer` — GPT-4o vision via REST over the same shared aiohttp session.
+- `create_analyzer(provider, model, session=...)` — the **factory** and the only
+  place that maps the `ai_provider` option to a concrete class. Returns
+  `(analyzer, error)`. The curator supplies the selected credential only to the
+  individual `analyze_image` call; analyzer objects never retain it. Both
+  providers disable redirects and use fixed HTTPS endpoints with 30-second
+  timeouts.
+
+Before either provider is called, `curator.py` reads at most 20 MiB off-loop,
+detects JPEG/PNG/WebP from the byte signature, verifies the image with Pillow,
+and rejects images over 40 megapixels or 16,384 pixels on either side. Provider
+response bodies and exception text are not copied into logs or user-facing
+errors.
 
 The curator never instantiates a concrete analyzer directly; it calls
 `self._build_analyzer()` → `create_analyzer()`. **To add a provider:** implement
@@ -489,9 +500,6 @@ the [README](README.md#-services).
 - **`art_library` schema is two-place** — `CREATE TABLE` *and* the `ALTER`
   migrations must stay in sync (see [§5](#5-data-model-sqlite)). Adding a column
   in only one place silently breaks either fresh installs or upgrades.
-- **`OpenAIAnalyzer` needs a manual dependency.** `openai` isn't declared in
-  `manifest.json`. This is intentional (don't force the dep on Gemini users) but
-  means OpenAI silently errors until the package is installed.
 - **`async_rotate_art_now()` legacy modes.** Its `library` and `aware` modes are
   unimplemented no-ops; the live rotation path is `async_rotate_art()` /
   `async_rotate_from_folder()`. Don't confuse the two.
