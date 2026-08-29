@@ -29,6 +29,25 @@ def loaded_frame_targets(hass: HomeAssistant) -> list[FrameActionTarget]:
     ]
 
 
+def entry_entity_id(
+    hass: HomeAssistant,
+    entry: SamsungFrameConfigEntry,
+    entity_domain: str,
+    unique_id_suffix: str,
+) -> str | None:
+    """Resolve an entry-owned entity by stable unique ID.
+
+    Entity IDs are user-editable in Home Assistant, while the integration's
+    unique IDs remain stable. Internal action coordination must therefore use
+    the entity registry instead of assuming a generated entity ID.
+    """
+    return er.async_get(hass).async_get_entity_id(
+        entity_domain,
+        DOMAIN,
+        f"{entry.entry_id}_{unique_id_suffix}",
+    )
+
+
 async def async_resolve_action_targets(
     hass: HomeAssistant, call: ServiceCall
 ) -> list[FrameActionTarget]:

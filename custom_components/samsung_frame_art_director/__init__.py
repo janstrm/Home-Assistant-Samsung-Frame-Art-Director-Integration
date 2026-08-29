@@ -42,7 +42,11 @@ from .file_access import (
     resolve_upload_source,
 )
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
-from .targets import async_resolve_action_targets, loaded_frame_targets
+from .targets import (
+    async_resolve_action_targets,
+    entry_entity_id,
+    loaded_frame_targets,
+)
 
 
 # This integration is configured via the UI only (config entries), not YAML.
@@ -946,11 +950,13 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
 
     # --- NEW LOGIC: Respect Dashboard Filters ---
     # 1. Favorites Filter
-    fav_switch = hass.states.get("switch.samsung_frame_gallery_favorites_only")
+    fav_entity_id = entry_entity_id(hass, entry, "switch", "favorites_filter")
+    fav_switch = hass.states.get(fav_entity_id) if fav_entity_id else None
     fav_only = fav_switch and fav_switch.state == "on"
 
     # 2. Text/Tag Filter
-    text_filter = hass.states.get("text.samsung_frame_slideshow_filter")
+    text_entity_id = entry_entity_id(hass, entry, "text", "slideshow_filter")
+    text_filter = hass.states.get(text_entity_id) if text_entity_id else None
     tags_filter = []
     neg_filter = []
 
