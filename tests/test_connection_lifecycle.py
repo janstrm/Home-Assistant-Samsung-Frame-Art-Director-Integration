@@ -249,6 +249,7 @@ async def test_timed_out_art_call_holds_serialization_until_worker_finishes(hass
     """A timed-out Art worker cannot overlap the next Art operation."""
     events = []
     call_count = 0
+    socket_timeouts = []
 
     class FakeArt:
         def get_brightness(self):
@@ -267,7 +268,8 @@ async def test_timed_out_art_call_holds_serialization_until_worker_finishes(hass
     class FakeTV:
         token = "SAVED"
 
-        def __init__(self, *_args, **_kwargs):
+        def __init__(self, *_args, **kwargs):
+            socket_timeouts.append(kwargs.get("timeout"))
             self._art = FakeArt()
 
         def art(self):
@@ -292,6 +294,7 @@ async def test_timed_out_art_call_holds_serialization_until_worker_finishes(hass
         assert await second == 2
 
     assert events == ["start-1", "end-1", "start-2", "end-2"]
+    assert socket_timeouts == [0.01, 0.01]
 
 
 def test_shared_close_helper_closes_each_object_once(hass):
@@ -464,6 +467,57 @@ async def test_state_poll_and_setting_call_share_one_serialization_lock(hass):
         assert await brightness_task == 5
 
     assert events == ["state-start", "state-end", "brightness"]
+
+
+async def test_cleanup_revalidates_current_art_before_deleting(hass, tmp_path):
+    """A selection between cleanup scan and delete must be preserved."""
+    current_ids = iter(["MY-OTHER", "MY-DELETE"])
+    deleted_ids = []
+
+    class FakeArt:
+        token = "SAVED"
+
+        def get_current(self):
+            return {"content_id": next(current_ids)}
+
+        def available(self):
+            return [{"content_id": "MY-DELETE"}]
+
+        def delete_list(self, content_ids):
+            deleted_ids.extend(content_ids)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art(
+        "MY-DELETE",
+        source_file="/media/frame/library/delete.jpg",
+    )
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            preserve_current=True,
+        )
+
+    assert deleted_ids == []
+    assert summary["deleted"] == []
+    assert summary["to_delete"] == []
+    assert "MY-DELETE" in summary["skipped_current"]
 
 
 @pytest.mark.parametrize(
