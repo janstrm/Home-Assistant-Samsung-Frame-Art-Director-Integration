@@ -3,15 +3,69 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.const import MATCH_ALL
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.const import DOMAIN
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
+)
 from custom_components.samsung_frame_art_director.sensor import (
     SamsungFrameLibrarySensor,
+    async_setup_entry,
 )
+
+
+async def test_library_sensor_uses_renamed_filter_owned_by_its_entry(hass):
+    """Each Frame library follows its own stable filter entity identity."""
+    client = MagicMock()
+    client.async_get_library_data = AsyncMock(
+        return_value={
+            "items": [
+                {
+                    "id": "local-nature",
+                    "is_favorite": False,
+                    "category": "Landscape",
+                    "tags": "nature, green",
+                    "name": "nature.png",
+                },
+                {
+                    "id": "local-city",
+                    "is_favorite": False,
+                    "category": "Urban",
+                    "tags": "city, night",
+                    "name": "city.png",
+                },
+            ]
+        }
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local"},
+        unique_id="frame-filter",
+    )
+    entry.add_to_hass(hass)
+    entry.runtime_data = SamsungFrameRuntimeData(client=client)
+    filter_entity = er.async_get(hass).async_get_or_create(
+        "text",
+        DOMAIN,
+        f"{entry.entry_id}_slideshow_filter",
+        config_entry=entry,
+        suggested_object_id="renamed_frame_filter",
+    )
+    hass.states.async_set(filter_entity.entity_id, "nature")
+    add_entities = MagicMock()
+
+    await async_setup_entry(hass, entry, add_entities)
+
+    sensor = add_entities.call_args.args[0][0]
+    assert sensor.coordinator.data["filtered_count"] == 1
+    assert [item["id"] for item in sensor.coordinator.data["items"]] == [
+        "local-nature"
+    ]
 
 
 def test_large_gallery_stays_live_without_entering_recorder_history():
