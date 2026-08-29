@@ -50,11 +50,26 @@ def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
 
 
 def _canonical_source_identity(hass: HomeAssistant, source: str) -> str:
-    """Return a stable identity for harmless aliases of one local source."""
-    from urllib.parse import urlsplit
+    """Return a stable identity for harmless aliases of one artwork source."""
+    import posixpath
+    from urllib.parse import urlsplit, urlunsplit
 
-    if urlsplit(source).scheme.lower() in ("http", "https"):
-        return source
+    parsed = urlsplit(source)
+    scheme = parsed.scheme.lower()
+    if scheme in ("http", "https"):
+        hostname = (parsed.hostname or "").lower()
+        if ":" in hostname:
+            hostname = f"[{hostname}]"
+        port = parsed.port
+        if port and not (
+            (scheme == "http" and port == 80)
+            or (scheme == "https" and port == 443)
+        ):
+            hostname = f"{hostname}:{port}"
+        path = posixpath.normpath(parsed.path or "/")
+        if parsed.path.endswith("/") and not path.endswith("/"):
+            path += "/"
+        return urlunsplit((scheme, hostname, path, parsed.query, ""))
     try:
         return str(resolve_upload_source(hass, source))
     except UnsafeLocalPathError:
