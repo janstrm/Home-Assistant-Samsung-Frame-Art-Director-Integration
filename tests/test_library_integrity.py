@@ -101,3 +101,41 @@ async def test_slideshow_cleanup_uses_configured_options(hass, dashboard_filter)
         only_integration_managed=True,
         dry_run=True,
     )
+
+
+async def test_manual_cleanup_action_uses_complete_default_policy(hass):
+    """The public cleanup action and automatic paths share safe defaults."""
+    hass.http = MagicMock()
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "token"
+    client.async_connect_and_pair = AsyncMock()
+    client.async_cleanup_storage = AsyncMock()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "token": "token"},
+    )
+    entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+    ):
+        assert await async_setup_entry(hass, entry)
+        await hass.services.async_call(DOMAIN, "cleanup_storage", blocking=True)
+
+    client.async_cleanup_storage.assert_awaited_once_with(
+        max_items=50,
+        max_age_days=None,
+        preserve_current=True,
+        only_integration_managed=True,
+        dry_run=False,
+    )
