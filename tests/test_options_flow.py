@@ -1,14 +1,32 @@
 """Tests for the options flow: section flattening and label coverage."""
 import json
 import pathlib
+from unittest.mock import MagicMock
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.config_flow import (
     OPTION_SECTIONS,
     OptionsFlowHandler,
 )
-from custom_components.samsung_frame_art_director.const import DOMAIN
+from custom_components.samsung_frame_art_director.const import (
+    CONF_ENABLE_ART_SETTINGS,
+    DATA_CLIENT,
+    DOMAIN,
+)
+from custom_components.samsung_frame_art_director.number import (
+    SamsungFrameBrightness,
+    async_setup_entry as async_setup_number,
+)
+from custom_components.samsung_frame_art_director.select import (
+    SamsungFrameMotionTimerSelect,
+    async_setup_entry as async_setup_select,
+)
+from custom_components.samsung_frame_art_director.switch import (
+    SamsungFrameBrightnessSensorSwitch,
+    async_setup_entry as async_setup_switch,
+)
 
 _COMPONENT_DIR = (
     pathlib.Path(__file__).parent.parent
@@ -68,3 +86,40 @@ def test_every_form_key_has_a_label_in_both_translations():
             labels = set(sections[section_key].get("data", {}))
             for key in option_keys:
                 assert key in labels, f"{fn}: missing label for {section_key}.{key}"
+
+
+@pytest.mark.parametrize(
+    ("setup_platform", "art_entity_type"),
+    [
+        (async_setup_number, SamsungFrameBrightness),
+        (async_setup_select, SamsungFrameMotionTimerSelect),
+        (async_setup_switch, SamsungFrameBrightnessSensorSwitch),
+    ],
+)
+@pytest.mark.parametrize(("option_value", "expected"), [(None, True), (False, False)])
+async def test_art_setting_entity_default(
+    hass,
+    setup_platform,
+    art_entity_type,
+    option_value,
+    expected,
+):
+    """Art-setting entities default on and remain explicitly disableable."""
+    options = (
+        {}
+        if option_value is None
+        else {CONF_ENABLE_ART_SETTINGS: option_value}
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "1.2.3.4"},
+        options=options,
+    )
+    client = MagicMock()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: client}
+    add_entities = MagicMock()
+
+    await setup_platform(hass, entry, add_entities)
+
+    entities = add_entities.call_args.args[0]
+    assert any(isinstance(entity, art_entity_type) for entity in entities) is expected

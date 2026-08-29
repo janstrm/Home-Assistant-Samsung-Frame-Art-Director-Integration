@@ -1,5 +1,5 @@
 """Tests for upload_art image sourcing: http(s) URL vs local path."""
-from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, call, mock_open, patch
 
 import pytest
 from homeassistant.exceptions import ServiceValidationError
@@ -77,6 +77,9 @@ async def upload_service(hass):
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
+    client.async_get_artmode_status = AsyncMock()
+    client.async_send_key = AsyncMock()
+    client.async_set_artmode = AsyncMock()
     client.async_upload_image = AsyncMock()
     client.async_track_art = AsyncMock()
     client.async_cleanup_storage = AsyncMock()
@@ -84,7 +87,7 @@ async def upload_service(hass):
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "frame.local", "token": "token"},
-        options={},
+        options={"use_power_key_on_off": True},
     )
     entry.add_to_hass(hass)
 
@@ -126,8 +129,10 @@ async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_ser
     upload_service.async_upload_image.assert_awaited_once_with(
         b"JPEGDATA",
         matte="none",
+        source_file="HTTPS://render.local/wakeup.jpg?cache=42",
+        tags=None,
     )
-    upload_service.async_track_art.assert_awaited_once_with("wakeup.jpg", tags=None)
+    upload_service.async_track_art.assert_not_awaited()
 
 
 async def test_upload_art_rejects_declared_oversized_download(hass, upload_service):
@@ -211,5 +216,84 @@ async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
     upload_service.async_upload_image.assert_awaited_once_with(
         b"LOCALIMAGE",
         matte="none",
+        source_file="sunset.png",
+        tags=None,
     )
-    upload_service.async_track_art.assert_awaited_once_with("sunset.png", tags=None)
+    upload_service.async_track_art.assert_not_awaited()
+
+
+async def test_upload_art_returns_real_tv_content_id(hass, upload_service):
+    """Callers can request the exact content ID as a service response."""
+    upload_service.async_upload_image.return_value = "MY-CONTENT-123"
+
+    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+        response = await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "sunset.png", "tags": "morning"},
+            blocking=True,
+            return_response=True,
+        )
+
+    assert response == {
+        "content_id": "MY-CONTENT-123",
+        "content_ids": ["MY-CONTENT-123"],
+    }
+
+
+async def test_upload_art_tracks_tags_on_the_real_content_id(hass, upload_service):
+    """Tracking inputs travel with the upload instead of a basename upsert."""
+    upload_service.async_upload_image.return_value = "MY-CONTENT-123"
+
+    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "sunset.png", "tags": "morning"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"LOCALIMAGE",
+        matte="none",
+        source_file="sunset.png",
+        tags="morning",
+    )
+    upload_service.async_track_art.assert_not_awaited()
+
+
+async def test_power_key_wake_requires_explicit_off_status(hass, upload_service):
+    """An unknown status must not trigger the toggle-style POWER key."""
+    upload_service.async_get_artmode_status.return_value = None
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_artmode",
+        {"enabled": True},
+        blocking=True,
+    )
+
+    upload_service.async_set_artmode.assert_awaited_once_with(True)
+    upload_service.async_send_key.assert_not_awaited()
+
+
+async def test_power_key_wakes_tv_after_explicit_off_status(hass, upload_service):
+    """An explicitly off TV gets POWER and Art Mode is reasserted."""
+    upload_service.async_get_artmode_status.return_value = "off"
+
+    with patch(
+        "custom_components.samsung_frame_art_director.asyncio.sleep",
+        AsyncMock(),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_artmode",
+            {"enabled": True},
+            blocking=True,
+        )
+
+    assert upload_service.async_set_artmode.await_args_list == [
+        call(True),
+        call(True),
+    ]
+    upload_service.async_send_key.assert_awaited_once_with("KEY_POWER")

@@ -8,7 +8,14 @@ from homeassistant.const import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SLIDESHOW_ENABLED, DOMAIN, DATA_CLIENT, CONF_DUID, CONF_ENABLE_ART_SETTINGS
+from .const import (
+    CONF_DUID,
+    CONF_ENABLE_ART_SETTINGS,
+    CONF_SLIDESHOW_ENABLED,
+    DATA_CLIENT,
+    DEFAULT_ENABLE_ART_SETTINGS,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,7 +32,7 @@ async def async_setup_entry(
         SamsungFrameSlideshowSwitch(entry),
         SamsungFrameFavoritesSwitch(entry),
     ]
-    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, DEFAULT_ENABLE_ART_SETTINGS):
         entities.append(SamsungFrameBrightnessSensorSwitch(entry, client))
     async_add_entities(entities, True)
 

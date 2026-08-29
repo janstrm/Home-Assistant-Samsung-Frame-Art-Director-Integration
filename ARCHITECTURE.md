@@ -18,10 +18,11 @@ A [Home Assistant](https://www.home-assistant.io/) **custom integration**
 The Frame TV. It is installable via HACS as a custom repository.
 
 It communicates with the TV exclusively over Samsung's **internal WebSocket
-API**, via the [`samsungtvws`](https://github.com/NickWaterton/samsung-tv-ws-api)
-library (the NickWaterton fork, pinned in `manifest.json`). There is no official
-Samsung API; everything here is reverse-engineered and confirmed working on the
-**Q65LS03DAU**. Other models/years may behave differently.
+API**, via the [`samsungtvws`](https://github.com/xchwarze/samsung-tv-ws-api)
+library (official PyPI release `samsungtvws[async,encrypted]>=3.0.5`, which
+added full Art Mode support). There is no official Samsung API; everything here is
+reverse-engineered and confirmed working on the **Q65LS03DAU**. Other
+models/years may behave differently.
 
 Core capabilities:
 
@@ -59,7 +60,7 @@ Core capabilities:
 │         (async facade + SQLite DB)        OpenAI REST APIs      │
 │                    │                                            │
 └────────────────────┼────────────────────────────────────────────┘
-                     │  samsungtvws (sync + async)
+                     │  samsungtvws (sync art() in executor)
                      ▼
         Samsung Frame TV  (WebSocket :8002/:8001, encrypted :8000)
                      ▲
@@ -99,7 +100,7 @@ custom_components/samsung_frame_art_director/
 ├── services.yaml      # Service schemas (UI metadata)
 ├── strings.json       # config/options flow strings
 ├── translations/en.json
-├── manifest.json      # domain, version, requirements (samsungtvws fork)
+├── manifest.json      # domain, version, requirements (samsungtvws>=3.0.5)
 └── icon.png
 examples/dashboard.yaml # Reference 3-column gallery dashboard
 docs/ARCHITECTURE.md    # (this file)
@@ -271,29 +272,32 @@ strips a `scheme://`, path, and trailing `:port`) before probing.
 `async_set_artmode(enabled)` → `_async_set_artmode_locked()` (under `_art_lock`):
 
 1. **Early-exit** if already in the desired state.
-2. Prefer the **async remote** path (`SamsungTVWSAsyncRemote.art().set_artmode`),
-   then verify `get_artmode()` up to 3× with 2s spacing.
-3. **Fallback** to the sync client in a thread. On *enable*, if verification
-   fails, it force-`select_image()`s a candidate to coax Art Mode on.
+2. Open a short-lived synchronous `SamsungTVWS` client in a worker thread and
+   call `art().set_artmode()`.
+3. Verify `get_artmode()` up to 3× with 2s spacing. On *enable*, if verification
+   fails, force-`select_image()` a candidate to coax Art Mode on.
 4. Optional service-layer extras (in `__init__.py`): **Wake-on-LAN** before ON,
-   and a **POWER key** fallback for OFF.
+   and a **POWER key** fallback when a fully-off TV does not wake into Art Mode
+   or when OFF is not applied.
 
 ### Upload an image
 
 The `upload_art` service obtains the source bytes, then calls
-`async_upload_image(bytes, matte, source_file)`:
+`async_upload_image(bytes, matte, source_file, tags) -> content_id | None`:
 
 1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch a trusted
    HTTP(S) URL through Home Assistant's shared aiohttp client with a 30-second
    timeout and 20 MiB limit.
 2. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
    **3840×2160**, JPEG q85.
-3. Under `_art_lock`: try the **async art API** twice (ports 8002→8001), each
-   attempt uploading + selecting + applying matte. Track the new `content_id` in
-   `art_library` with its `source_file`.
-4. If async fails, fall back to the **sync** path with up to 5 retries and
-   exponential backoff, priming the art channel before each attempt and
-   recreating the client on `ConnectionFailure`.
+3. Under `_art_lock`, use the synchronous Art API on port 8002 in a worker
+   thread to upload, select, and apply the matte.
+4. Retry up to 5× with exponential backoff, priming the art channel before
+   each attempt and recreating the client on `ConnectionFailure`.
+5. Track the exact TV-returned `content_id` once in `art_library`, together with
+   its tags and source path/URL, and return it to the service. With Home
+   Assistant's optional service response enabled, callers receive `content_id`
+   for a single target and `content_ids` for all targets.
 
 ### Process Inbox {#process-inbox}
 
@@ -359,17 +363,17 @@ Patterns you will see repeated, and why they exist:
   `_capture_token()` runs on close to **persist any token the TV re-issues** (via
   a loop-safe `set_token_persister` callback wired in `__init__.py`) so
   authorization doesn't drift. Never construct a bare `SamsungTVWS(host)`.
-- **Optional persistent connection.** The `use_persistent_connection` option
-  (default off) lets `async_get_state` (the 30s status poll) reuse one
-  `SamsungTVWSAsyncRemote` instead of reconnecting each time. `_persistent_state`
-  returns `None` on any error so `async_get_state` falls back to the per-call
-  path and resets the connection — enabling it can never break polling.
-- **Async-first, sync-fallback.** `SamsungTVWSAsyncRemote` / `SamsungTVAsyncArt`
-  are preferred (non-blocking, fewer stalls), but not present/working on every
-  library version or model — so a synchronous `SamsungTVWS`-in-a-thread path
-  always backs it up.
-- **Dual ports 8002 → 8001.** SSL is preferred; some units only answer on the
-  non-SSL port. Probing and uploads try both.
+- **Connection model.** Every art operation opens a short-lived, properly
+  identified `SamsungTVWS` and uses its synchronous `art()` API off the event
+  loop via `asyncio.to_thread` (`async_get_state`, `_async_art`,
+  `async_upload_image`, `async_set_artmode`, …). There is no long-lived
+  connection; the `_art_lock` serializes concurrent art operations.
+- **Pairing vs. art operations.** `bridge.py` uses the official async/encrypted
+  clients for discovery and pairing. Runtime Art API calls use short-lived sync
+  clients in worker threads because the full Art Mode settings API is exposed
+  there.
+- **Port selection.** Pairing probes the ports supported by the TV; art uploads
+  use the authenticated SSL WebSocket on port 8002.
 - **Retries + exponential backoff.** Upload retries 5× on transient
   `ConnectionFailure`, recreating the client between attempts; the art channel
   is "primed" (`supported()` / `get_artmode()`) before attempts.
@@ -477,17 +481,18 @@ the [README](README.md#-services).
 
 ## 12. Development notes
 
-- **Dependency:** `samsungtvws` is the **NickWaterton fork**, pinned to a
-  specific commit SHA in `manifest.json`
-  (`...samsung-tv-ws-api.git@<sha>`). The fork has no PyPI release and its
-  `master` API shifts over time (e.g. the Dec 2025 upload-API rework), so we pin
-  to a known-good commit for reproducible installs. **To upgrade:** read the
-  fork's recent commits, verify the `art()` method signatures we call still
-  match `api.py` (`upload`, `select_image`, `change_matte`, `set_artmode`,
-  `get_artmode`, `get_current`, `get_thumbnail`, `available`, `delete`,
-  `delete_list`), then update the SHA and bump the integration version. HA
-  installs the dep into `deps`; `__init__.py` also adds the deps dir to
-  `sys.path` and patches `helper.is_true` for older builds.
+- **Dependency:** `samsungtvws[async,encrypted]>=3.0.5` from PyPI (the official
+  [xchwarze](https://github.com/xchwarze/samsung-tv-ws-api) package, which gained
+  full Art Mode support in the 3.0 line). All art calls go through the sync
+  `SamsungTVWS.art()` API run in executor threads; `bridge.py` uses the async
+  remote/encrypted classes for pairing only. **To upgrade:** bump the minimum and
+  verify the `art()` method signatures we call still match `api.py` (`upload`,
+  `select_image`, `change_matte`, `set_artmode`, `get_artmode`, `get_current`,
+  `get_thumbnail`, `available`, `delete`, `delete_list`, `get_brightness`,
+  `set_brightness`, `get_color_temperature`, `set_color_temperature`,
+  `set_motion_timer`, `set_motion_sensitivity`, `set_brightness_sensor_setting`,
+  `get_artmode_settings`). HA installs the dep into `deps`; `__init__.py` also
+  adds the deps dir to `sys.path` and patches `helper.is_true` for older builds.
 - **Quick sanity check** (no HA required):
   ```bash
   python3 -m py_compile custom_components/samsung_frame_art_director/*.py

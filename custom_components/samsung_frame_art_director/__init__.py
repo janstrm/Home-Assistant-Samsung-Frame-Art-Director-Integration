@@ -4,7 +4,7 @@ import logging
 import asyncio
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed, ServiceValidationError
 from homeassistant.helpers import entity_registry as er, service as ha_service
 import homeassistant.helpers.config_validation as cv
@@ -25,7 +25,6 @@ from .const import (
     DEFAULT_SLIDESHOW_INTERVAL,
     CONF_RESIZE_MODE,
     DEFAULT_RESIZE_MODE,
-    CONF_USE_PERSISTENT,
     CONF_INBOX_DIR,
     DEFAULT_INBOX_DIR,
     CONF_LIBRARY_DIR,
@@ -53,6 +52,42 @@ PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sen
 _LOGGER = logging.getLogger(__name__)
 
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None:
+    """Send a Wake-on-LAN magic packet to ``mac`` via UDP broadcast.
+
+    Self-contained so it doesn't require the ``wake_on_lan`` integration to be
+    set up. Raises on malformed MAC or socket failure so the caller can log it.
+
+    Broadcasts to both the global broadcast address and any provided
+    subnet-directed broadcast (e.g. 192.168.68.255), since some switch/AP
+    setups only forward the directed broadcast to a sleeping device.
+    """
+    import socket
+
+    hexmac = mac.replace(":", "").replace("-", "").replace(".", "").strip()
+    if len(hexmac) != 12:
+        raise ValueError(f"Invalid MAC address: {mac!r}")
+    payload = bytes.fromhex("FF" * 6 + hexmac * 16)
+    targets = ["255.255.255.255"]
+    for ip in broadcast_ips or []:
+        if ip and ip not in targets:
+            targets.append(ip)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sent = False
+        last_error: OSError | None = None
+        # Standard WoL ports (9 and 7) on every target broadcast address.
+        for ip in targets:
+            for port in (9, 7):
+                try:
+                    sock.sendto(payload, (ip, port))
+                    sent = True
+                except OSError as err:
+                    last_error = err
+        if not sent and last_error is not None:
+            raise last_error
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -260,7 +295,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     client.set_token_persister(_persist_token)
     client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
-    client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
@@ -341,13 +375,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     mac = opts.get("mac_address")
                     if mac:
                         try:
-                            from homeassistant.components.wake_on_lan import async_send_magic_packet
-                            await async_send_magic_packet(mac)
+                            # Also try the common /24 broadcast candidate derived
+                            # from the TV's IP (e.g. .61 -> .255). The global
+                            # broadcast remains the portable fallback because
+                            # the TV does not expose its subnet mask here.
+                            bcasts = []
+                            host_ip = getattr(client, "host", None)
+                            if host_ip and host_ip.count(".") == 3:
+                                bcasts.append(host_ip.rsplit(".", 1)[0] + ".255")
+                            await hass.async_add_executor_job(_send_magic_packet, mac, bcasts)
+                            _LOGGER.debug("Sent WoL to %s (broadcasts=%s), sleeping before Art ON", mac, bcasts)
                             await asyncio.sleep(3)
-                            _LOGGER.debug("Sent WoL to %s, sleeping before Art ON", mac)
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.debug("WoL send failed or module unavailable")
+                        except Exception as wol_err:  # noqa: BLE001
+                            _LOGGER.warning("WoL send to %s failed: %r", mac, wol_err)
                 await client.async_set_artmode(enabled)
+                if enabled and opts and opts.get("use_power_key_on_off"):
+                    # A fully powered-off Frame accepts set_artmode over the art
+                    # channel but won't physically light the panel. If it still
+                    # reports off, send the POWER key to wake it, then re-assert
+                    # Art Mode so it lands on art rather than live TV.
+                    status = await client.async_get_artmode_status()
+                    if status in ("off", "false", "0", "none"):
+                        _LOGGER.debug("ON wake: TV still off; sending POWER key to wake")
+                        try:
+                            await client.async_send_key("KEY_POWER")
+                            await asyncio.sleep(3)
+                            await client.async_set_artmode(True)
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug("ON wake: POWER key path unavailable")
                 if not enabled and opts and opts.get("use_power_key_on_off"):
                     # Re-check quickly; if still on, attempt POWER key once
                     status = await client.async_get_artmode_status()
@@ -365,7 +420,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not found:
             _LOGGER.debug("set_artmode: no target client resolved; nothing executed")
 
-    async def _svc_upload_art(call: ha_service.ServiceCall) -> None:
+    async def _svc_upload_art(call: ha_service.ServiceCall) -> dict | None:
         path = call.data.get("path")
         tags = call.data.get("tags")
         # Matte from call data, else the configured style/color (or 'none').
@@ -373,21 +428,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
-        remote_filename = _remote_filename(path)
+        # Preserve the established validation that a source has a usable name.
+        _remote_filename(path)
         # Read the image (http(s) URL fetched via the shared aiohttp client; a
         # local path is sandboxed + read off-loop in an executor).
         image_bytes = await _async_read_image_bytes(hass, path)
         found = False
+        content_ids: list[str] = []
         async for client in _resolve_clients(call):
             found = True
             _LOGGER.debug("upload_art: invoking client on host=%s", getattr(client, "host", "?"))
             try:
-                await client.async_upload_image(image_bytes, matte=matte)
-                # Track and cleanup
-                # We assume the file uploaded is the basename
-                # Ideally async_upload_image would return the content_id/filename it uploaded.
-                await client.async_track_art(remote_filename, tags=tags)
-                
+                content_id = await client.async_upload_image(
+                    image_bytes,
+                    matte=matte,
+                    source_file=path,
+                    tags=tags,
+                )
+                if content_id:
+                    content_ids.append(str(content_id))
+
                 # Run automatic cleanup (defaults from const)
                 # We do this asynchronously to not block the service return too long, 
                 # though here we await it for simplicity as the user expects "done" state.
@@ -402,6 +462,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
         if not found:
             _LOGGER.debug("upload_art: no target client resolved; nothing executed")
+        if call.return_response:
+            return {
+                "content_id": content_ids[0] if len(content_ids) == 1 else None,
+                "content_ids": content_ids,
+            }
+        return None
 
     # Schema for services
     hass.services.async_register(
@@ -420,6 +486,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             vol.Optional("tags"): str,
             vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
         }),
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
     async def _svc_art_diagnostics(call: ha_service.ServiceCall) -> None:
@@ -699,7 +766,6 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if data and (client := data.get(DATA_CLIENT)):
         client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
-        client.set_persistent(entry.options.get(CONF_USE_PERSISTENT, False))
 
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)

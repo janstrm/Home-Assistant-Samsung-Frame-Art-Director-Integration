@@ -106,8 +106,9 @@ upload_art:
   name: Upload Art
   description: >-
     Upload an image and display it on the Frame. The integration preprocesses the
-    image to 3840x2160. Uses the async Art API when available for reliability and
-    falls back to the sync path otherwise.
+    image to 3840x2160 and uses the official synchronous Art API off the event
+    loop. When a response is requested, it returns the exact TV content ID (and
+    the list of IDs for multiple targets).
   target:
     entity:
       domain: media_player

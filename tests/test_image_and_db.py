@@ -1,5 +1,10 @@
 """Tests for image preprocessing and the local-art DB helpers."""
+import asyncio
 import io
+import sys
+import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -28,19 +33,130 @@ async def test_preprocess_fit_outputs_target_size(hass):
         assert im.size == (3840, 2160)
 
 
+async def test_upload_image_returns_tv_content_id(hass):
+    """Callers receive the exact content ID returned by the TV library."""
+
+    class FakeArt:
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def get_current(self):
+            return {"content_id": "MY-CONTENT-123"}
+
+        def available(self):
+            return []
+
+        def upload(self, _image, **_kwargs):
+            return "MY-CONTENT-123"
+
+        def select_image(self, _content_id, *, show=True):
+            return show
+
+        def change_matte(self, *_args, **_kwargs):
+            return True
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    client = SamsungFrameClient(hass, "1.2.3.4")
+
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(_jpeg(100, 100))
+
+    assert content_id == "MY-CONTENT-123"
+
+
+async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
+    """A post-upload selection timeout must not upload the image again."""
+    upload_calls = 0
+
+    class FakeArt:
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return f"MY-CONTENT-{upload_calls}"
+
+        def select_image(self, _content_id, *, show=True):
+            assert show is True
+            time.sleep(0.2)
+
+        def change_matte(self, *_args, **_kwargs):
+            return True
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    real_wait_for = asyncio.wait_for
+
+    async def short_wait_for(awaitable, timeout):
+        return await real_wait_for(awaitable, timeout=0.05)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}),
+        patch(
+            "custom_components.samsung_frame_art_director.api.asyncio.wait_for",
+            side_effect=short_wait_for,
+        ),
+    ):
+        content_id = await client.async_upload_image(_jpeg(100, 100))
+
+    assert content_id == "MY-CONTENT-1"
+    assert upload_calls == 1
+
+
 async def test_get_state_falls_back_gracefully_without_tv(hass):
     # No TV reachable: the per-call path must degrade to a safe empty result.
     client = SamsungFrameClient(hass, "127.0.0.1")
     assert await client.async_get_state() == {"status": None, "content_id": None}
 
 
-async def test_persistent_flag_falls_back_when_connection_fails(hass):
-    # With persistence on but no TV, _persistent_state returns None and the
-    # per-call fallback still yields a safe result.
-    client = SamsungFrameClient(hass, "127.0.0.1")
-    client.set_persistent(True)
-    assert client._use_persistent is True
-    assert await client.async_get_state() == {"status": None, "content_id": None}
+def test_manifest_requires_pypi_samsungtvws():
+    # HACS/hassfest discourage git+ requirements. Guard against regressing to a
+    # VCS dependency: the requirement must resolve from PyPI.
+    import json
+    from pathlib import Path
+
+    manifest = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "custom_components"
+            / "samsung_frame_art_director"
+            / "manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    reqs = manifest["requirements"]
+    assert any(r.startswith("samsungtvws") for r in reqs)
+    assert not any("git+" in r or "@git" in r for r in reqs), reqs
 
 
 async def test_local_art_crud(hass, tmp_path):

@@ -8,7 +8,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SLIDESHOW_INTERVAL, DEFAULT_SLIDESHOW_INTERVAL, DOMAIN, CONF_DUID, DATA_CLIENT, CONF_ENABLE_ART_SETTINGS
+from .const import (
+    CONF_DUID,
+    CONF_ENABLE_ART_SETTINGS,
+    CONF_SLIDESHOW_INTERVAL,
+    DATA_CLIENT,
+    DEFAULT_ENABLE_ART_SETTINGS,
+    DEFAULT_SLIDESHOW_INTERVAL,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,7 +33,7 @@ async def async_setup_entry(
         SamsungFrameSlideshowInterval(entry),
         SamsungFrameGalleryPage(entry),
     ]
-    if entry.options.get(CONF_ENABLE_ART_SETTINGS, False):
+    if entry.options.get(CONF_ENABLE_ART_SETTINGS, DEFAULT_ENABLE_ART_SETTINGS):
         entities += [
             SamsungFrameBrightness(entry, client),
             SamsungFrameColorTemperature(entry, client),

@@ -146,10 +146,15 @@ target:
   entity_id: media_player.samsung_frame
 data:
   path: https://render-host.local/example.jpg
+  tags: "dashboard, morning"
+response_variable: upload_result
 ```
 
 Local paths must reside in `/media` or `/config`. Only configure remote URLs
 from hosts you trust; Home Assistant fetches the URL directly from its network.
+When `response_variable` is requested, `upload_result.content_id` contains the
+exact TV content ID for a single target and `upload_result.content_ids` contains
+all returned IDs when multiple Frames are targeted.
 
 #### rotate_art_now
 Force an immediate rotation of the displayed art. Picks a random image from the library (optionally filtered by tags). Automatically retries if a selected image no longer exists on disk.
@@ -317,7 +322,7 @@ Check HA logs filtered by `samsung_frame_art_director` for detailed error messag
 
 > [!NOTE]
 > **Art‑Mode settings (brightness, color temperature, motion, auto‑brightness) show `unknown` / don't apply.**
-> These features exist only in the **NickWaterton `samsungtvws` fork** that this integration pins. If another integration (e.g. Home Assistant's built‑in **Samsung Smart TV**) already installed the official `samsungtvws` from PyPI, HA keeps that version and ignores the pin — so those extra settings won't work. They're therefore **hidden by default**; enable **Show Art‑Mode setting entities** under the integration's options → *Advanced* (and reload) only if you have the fork. **Everything else (Art Mode on/off, uploads, slideshow, matte, gallery, Media browser) works on either version.** Check the installed version in the logs at startup (`samsungtvws package version: …`).
+> These use the Art Mode API in `samsungtvws` ≥ 3.0.5 (installed automatically). They're **enabled by default**; if your TV or firmware rejects a particular setting, you can turn them off via the integration's options → *Advanced* → **Show Art‑Mode setting entities** (then reload). Check the installed library version in the logs at startup (`samsungtvws package version: …`).
 
 ---
 
