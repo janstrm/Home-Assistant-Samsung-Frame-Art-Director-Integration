@@ -24,11 +24,14 @@ def _client(host: str) -> MagicMock:
     )
     client.async_upload_image = AsyncMock(return_value=f"MY-{host}")
     client.async_cleanup_storage = AsyncMock()
+    client.async_purge_database = AsyncMock()
     return client
 
 
-async def test_targeted_upload_uses_only_the_selected_frames_options(hass):
-    """A targeted upload cannot leak calls or options between two Frames."""
+async def test_targeted_actions_use_only_the_selected_frames_runtime_and_options(
+    hass,
+):
+    """Targeted actions cannot leak calls or options between two Frames."""
     hass.http = MagicMock()
     first_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -101,3 +104,13 @@ async def test_targeted_upload_uses_only_the_selected_frames_options(hass):
     second_client.async_read_local_art.assert_not_awaited()
     second_client.async_upload_image.assert_not_awaited()
     second_client.async_cleanup_storage.assert_not_awaited()
+
+    await hass.services.async_call(
+        DOMAIN,
+        "purge_database",
+        {"entity_id": entity.entity_id},
+        blocking=True,
+    )
+
+    first_client.async_purge_database.assert_awaited_once_with()
+    second_client.async_purge_database.assert_not_awaited()
