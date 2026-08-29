@@ -336,7 +336,7 @@ When configured, the integration creates the following entities (where `samsung_
 ### Sensors
 | Entity | Description |
 |---|---|
-| `sensor.samsung_frame_art_library` | Reports total tracked artworks. Attributes include the full `items` list for dashboard gallery rendering. |
+| `sensor.samsung_frame_art_library` | Reports total tracked artworks. Live attributes include the paged `items` list for dashboard gallery rendering; the volatile gallery payload is excluded from Recorder history. |
 
 ---
 
