@@ -291,13 +291,23 @@ The `upload_art` service obtains the source bytes, then calls
 1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch a trusted
    HTTP(S) URL through Home Assistant's shared aiohttp client with a 30-second
    timeout and 20 MiB limit.
-2. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
+2. Look up every tracked `content_id` for the exact `source_file`. Because the
+   database is shared by all configured Frames, ask the target TV for its
+   available art (30-second socket timeout) and fast-select the first matching
+   ID. The blocking worker is cancellation-contained: its caller retains
+   `_art_lock` until the worker exits, so it cannot perform a late selection
+   beside a subsequent Art operation. Update its tags and return without
+   uploading. Only a successfully confirmed absence permits a new upload; DB
+   lookup, TV check, and selection failures abort to avoid duplicate copies.
+   The check is repeated under `_art_lock` immediately before upload so
+   concurrent calls for one source cannot both create a copy.
+3. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
    **3840×2160**, JPEG q85.
-3. Under `_art_lock`, use the synchronous Art API on port 8002 in a worker
+4. Under `_art_lock`, use the synchronous Art API on port 8002 in a worker
    thread to upload, select, and apply the matte.
-4. Retry up to 5× with exponential backoff, priming the art channel before
+5. Retry up to 5× with exponential backoff, priming the art channel before
    each attempt and recreating the client on `ConnectionFailure`.
-5. Track the exact TV-returned `content_id` once in `art_library`, together with
+6. Track the exact TV-returned `content_id` once in `art_library`, together with
    its tags and source path/URL, and return it to the service. With Home
    Assistant's optional service response enabled, callers receive `content_id`
    for a single target and `content_ids` for all targets.

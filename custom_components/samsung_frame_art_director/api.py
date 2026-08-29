@@ -78,7 +78,11 @@ class SamsungFrameClient:
         """
         self._token_persister = persister
 
-    def _make_tv(self, port: Optional[int] = None):
+    def _make_tv(
+        self,
+        port: Optional[int] = None,
+        timeout: Optional[float] = None,
+    ):
         """Create a sync SamsungTVWS client that ALWAYS identifies with our
         client name and token (when known).
 
@@ -91,9 +95,21 @@ class SamsungFrameClient:
         from samsungtvws import SamsungTVWS  # type: ignore
         p = port or self._port or 8002
         try:
+            timeout_args = {"timeout": timeout} if timeout is not None else {}
             if self._token:
-                return SamsungTVWS(self._host, port=p, token=self._token, name=self._client_name)  # type: ignore[arg-type]
-            return SamsungTVWS(self._host, port=p, name=self._client_name)
+                return SamsungTVWS(
+                    self._host,
+                    port=p,
+                    token=self._token,
+                    name=self._client_name,
+                    **timeout_args,
+                )  # type: ignore[arg-type]
+            return SamsungTVWS(
+                self._host,
+                port=p,
+                name=self._client_name,
+                **timeout_args,
+            )
         except TypeError:
             # Very old library signature: keep at least the name so the TV
             # still recognizes a stable identity.
@@ -730,49 +746,107 @@ class SamsungFrameClient:
         _LOGGER.warning("Rotate: Could not find a valid image after %d attempts", max_attempts)
         return False
         
-    async def _async_select_image_id(self, content_id: str, matte: str = "none") -> None:
-        """Helper to select an image by ID (best effort)."""
-         # Fallback logic similar to upload select
+    async def _async_select_image_id(
+        self,
+        content_ids: str | list[str],
+        matte: str = "none",
+        require_available: bool = False,
+    ) -> Optional[str]:
+        """Select the first matching image ID (best effort)."""
+        candidate_ids = (
+            [content_ids] if isinstance(content_ids, str) else content_ids
+        )
+
+        # Fallback logic similar to upload select
         def _do_select():
-            tv = self._make_tv()
+            tv = self._make_tv(timeout=30)
+            art_client = None
             try:
                 art_client = tv.art()
+                if require_available:
+                    available_ids: set[str] = set()
+                    for item in art_client.available() or []:
+                        if isinstance(item, dict):
+                            available_id = (
+                                item.get("id")
+                                or item.get("content_id")
+                                or item.get("contentId")
+                            )
+                        else:
+                            available_id = str(item)
+                        if available_id:
+                            available_ids.add(str(available_id))
+                    selected_content_id = next(
+                        (item for item in candidate_ids if item in available_ids),
+                        None,
+                    )
+                    if selected_content_id is None:
+                        return None
+                else:
+                    selected_content_id = candidate_ids[0] if candidate_ids else None
+                    if selected_content_id is None:
+                        return None
+
                 # CRITICAL: For change_matte and 3.0.5, "none" is often the literal string expected,
                 # but select_image prefers None to clear it.
                 tv_matte = matte if matte else "none"
                 try:
                     # For select_image, we use None for "none"
                     sel_matte = None if tv_matte == "none" else tv_matte
-                    art_client.select_image(content_id, show=True, matte=sel_matte)
+                    art_client.select_image(
+                        selected_content_id,
+                        show=True,
+                        matte=sel_matte,
+                    )
                 except TypeError:
-                    art_client.select_image(content_id, show=True)
+                    art_client.select_image(selected_content_id, show=True)
                     # Secondary fallback: use change_matte
                     if hasattr(art_client, "change_matte"):
                         try:
                             # Apply to both landscape and portrait. 
                             # Try passing None if it's "none" just in case the string is not recognized.
                             final_matte = None if tv_matte == "none" else tv_matte
-                            art_client.change_matte(content_id, matte_id=final_matte, portrait_matte=final_matte)
+                            art_client.change_matte(
+                                selected_content_id,
+                                matte_id=final_matte,
+                                portrait_matte=final_matte,
+                            )
                         except Exception:
                             # If None fails, try the string "none"
                             if tv_matte == "none":
                                 try:
-                                    art_client.change_matte(content_id, matte_id="none", portrait_matte="none")
+                                    art_client.change_matte(
+                                        selected_content_id,
+                                        matte_id="none",
+                                        portrait_matte="none",
+                                    )
                                 except Exception:
                                     pass
+                return selected_content_id
             except Exception as e:
                 _LOGGER.debug("Select failed: %s", e)
+                if require_available:
+                    raise
+                return None
             finally:
-                self._capture_token(tv)
-                try:
-                    c = getattr(tv, "close", None)
-                    if callable(c):
-                        c()
-                except Exception:
-                    pass
+                self._close_art_connection(tv, art_client)
 
-        await asyncio.to_thread(_do_select)
-        self._fire_art_changed(content_id)
+        worker = asyncio.create_task(asyncio.to_thread(_do_select))
+        try:
+            selected_content_id = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # A blocking thread cannot be cancelled safely. Keep the caller
+            # (and its _art_lock) alive until the socket-bounded worker exits,
+            # so no late selection can race a following Art operation.
+            try:
+                await worker
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        if selected_content_id:
+            self._fire_art_changed(selected_content_id)
+            return str(selected_content_id)
+        return None
 
     async def async_rotate_from_folder(self, source_dir: str, matte: str = "none") -> bool:
         """Rotate art by picking a random file from a folder and uploading it."""
@@ -1288,6 +1362,73 @@ class SamsungFrameClient:
         tags: Optional[str] = None,
     ) -> Optional[str]:
         """Upload an image, select it, and return the TV content ID."""
+        async def _reuse_existing_upload() -> Optional[str]:
+            if not source_file or not self._db_path:
+                return None
+
+            await self._ensure_db()
+
+            def _find_existing_content_ids() -> list[str]:
+                import sqlite3
+
+                try:
+                    with sqlite3.connect(self._db_path) as conn:
+                        rows = conn.execute(
+                            """
+                            SELECT content_id
+                            FROM art_library
+                            WHERE source_file = ?
+                            ORDER BY COALESCE(last_displayed_at, created_at) DESC
+                            """,
+                            (source_file,),
+                        ).fetchall()
+                    return [str(row[0]) for row in rows]
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Upload: existing source lookup failed for %s: %r",
+                        source_file,
+                        err,
+                    )
+                    raise
+
+            existing_content_ids = await asyncio.to_thread(
+                _find_existing_content_ids
+            )
+            if not existing_content_ids:
+                return None
+
+            selected_content_id = await self._async_select_image_id(
+                existing_content_ids,
+                matte=matte,
+                require_available=True,
+            )
+            if selected_content_id:
+                await self.async_track_art(
+                    selected_content_id,
+                    tags=tags,
+                    source_file=source_file,
+                )
+                _LOGGER.info(
+                    "Upload: reused existing content_id=%s for source=%s on host=%s",
+                    selected_content_id,
+                    source_file,
+                    self._host,
+                )
+                return selected_content_id
+            _LOGGER.debug(
+                "Upload: tracked content IDs for source=%s are absent from "
+                "target host=%s; uploading",
+                source_file,
+                self._host,
+            )
+            return None
+
+        if source_file and self._db_path:
+            async with self._art_lock:
+                existing_content_id = await _reuse_existing_upload()
+            if existing_content_id:
+                return existing_content_id
+
         processed = await self.async_preprocess_image(image_bytes)
         _LOGGER.debug("Upload: processed image size=%s bytes for host=%s", len(processed), self._host)
 
@@ -1347,6 +1488,11 @@ class SamsungFrameClient:
                 self._close_art_connection(tv, art_client)
 
         async with self._art_lock:
+            # Another caller may have uploaded this source while preprocessing.
+            existing_content_id = await _reuse_existing_upload()
+            if existing_content_id:
+                return existing_content_id
+
             # Retry a few times on transient art channel ConnectionFailure
             backoff_seconds = [0.75, 1.5, 2.5, 4.0]
             for attempt in range(1, 5 + 1):

@@ -1,12 +1,15 @@
 """Tests for image preprocessing and the local-art DB helpers."""
 import asyncio
 import io
+import sqlite3
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
+import pytest
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
 
@@ -173,6 +176,390 @@ async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
         content_id = await client.async_upload_image(_jpeg(100, 100))
 
     assert content_id == "MY-CONTENT-1"
+    assert upload_calls == 1
+
+
+async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path):
+    """An already uploaded source is selected instead of uploaded again."""
+    upload_calls = 0
+    selected_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def get_current(self):
+            return {"content_id": "MY-EXISTING"}
+
+        def available(self):
+            return [{"content_id": "MY-EXISTING"}]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def select_image(self, content_id, *, show=True, **_kwargs):
+            assert show is True
+            selected_ids.append(content_id)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+    assert content_id == "MY-EXISTING"
+    assert upload_calls == 0
+    assert selected_ids == ["MY-EXISTING"]
+
+
+async def test_upload_does_not_reuse_source_missing_from_target_tv(hass, tmp_path):
+    """A source mapping from another TV cannot suppress a required upload."""
+    upload_calls = 0
+    selected_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def get_current(self):
+            return {"content_id": "MY-NEW"}
+
+        def available(self):
+            return []
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def select_image(self, content_id, *, show=True, **_kwargs):
+            assert show is True
+            selected_ids.append(content_id)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-OTHER-TV", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+    assert content_id == "MY-NEW"
+    assert upload_calls == 1
+    assert selected_ids == ["MY-NEW"]
+
+
+async def test_upload_checks_all_source_ids_for_the_target_tv(hass, tmp_path):
+    """The target-TV list wins over stale global DB state from another TV."""
+    upload_calls = 0
+    selected_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            return [{"content_id": "MY-THIS-TV"}]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def select_image(self, content_id, *, show=True, **_kwargs):
+            assert show is True
+            selected_ids.append(content_id)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    db_path = tmp_path / "art.db"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(db_path))
+    await client.async_track_art("MY-THIS-TV", source_file=source_file)
+    await client.async_track_art("MY-OTHER-TV", source_file=source_file)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE art_library SET last_displayed_at = ?, on_tv = 0 "
+            "WHERE content_id = ?",
+            (1, "MY-THIS-TV"),
+        )
+        conn.execute(
+            "UPDATE art_library SET last_displayed_at = ? WHERE content_id = ?",
+            (2, "MY-OTHER-TV"),
+        )
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+    assert content_id == "MY-THIS-TV"
+    assert upload_calls == 0
+    assert selected_ids == ["MY-THIS-TV"]
+
+
+async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
+    """A transient target-TV check failure must not trigger a fresh upload."""
+    upload_calls = 0
+    client_timeouts = []
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            raise ConnectionError("target TV unavailable")
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **kwargs):
+            client_timeouts.append(kwargs.get("timeout"))
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with (
+        patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}),
+        pytest.raises(ConnectionError, match="target TV unavailable"),
+    ):
+        await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+    assert upload_calls == 0
+    assert client_timeouts == [30]
+
+
+async def test_upload_does_not_proceed_when_source_lookup_fails(hass, tmp_path):
+    """A DB error cannot be mistaken for proof that the source is absent."""
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    with (
+        patch("sqlite3.connect", side_effect=sqlite3.OperationalError("locked")),
+        patch.object(
+            client,
+            "async_preprocess_image",
+            side_effect=AssertionError("upload path reached"),
+        ),
+        pytest.raises(sqlite3.OperationalError, match="locked"),
+    ):
+        await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+
+async def test_cancelled_reuse_check_does_not_leave_an_art_worker(hass, tmp_path):
+    """Cancellation waits for the blocking Art worker before releasing lock."""
+    check_started = threading.Event()
+    release_check = threading.Event()
+    worker_finished = threading.Event()
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            check_started.set()
+            release_check.wait(timeout=1)
+            return [{"content_id": "MY-EXISTING"}]
+
+        def select_image(self, _content_id, *, show=True, **_kwargs):
+            assert show is True
+            worker_finished.set()
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        task = asyncio.create_task(
+            client.async_upload_image(
+                _jpeg(100, 100),
+                source_file=source_file,
+            )
+        )
+        await asyncio.to_thread(check_started.wait, 1)
+        assert check_started.is_set()
+
+        task.cancel()
+        await asyncio.sleep(0.05)
+        worker_is_contained = not task.done()
+        release_check.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.to_thread(worker_finished.wait, 1)
+
+    assert worker_is_contained
+    assert worker_finished.is_set()
+
+
+async def test_concurrent_uploads_create_only_one_tv_copy(hass, tmp_path):
+    """Concurrent first displays of one source share the first TV upload."""
+    upload_calls = 0
+    uploaded_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def available(self):
+            return [{"content_id": content_id} for content_id in uploaded_ids]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            content_id = f"MY-NEW-{upload_calls}"
+            uploaded_ids.append(content_id)
+            return content_id
+
+        def select_image(self, _content_id, *, show=True, **_kwargs):
+            assert show is True
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        results = await asyncio.gather(
+            client.async_upload_image(
+                _jpeg(100, 100),
+                source_file=source_file,
+            ),
+            client.async_upload_image(
+                _jpeg(100, 100),
+                source_file=source_file,
+            ),
+        )
+
+    assert results == ["MY-NEW-1", "MY-NEW-1"]
     assert upload_calls == 1
 
 
