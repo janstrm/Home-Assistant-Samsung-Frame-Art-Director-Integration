@@ -300,7 +300,7 @@ async def test_upload_does_not_reuse_source_missing_from_target_tv(hass, tmp_pat
 
 
 async def test_upload_checks_all_source_ids_for_the_target_tv(hass, tmp_path):
-    """A target-TV match is reused even when another TV's mapping is newer."""
+    """The target-TV list wins over stale global DB state from another TV."""
     upload_calls = 0
     selected_ids = []
 
@@ -342,7 +342,8 @@ async def test_upload_checks_all_source_ids_for_the_target_tv(hass, tmp_path):
     await client.async_track_art("MY-OTHER-TV", source_file=source_file)
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "UPDATE art_library SET last_displayed_at = ? WHERE content_id = ?",
+            "UPDATE art_library SET last_displayed_at = ?, on_tv = 0 "
+            "WHERE content_id = ?",
             (1, "MY-THIS-TV"),
         )
         conn.execute(
