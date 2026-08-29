@@ -518,7 +518,11 @@ class SamsungFrameClient:
         if not self._db_path or not content_id:
             return
         if source_file:
-            source_file = _canonical_source_identity(self.hass, source_file)
+            source_file = await asyncio.to_thread(
+                _canonical_source_identity,
+                self.hass,
+                source_file,
+            )
         
         await self._ensure_db()
 
@@ -1490,7 +1494,11 @@ class SamsungFrameClient:
     ) -> Optional[str]:
         """Upload an image, select it, and return the TV content ID."""
         if source_file:
-            source_file = _canonical_source_identity(self.hass, source_file)
+            source_file = await asyncio.to_thread(
+                _canonical_source_identity,
+                self.hass,
+                source_file,
+            )
 
         async def _reuse_existing_upload() -> Optional[str]:
             if not source_file or not self._db_path:
