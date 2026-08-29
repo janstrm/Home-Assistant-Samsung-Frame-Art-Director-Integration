@@ -25,6 +25,7 @@ def _client(host: str) -> MagicMock:
     client.async_upload_image = AsyncMock(return_value=f"MY-{host}")
     client.async_cleanup_storage = AsyncMock()
     client.async_purge_database = AsyncMock()
+    client.async_toggle_favorite = AsyncMock(return_value=True)
     return client
 
 
@@ -114,3 +115,13 @@ async def test_targeted_actions_use_only_the_selected_frames_runtime_and_options
 
     first_client.async_purge_database.assert_awaited_once_with()
     second_client.async_purge_database.assert_not_awaited()
+
+    await hass.services.async_call(
+        DOMAIN,
+        "toggle_favorite",
+        {"entity_id": entity.entity_id, "content_id": "MY-SHARED-ID"},
+        blocking=True,
+    )
+
+    first_client.async_toggle_favorite.assert_awaited_once_with("MY-SHARED-ID")
+    second_client.async_toggle_favorite.assert_not_awaited()
