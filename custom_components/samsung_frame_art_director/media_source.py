@@ -7,9 +7,11 @@ Each library image is exposed as a playable item; "playing" it on the
 """
 from __future__ import annotations
 
+from datetime import timedelta
 import os
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.components.media_source import (
     BrowseMediaSource,
     MediaSource,
@@ -33,9 +35,10 @@ async def async_get_media_source(hass: HomeAssistant) -> "ArtLibraryMediaSource"
     return ArtLibraryMediaSource(hass)
 
 
-def _thumbnail_url(path: str) -> str:
-    # Keep slashes literal so the thumbnail HTTP view receives the absolute path.
-    return f"/api/samsung_frame_art_director/thumbnail/{quote(path, safe='/')}"
+def _thumbnail_url(hass: HomeAssistant, media_id: str) -> str:
+    """Build a thumbnail URL from an opaque, database-backed media ID."""
+    path = f"/api/samsung_frame_art_director/thumbnail/{quote(media_id, safe='')}"
+    return async_sign_path(hass, path, timedelta(minutes=5))
 
 
 class ArtLibraryMediaSource(MediaSource):
@@ -56,8 +59,7 @@ class ArtLibraryMediaSource(MediaSource):
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve an item to a viewable image URL (for the Media panel preview)."""
-        path = unquote(item.identifier)
-        return PlayMedia(_thumbnail_url(path), _MIME)
+        return PlayMedia(_thumbnail_url(self.hass, item.identifier), _MIME)
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Return the (single-level) list of library images."""
@@ -66,22 +68,21 @@ class ArtLibraryMediaSource(MediaSource):
         if client is not None:
             data = await client.async_get_library_data()
             for entry in data.get("items", []):
-                path = entry.get("id")
-                if not path:
+                media_id = entry.get("id")
+                if not media_id:
                     continue
                 star = "★ " if entry.get("is_favorite") else ""
                 children.append(
                     BrowseMediaSource(
                         domain=DOMAIN,
-                        # Identifier must NOT start with "/" (HA URI rules), so
-                        # URL-encode the absolute path; decoded on resolve/play.
-                        identifier=quote(path, safe=""),
+                        identifier=media_id,
                         media_class=_MEDIA_CLASS_IMAGE,
                         media_content_type=_MEDIA_TYPE_IMAGE,
-                        title=f"{star}{os.path.basename(path)}",
+                        title=f"{star}{os.path.basename(entry.get('source') or media_id)}",
                         can_play=True,
                         can_expand=False,
-                        thumbnail=_thumbnail_url(path),
+                        thumbnail=entry.get("thumbnail")
+                        or _thumbnail_url(self.hass, media_id),
                     )
                 )
 

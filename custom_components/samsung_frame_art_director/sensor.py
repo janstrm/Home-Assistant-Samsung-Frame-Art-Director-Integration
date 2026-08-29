@@ -93,7 +93,8 @@ async def async_setup_entry(
                 "is_favorite": bool(item.get("is_favorite")),
                 "category": item.get("category", "Gallery"),
                 "tags": item.get("tags"),
-                "source": item.get("source")
+                "source": item.get("source"),
+                "thumbnail": item.get("thumbnail"),
             })
 
         # 4. Extract Top Tags from Favorites for Quick Selection

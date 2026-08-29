@@ -157,11 +157,11 @@ purge_database:
 
 delete_art:
   name: "Delete Art"
-  description: "Delete a specific artwork from the library database."
+  description: "Permanently delete a tracked local artwork file and its library records. Raw filesystem paths and untracked files are rejected."
   fields:
     content_id:
       name: Content ID
-      description: "The content ID of the artwork to delete."
+      description: "The opaque local ID exposed by the art library sensor (local-…)."
       required: true
       selector:
         text:

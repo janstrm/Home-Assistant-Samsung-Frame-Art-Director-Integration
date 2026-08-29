@@ -12,6 +12,12 @@ import os
 import tempfile
 
 from .const import DOMAIN
+from .file_access import (
+    UnsafeLocalPathError,
+    ensure_allowed_local_path,
+    image_content_type,
+    media_identifier,
+)
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -451,13 +457,21 @@ class SamsungFrameClient:
                      conn.commit()
                      return bool(new_val)
                  
-                 # Check local_art
-                 curr_local = conn.execute("SELECT is_favorite FROM local_art WHERE file_path=?", (content_id,)).fetchone()
-                 if curr_local:
-                     new_val = 1 if not curr_local[0] else 0
-                     conn.execute("UPDATE local_art SET is_favorite=? WHERE file_path=?", (new_val, content_id))
-                     conn.commit()
-                     return bool(new_val)
+                 # Local artwork is addressed only through its opaque media ID.
+                 if content_id.startswith("local-"):
+                     rows_local = conn.execute(
+                         "SELECT file_path, is_favorite FROM local_art"
+                     ).fetchall()
+                     for file_path, is_favorite in rows_local:
+                         if media_identifier(file_path) != content_id:
+                             continue
+                         new_val = 1 if not is_favorite else 0
+                         conn.execute(
+                             "UPDATE local_art SET is_favorite=? WHERE file_path=?",
+                             (new_val, file_path),
+                         )
+                         conn.commit()
+                         return bool(new_val)
                  
                  # If not found, create entry in art_library as favorite (assuming TV ID)
                  # Only if it looks like a TV ID (MY_ or SAM_)
@@ -472,87 +486,106 @@ class SamsungFrameClient:
 
         return await asyncio.to_thread(_toggle)
 
-    async def async_delete_art(self, content_id: str) -> bool:
-        """Permanently delete an item from disk and DB."""
-        if not self._db_path or not content_id:
+    async def async_delete_art(self, media_id: str) -> bool:
+        """Delete one tracked local item addressed by its opaque media ID."""
+        if not self._db_path or not media_id:
             return False
-        
+
         await self._ensure_db()
 
         def _delete():
             import sqlite3
-            import os
+
             try:
-                # 1. Resolve path (if it's a file path)
-                file_path = content_id if os.path.exists(content_id) else None
-                
                 with sqlite3.connect(self._db_path) as conn:
-                    # If not explicitly a path, check DB for source_file or file_path
-                    if not file_path:
-                        row = conn.execute("SELECT file_path FROM local_art WHERE file_path=?", (content_id,)).fetchone()
-                        if row: file_path = row[0]
-                    
-                    if not file_path:
-                        row = conn.execute("SELECT source_file FROM art_library WHERE content_id=?", (content_id,)).fetchone()
-                        if row: file_path = row[0]
+                    rows = conn.execute("SELECT file_path FROM local_art").fetchall()
+                    if media_id.startswith("local-"):
+                        tracked_path = next(
+                            (
+                                row[0]
+                                for row in rows
+                                if media_identifier(row[0]) == media_id
+                            ),
+                            None,
+                        )
+                    else:
+                        source_row = conn.execute(
+                            "SELECT source_file FROM art_library WHERE content_id=?",
+                            (media_id,),
+                        ).fetchone()
+                        tracked_paths = {row[0] for row in rows}
+                        tracked_path = (
+                            source_row[0]
+                            if source_row and source_row[0] in tracked_paths
+                            else None
+                        )
+                    if not tracked_path:
+                        return False
 
-                    # 2. Delete File (Safety check: must be in allowable dirs or look like art)
-                    # We assume anything tracked in local_art is safe to delete if user requested it.
-                    if file_path and os.path.exists(file_path):
+                    path = ensure_allowed_local_path(self.hass, tracked_path)
+                    if path.exists():
                         try:
-                            os.remove(file_path)
-                            _LOGGER.info("Deleted file: %s", file_path)
-                        except Exception as e:
-                            _LOGGER.warning("Failed to delete file %s: %s", file_path, e)
+                            path.unlink()
+                        except OSError as err:
+                            _LOGGER.warning(
+                                "Failed to delete tracked local artwork for media_id=%s: %s",
+                                media_id,
+                                err,
+                            )
+                            return False
 
-                    # 3. Delete from DB
-                    conn.execute("DELETE FROM local_art WHERE file_path=?", (content_id,))
-                    conn.execute("DELETE FROM art_library WHERE content_id=?", (content_id,))
-                    # Also try deleting by path if content_id was a path
-                    if file_path and file_path != content_id:
-                        conn.execute("DELETE FROM local_art WHERE file_path=?", (file_path,))
-                        conn.execute("DELETE FROM art_library WHERE content_id=?", (file_path,))
-                        
+                    conn.execute("DELETE FROM local_art WHERE file_path=?", (tracked_path,))
+                    conn.execute("DELETE FROM art_library WHERE source_file=?", (tracked_path,))
                     conn.commit()
                     return True
+            except UnsafeLocalPathError:
+                _LOGGER.warning("Rejected out-of-root deletion for media_id=%s", media_id)
+                return False
             except Exception as e:
-                _LOGGER.error("Delete failed for %s: %s", content_id, e)
+                _LOGGER.error("Delete failed for media_id=%s: %s", media_id, e)
                 return False
 
         return await asyncio.to_thread(_delete)
 
-    async def async_get_thumbnail(self, content_id: str) -> bytes | None:
-        """Get bytes for a thumbnail (local file) given an ID."""
-        if not self._db_path: return None
+    async def async_read_local_art(self, media_id: str) -> dict | None:
+        """Read one tracked local artwork by its opaque media identifier."""
+        if not self._db_path or not media_id.startswith("local-"):
+            return None
         await self._ensure_db()
-        
+
         def _get():
             import sqlite3
-            import os
+
             try:
-                # 1. Lookup local path from DB
-                path = None
                 with sqlite3.connect(self._db_path) as conn:
-                    # Check art_library (source_file)
-                    row = conn.execute("SELECT source_file FROM art_library WHERE content_id=?", (content_id,)).fetchone()
-                    if row and row[0]:
-                        path = row[0]
-                    # Check local_art (file_path) if it looks like a path
-                    if not path:
-                         # Maybe content_id IS the path?
-                         if os.path.exists(content_id):
-                             path = content_id
-                
-                if path and os.path.exists(path):
-                    # In a real implementation, we'd resize this here and cache it!
-                    # For now, return the full image (Dashboard will scale it, but bandwidth heavy)
-                    with open(path, "rb") as f:
-                        return f.read()
+                    rows = conn.execute("SELECT file_path FROM local_art").fetchall()
+
+                for (tracked_path,) in rows:
+                    if media_identifier(tracked_path) != media_id:
+                        continue
+                    path = ensure_allowed_local_path(self.hass, tracked_path)
+                    if not path.is_file():
+                        return None
+                    with path.open("rb") as file_handle:
+                        return {
+                            "data": file_handle.read(),
+                            "path": str(path),
+                            "content_type": image_content_type(path),
+                        }
+            except UnsafeLocalPathError:
+                _LOGGER.warning("Rejected out-of-root tracked artwork for media_id=%s", media_id)
             except Exception as e:
-                _LOGGER.warning("Thumbnail fetch failed for %s: %s", content_id, e)
+                _LOGGER.warning("Local artwork fetch failed for media_id=%s: %s", media_id, e)
             return None
-            
+
         return await asyncio.to_thread(_get)
+
+    async def async_get_thumbnail(self, media_id: str) -> tuple[bytes, str] | None:
+        """Get thumbnail bytes and MIME type for an opaque local media ID."""
+        artwork = await self.async_read_local_art(media_id)
+        if not artwork:
+            return None
+        return artwork["data"], artwork["content_type"]
 
     async def async_get_library_data(self) -> dict:
         """Get all library items for the gallery dashboard."""
@@ -575,22 +608,41 @@ class SamsungFrameClient:
                     rows = conn.execute(query).fetchall()
                     
                     for r in rows:
-                        path = r[0]
-                        # Ensure valid JSON string by replacing backslashes
-                        path = path.replace("\\", "/")
-                        # For local files, ID is the path
+                        try:
+                            path = ensure_allowed_local_path(self.hass, r[0])
+                        except UnsafeLocalPathError:
+                            _LOGGER.warning("Skipping out-of-root tracked artwork")
+                            continue
+                        if not path.is_file():
+                            continue
                         items.append({
-                            "id": path, 
+                            "id": media_identifier(path),
                             "tags": r[1] or "",
                             "is_favorite": bool(r[2]) if has_fav else False,
                             "type": "local",
-                            "source": path
+                            # Authenticated dashboard actions still need the
+                            # canonical source path for upload/dedup. It is not
+                            # used as a URL or Media Source identifier.
+                            "source": str(path),
                         })
             except Exception as e:
                 _LOGGER.error("Library fetch failed: %s", e)
             return {"items": items}
         
-        return await asyncio.to_thread(_fetch)
+        data = await asyncio.to_thread(_fetch)
+        if data["items"]:
+            from datetime import timedelta
+
+            from homeassistant.components.http.auth import async_sign_path
+
+            for item in data["items"]:
+                path = f"/api/samsung_frame_art_director/thumbnail/{item['id']}"
+                item["thumbnail"] = async_sign_path(
+                    self.hass,
+                    path,
+                    timedelta(minutes=5),
+                )
+        return data
 
     async def async_rotate_art(self, tags: Optional[list[str]] = None, negative_tags: Optional[list[str]] = None, match_all: bool = False, matte: str = "none", source: str = "library") -> bool:
         """Rotate art by selecting from DB (TV or Local), filtering by tags (fuzzy match)."""

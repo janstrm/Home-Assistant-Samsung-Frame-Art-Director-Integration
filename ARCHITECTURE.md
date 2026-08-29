@@ -207,6 +207,11 @@ Rows represent **image files on the HA filesystem** (in `/media/frame/library`),
 tagged by AI. This is what the gallery sensor, dashboard, and rotation primarily
 read from.
 
+The filesystem path remains the database key but is never exposed as a media or
+thumbnail identifier. Public gallery items use a stable opaque `local-…` ID;
+every read or delete resolves that ID back through `local_art`, canonicalizes the
+path, and verifies it remains below an allowed Home Assistant media/config root.
+
 | column | meaning |
 |---|---|
 | `file_path` (PK) | absolute path on the HA filesystem |
@@ -457,7 +462,10 @@ deliberately does **not** register entity-platform services for the same names
 A **WebSocket command** `samsung_frame_art_director/get_library` and the
 `SamsungFrameThumbnailView` HTTP view feed the example gallery dashboard. The
 gallery is also exposed via the `..._art_library` sensor's `items` attribute for
-template/auto-entities use. The full user-facing service/entity catalog is in
+template/auto-entities use. Thumbnail requests require Home Assistant
+authentication; gallery and Media Source results carry short-lived signed paths
+so browser image requests work without exposing an unauthenticated endpoint.
+The full user-facing service/entity catalog is in
 the [README](README.md#-services).
 
 ---

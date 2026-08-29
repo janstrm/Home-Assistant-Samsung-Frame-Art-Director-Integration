@@ -38,6 +38,7 @@ from .const import (
     resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+from .file_access import UnsafeLocalPathError, resolve_upload_source
 
 
 # This integration is configured via the UI only (config entries), not YAML.
@@ -175,24 +176,13 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
             return bytes(image_bytes)
 
     def _read() -> bytes:
-        import os
-        # Accept absolute /media/... or /config/...; else assume under /media/frame/library/
-        norm = os.path.expanduser(path)
-        if not norm.startswith("/media/") and not norm.startswith("/config/"):
-            norm = "/media/frame/library/" + norm.lstrip("/")
-
-        # Security: Prevent path traversal by resolving the absolute path
-        # and ensuring it's within the allowed directories
-        abs_norm = os.path.abspath(norm)
-        allowed_media = os.path.abspath("/media")
-        allowed_config = os.path.abspath(hass.config.path())
-        if not abs_norm.startswith(allowed_media) and not abs_norm.startswith(allowed_config):
-            raise ValueError(f"Path traversal detected or unallowed path: {abs_norm}")
-
-        _LOGGER.debug("upload_art: resolved path=%s", abs_norm)
-        # Map /media to real FS under HA config; hass.config.path maps /config
-        # Supervisor mounts /media; opening /media/... directly should work. Keep as-is.
-        with open(abs_norm, "rb") as f:
+        try:
+            resolved = resolve_upload_source(hass, path)
+        except UnsafeLocalPathError as err:
+            raise ServiceValidationError(str(err)) from err
+        if not resolved.is_file():
+            raise ServiceValidationError("Local artwork file does not exist")
+        with resolved.open("rb") as f:
             return f.read()
 
     return await hass.async_add_executor_job(_read)
@@ -686,6 +676,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         hass,
                         f"Deleted 1 item ({content_id}) from library.",
                         title="Art Director"
+                    )
+                else:
+                    raise ServiceValidationError(
+                        "Artwork is not a tracked local artwork or could not be deleted"
                     )
                 
         elif call.service == "rotate_favorites":

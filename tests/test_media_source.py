@@ -1,6 +1,5 @@
 """Tests for the Media Source provider (browse + resolve)."""
 import types
-from urllib.parse import quote, unquote
 
 from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
@@ -13,16 +12,16 @@ class _FakeClient:
         return {
             "items": [
                 {
-                    "id": "/media/frame/library/a.jpg",
+                    "id": "local-aaaaaaaa",
                     "tags": "nature",
                     "is_favorite": True,
-                    "source": "/media/frame/library/a.jpg",
+                    "source": "a.jpg",
                 },
                 {
-                    "id": "/media/frame/library/b.png",
+                    "id": "local-bbbbbbbb",
                     "tags": "city",
                     "is_favorite": False,
-                    "source": "/media/frame/library/b.png",
+                    "source": "b.png",
                 },
             ]
         }
@@ -44,9 +43,7 @@ async def test_browse_lists_library_items(hass):
     assert len(result.children) == 2
     first = result.children[0]
     assert first.can_play is True
-    # Identifier must be URL-encoded (HA rejects identifiers starting with "/").
-    assert not first.identifier.startswith("/")
-    assert unquote(first.identifier) == "/media/frame/library/a.jpg"
+    assert first.identifier == "local-aaaaaaaa"
     assert first.title.startswith("★")  # favorite marker
     assert first.thumbnail.startswith("/api/samsung_frame_art_director/thumbnail/")
 
@@ -61,7 +58,8 @@ async def test_browse_without_client_is_empty(hass):
 async def test_resolve_returns_image_url(hass):
     source = ArtLibraryMediaSource(hass)
     media = await source.async_resolve_media(
-        types.SimpleNamespace(identifier=quote("/media/frame/library/a.jpg", safe=""))
+        types.SimpleNamespace(identifier="local-aaaaaaaa")
     )
     assert media.mime_type == "image/jpeg"
-    assert media.url.startswith("/api/samsung_frame_art_director/thumbnail/")
+    assert "/local-aaaaaaaa?" in media.url
+    assert "authSig=" in media.url
