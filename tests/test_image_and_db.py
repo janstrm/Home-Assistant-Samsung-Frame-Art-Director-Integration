@@ -179,7 +179,11 @@ async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
     assert upload_calls == 1
 
 
-async def test_upload_matte_fallback_does_not_overwrite_portrait_matte(hass):
+@pytest.mark.parametrize("matte", ["none", "shadowbox_polar"])
+async def test_upload_matte_fallback_does_not_overwrite_portrait_matte(
+    hass,
+    matte,
+):
     """LS03D/F accepts a landscape matte when portrait matte is omitted."""
     matte_calls = []
     applied_mattes = []
@@ -236,17 +240,18 @@ async def test_upload_matte_fallback_does_not_overwrite_portrait_matte(hass):
     with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
         content_id = await client.async_upload_image(
             _jpeg(100, 100),
-            matte="shadowbox_polar",
+            matte=matte,
         )
 
     assert content_id == "MY-MATTE"
-    assert matte_calls == [("MY-MATTE", "shadowbox_polar", None)]
-    assert applied_mattes == ["shadowbox_polar"]
+    assert matte_calls == [("MY-MATTE", matte, None)]
+    assert applied_mattes == [matte]
 
 
 async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path):
     """An already uploaded source is selected instead of uploaded again."""
     upload_calls = 0
+    matte_calls = []
     selected_ids = []
 
     class FakeArt:
@@ -269,9 +274,12 @@ async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path
             upload_calls += 1
             return "MY-NEW"
 
-        def select_image(self, content_id, *, show=True, **_kwargs):
+        def select_image(self, content_id, *, show=True):
             assert show is True
             selected_ids.append(content_id)
+
+        def change_matte(self, content_id, matte_id=None, portrait_matte=None):
+            matte_calls.append((content_id, matte_id, portrait_matte))
 
         def close(self):
             return None
@@ -297,11 +305,13 @@ async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path
     with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
         content_id = await client.async_upload_image(
             _jpeg(100, 100),
+            matte="shadowbox_polar",
             source_file=source_file,
         )
 
     assert content_id == "MY-EXISTING"
     assert upload_calls == 0
+    assert matte_calls == [("MY-EXISTING", "shadowbox_polar", None)]
     assert selected_ids == ["MY-EXISTING"]
 
 
