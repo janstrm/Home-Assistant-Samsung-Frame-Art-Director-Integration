@@ -5,6 +5,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -77,7 +78,9 @@ async def async_setup_entry(
         else:
             filtered = all_items
 
-        # 3. Paginate (25 items per page to safely fit 16KB limit)
+        # 3. Paginate to keep the live dashboard payload bounded. Rich tags and
+        # signed thumbnail URLs can still exceed Recorder's 16 KB history limit,
+        # so the entity explicitly excludes these attributes from history.
         page_size = 25
         total_items = len(filtered)
         total_pages = max(1, (total_items + page_size - 1) // page_size)
@@ -141,6 +144,7 @@ async def async_setup_entry(
 class SamsungFrameLibrarySensor(CoordinatorEntity, SensorEntity):
     """Sensor that exposes a filtered/paged view of the Art Library."""
 
+    _unrecorded_attributes = frozenset({MATCH_ALL})
     _attr_has_entity_name = True
     _attr_name = "Art Library"
     _attr_icon = "mdi:image-multiple-outline"
@@ -165,7 +169,7 @@ class SamsungFrameLibrarySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the paged items and metadata. Guaranteed to be under 16KB."""
+        """Return paged items and metadata for the live dashboard."""
         if not self.coordinator.data:
             return {}
         
