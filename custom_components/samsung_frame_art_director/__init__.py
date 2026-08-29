@@ -6,7 +6,6 @@ import asyncio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed, ServiceValidationError
-from homeassistant.helpers import entity_registry as er, service as ha_service
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
@@ -44,6 +43,7 @@ from .file_access import (
     resolve_upload_source,
 )
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
+from .targets import async_resolve_action_targets
 
 
 # This integration is configured via the UI only (config entries), not YAML.
@@ -430,24 +430,11 @@ async def async_setup_entry(
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Register domain-level actions (a.k.a. services) that accept target entities
-    async def _resolve_clients(call: ha_service.ServiceCall):
-        entity_ids = await ha_service.async_extract_entity_ids(call)
-        if not entity_ids:
-            # If no target provided, default to this entry's client
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if stored:
-                yield stored.get(DATA_CLIENT)
-            return
-        ent_reg = er.async_get(hass)
-        for entity_id in entity_ids:
-            ent = ent_reg.async_get(entity_id)
-            config_entry_id = getattr(ent, "config_entry_id", None) if ent else None
-            if config_entry_id:
-                stored = hass.data.get(DOMAIN, {}).get(config_entry_id)
-                if stored and (client := stored.get(DATA_CLIENT)):
-                    yield client
+    async def _resolve_clients(call: ServiceCall):
+        for target in await async_resolve_action_targets(hass, call):
+            yield target.runtime.client
 
-    async def _svc_set_artmode(call: ha_service.ServiceCall) -> None:
+    async def _svc_set_artmode(call: ServiceCall) -> None:
         enabled = bool(call.data.get("enabled"))
         _LOGGER.debug("Action set_artmode called: enabled=%s, data=%s", enabled, dict(call.data))
         found = False
@@ -516,7 +503,7 @@ async def async_setup_entry(
         if not found:
             _LOGGER.debug("set_artmode: no target client resolved; nothing executed")
 
-    async def _svc_upload_art(call: ha_service.ServiceCall) -> dict | None:
+    async def _svc_upload_art(call: ServiceCall) -> dict | None:
         path = call.data.get("path")
         tags = call.data.get("tags")
         # Matte from call data, else the configured style/color (or 'none').
@@ -596,7 +583,7 @@ async def async_setup_entry(
         supports_response=SupportsResponse.OPTIONAL,
     )
 
-    async def _svc_art_diagnostics(call: ha_service.ServiceCall) -> None:
+    async def _svc_art_diagnostics(call: ServiceCall) -> None:
         async for client in _resolve_clients(call):
             await client.async_art_diagnostics()
 
@@ -607,7 +594,7 @@ async def async_setup_entry(
         schema=vol.Schema({vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}),
     )
 
-    async def _svc_rotate_art_now(call: ha_service.ServiceCall) -> None:
+    async def _svc_rotate_art_now(call: ServiceCall) -> None:
         tags = call.data.get("tags")
         match_all = call.data.get("match_all", False)
         source = call.data.get("source", "library")
@@ -657,7 +644,7 @@ async def async_setup_entry(
         }),
     )
 
-    async def _svc_cleanup_storage(call: ha_service.ServiceCall) -> None:
+    async def _svc_cleanup_storage(call: ServiceCall) -> None:
         params = _cleanup_params(entry, call.data)
         _LOGGER.debug("Action cleanup_storage called: %s", params)
         async for client in _resolve_clients(call):
