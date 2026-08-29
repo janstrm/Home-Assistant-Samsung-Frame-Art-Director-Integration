@@ -35,10 +35,15 @@ async def async_get_media_source(hass: HomeAssistant) -> "ArtLibraryMediaSource"
     return ArtLibraryMediaSource(hass)
 
 
-def _thumbnail_url(hass: HomeAssistant, media_id: str) -> str:
+def signed_thumbnail_url(hass: HomeAssistant, media_id: str) -> str:
     """Build a thumbnail URL from an opaque, database-backed media ID."""
     path = f"/api/samsung_frame_art_director/thumbnail/{quote(media_id, safe='')}"
-    return async_sign_path(hass, path, timedelta(minutes=5))
+    return async_sign_path(
+        hass,
+        path,
+        timedelta(minutes=5),
+        use_content_user=True,
+    )
 
 
 class ArtLibraryMediaSource(MediaSource):
@@ -59,7 +64,7 @@ class ArtLibraryMediaSource(MediaSource):
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve an item to a viewable image URL (for the Media panel preview)."""
-        return PlayMedia(_thumbnail_url(self.hass, item.identifier), _MIME)
+        return PlayMedia(signed_thumbnail_url(self.hass, item.identifier), _MIME)
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Return the (single-level) list of library images."""
@@ -81,8 +86,7 @@ class ArtLibraryMediaSource(MediaSource):
                         title=f"{star}{os.path.basename(entry.get('source') or media_id)}",
                         can_play=True,
                         can_expand=False,
-                        thumbnail=entry.get("thumbnail")
-                        or _thumbnail_url(self.hass, media_id),
+                        thumbnail=signed_thumbnail_url(self.hass, media_id),
                     )
                 )
 

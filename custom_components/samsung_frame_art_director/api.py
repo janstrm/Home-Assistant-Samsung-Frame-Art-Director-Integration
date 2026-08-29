@@ -629,20 +629,7 @@ class SamsungFrameClient:
                 _LOGGER.error("Library fetch failed: %s", e)
             return {"items": items}
         
-        data = await asyncio.to_thread(_fetch)
-        if data["items"]:
-            from datetime import timedelta
-
-            from homeassistant.components.http.auth import async_sign_path
-
-            for item in data["items"]:
-                path = f"/api/samsung_frame_art_director/thumbnail/{item['id']}"
-                item["thumbnail"] = async_sign_path(
-                    self.hass,
-                    path,
-                    timedelta(minutes=5),
-                )
-        return data
+        return await asyncio.to_thread(_fetch)
 
     async def async_rotate_art(self, tags: Optional[list[str]] = None, negative_tags: Optional[list[str]] = None, match_all: bool = False, matte: str = "none", source: str = "library") -> bool:
         """Rotate art by selecting from DB (TV or Local), filtering by tags (fuzzy match)."""

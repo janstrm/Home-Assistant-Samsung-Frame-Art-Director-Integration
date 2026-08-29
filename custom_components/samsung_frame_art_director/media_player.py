@@ -32,6 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         hass,
         _LOGGER,
         name="samsung_frame_art_mode",
+        config_entry=entry,
         update_method=async_update_data,
         update_interval=dt_util.dt.timedelta(seconds=30),
     )

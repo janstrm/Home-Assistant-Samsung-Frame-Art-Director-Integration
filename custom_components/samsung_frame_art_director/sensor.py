@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpda
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, DATA_CLIENT, CONF_DUID
+from .media_source import signed_thumbnail_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ async def async_setup_entry(
                 "category": item.get("category", "Gallery"),
                 "tags": item.get("tags"),
                 "source": item.get("source"),
-                "thumbnail": item.get("thumbnail"),
+                "thumbnail": signed_thumbnail_url(hass, item["id"]),
             })
 
         # 4. Extract Top Tags from Favorites for Quick Selection
@@ -126,6 +127,7 @@ async def async_setup_entry(
         hass,
         _LOGGER,
         name="samsung_frame_library",
+        config_entry=entry,
         update_method=_fetch_library,
         update_interval=dt_util.dt.timedelta(seconds=15), # Faster update for filters
     )

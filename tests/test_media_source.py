@@ -1,6 +1,8 @@
 """Tests for the Media Source provider (browse + resolve)."""
 import types
 
+from homeassistant.setup import async_setup_component
+
 from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
     async_get_media_source,
@@ -34,6 +36,7 @@ async def test_factory_returns_source(hass):
 
 
 async def test_browse_lists_library_items(hass):
+    assert await async_setup_component(hass, "http", {})
     source = ArtLibraryMediaSource(hass)
     source._client = lambda: _FakeClient()
 
@@ -56,6 +59,7 @@ async def test_browse_without_client_is_empty(hass):
 
 
 async def test_resolve_returns_image_url(hass):
+    assert await async_setup_component(hass, "http", {})
     source = ArtLibraryMediaSource(hass)
     media = await source.async_resolve_media(
         types.SimpleNamespace(identifier="local-aaaaaaaa")

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
@@ -20,6 +21,7 @@ async def test_thumbnail_requires_home_assistant_authentication(
     hass_client_no_auth,
 ):
     """Anonymous callers cannot read artwork thumbnails."""
+    assert await async_setup_component(hass, "http", {})
     hass.http.register_view(SamsungFrameThumbnailView(hass))
     client = await hass_client_no_auth()
 
@@ -35,6 +37,7 @@ async def test_signed_thumbnail_uses_an_opaque_library_identifier(
     hass_client_no_auth,
 ):
     """A signed tracked PNG works without putting its filesystem path in the URL."""
+    assert await async_setup_component(hass, "http", {})
     image_bytes = b"\x89PNG\r\n\x1a\ntracked-image"
     image_path = Path(hass.config.path("www", "tracked-art.png"))
     image_path.parent.mkdir(parents=True, exist_ok=True)

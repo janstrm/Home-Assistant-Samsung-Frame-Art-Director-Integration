@@ -736,6 +736,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
              return
         client = stored.get(DATA_CLIENT)
         data = await client.async_get_library_data()
+        from .media_source import signed_thumbnail_url
+
+        for item in data.get("items", []):
+            item["thumbnail"] = signed_thumbnail_url(hass, item["id"])
         connection.send_result(msg["id"], data)
         
     try:

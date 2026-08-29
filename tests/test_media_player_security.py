@@ -23,6 +23,7 @@ def _media_player(hass, entry, client):
         hass,
         logging.getLogger(__name__),
         name="test-frame",
+        config_entry=entry,
     )
     return SamsungFrameMediaPlayer(hass, entry, coordinator)
 
