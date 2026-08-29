@@ -28,6 +28,39 @@ def detect_image_mime(image_bytes: bytes) -> str:
     raise ValueError("Unsupported or invalid image format")
 
 
+async def _async_post_provider_json(
+    session: Any,
+    url: str,
+    *,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    provider: str,
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """POST one provider request with shared timeout and safe failures."""
+    try:
+        async with session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=ClientTimeout(total=30),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                _LOGGER.warning(
+                    "%s request returned HTTP %s",
+                    provider,
+                    response.status,
+                )
+                return None, {
+                    "error": f"{AI_REQUEST_ERROR} (HTTP {response.status})",
+                    "provider": provider,
+                }
+            return await response.json(), None
+    except Exception:  # noqa: BLE001 - provider exceptions are untrusted
+        _LOGGER.error("%s request failed", provider)
+        return None, {"error": AI_REQUEST_ERROR, "provider": provider}
+
+
 def _analysis_result(
     text: str,
     *,
@@ -113,43 +146,32 @@ class GeminiAnalyzer(ImageAnalyzer):
             "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4},
         }
 
+        provider = "Google Gemini (REST)"
+        data, error = await _async_post_provider_json(
+            self._session,
+            self.url,
+            payload=payload,
+            headers={"x-goog-api-key": api_key},
+            provider=provider,
+        )
+        if error:
+            return error
+
         try:
-            async with self._session.post(
-                self.url,
-                json=payload,
-                headers={"x-goog-api-key": api_key},
-                timeout=ClientTimeout(total=30),
-                allow_redirects=False,
-            ) as response:
-                if response.status != 200:
-                    _LOGGER.warning(
-                        "Gemini request returned HTTP %s",
-                        response.status,
-                    )
-                    return {
-                        "error": f"{AI_REQUEST_ERROR} (HTTP {response.status})",
-                        "provider": "Google Gemini (REST)",
-                    }
-                data = await response.json()
+            if data is not None:
                 text = data["candidates"][0]["content"]["parts"][0]["text"]
-                if not isinstance(text, str):
-                    raise TypeError("Provider response text is not a string")
+            if data is None or not isinstance(text, str):
+                raise TypeError("Provider response text is not a string")
         except (KeyError, IndexError, TypeError):
             _LOGGER.warning("Gemini returned a malformed response")
             return {
                 "error": "AI provider returned a malformed response",
-                "provider": "Google Gemini (REST)",
-            }
-        except Exception:  # noqa: BLE001 - provider exceptions are untrusted
-            _LOGGER.error("Gemini request failed")
-            return {
-                "error": AI_REQUEST_ERROR,
-                "provider": "Google Gemini (REST)",
+                "provider": provider,
             }
 
         return _analysis_result(
             text,
-            provider="Google Gemini (REST)",
+            provider=provider,
             model=self.model_name,
             start_time=start_time,
         )
@@ -192,40 +214,32 @@ class OpenAIAnalyzer(ImageAnalyzer):
             "max_tokens": 300,
         }
 
+        provider = "OpenAI"
+        data, error = await _async_post_provider_json(
+            self._session,
+            self.url,
+            payload=payload,
+            headers={"Authorization": f"Bearer {api_key}"},
+            provider=provider,
+        )
+        if error:
+            return error
+
         try:
-            async with self._session.post(
-                self.url,
-                json=payload,
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=ClientTimeout(total=30),
-                allow_redirects=False,
-            ) as response:
-                if response.status != 200:
-                    _LOGGER.warning(
-                        "OpenAI request returned HTTP %s",
-                        response.status,
-                    )
-                    return {
-                        "error": f"{AI_REQUEST_ERROR} (HTTP {response.status})",
-                        "provider": "OpenAI",
-                    }
-                data = await response.json()
+            if data is not None:
                 text = data["choices"][0]["message"]["content"]
-                if not isinstance(text, str):
-                    raise TypeError("Provider response text is not a string")
+            if data is None or not isinstance(text, str):
+                raise TypeError("Provider response text is not a string")
         except (KeyError, IndexError, TypeError):
             _LOGGER.warning("OpenAI returned a malformed response")
             return {
                 "error": "AI provider returned a malformed response",
-                "provider": "OpenAI",
+                "provider": provider,
             }
-        except Exception:  # noqa: BLE001 - provider exceptions are untrusted
-            _LOGGER.error("OpenAI request failed")
-            return {"error": AI_REQUEST_ERROR, "provider": "OpenAI"}
 
         return _analysis_result(
             text,
-            provider="OpenAI",
+            provider=provider,
             model=self.model_name,
             start_time=start_time,
         )
