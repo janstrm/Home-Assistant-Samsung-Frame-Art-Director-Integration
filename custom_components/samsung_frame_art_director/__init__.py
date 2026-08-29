@@ -60,6 +60,28 @@ MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_REMOTE_REDIRECTS = 5
 
 
+def _cleanup_params(entry: ConfigEntry, overrides=None) -> dict:
+    """Build one cleanup policy from config-entry options and call overrides."""
+    params = {
+        "max_items": entry.options.get(
+            "cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS
+        ),
+        "max_age_days": entry.options.get("cleanup_max_age_days") or None,
+        "preserve_current": entry.options.get(
+            "cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT
+        ),
+        "only_integration_managed": entry.options.get(
+            "cleanup_only_integration_managed",
+            DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
+        ),
+        "dry_run": entry.options.get("cleanup_dry_run", DEFAULT_CLEANUP_DRY_RUN),
+    }
+    for key, value in (overrides or {}).items():
+        if key in params:
+            params[key] = value
+    return params
+
+
 def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None:
     """Send a Wake-on-LAN magic packet to ``mac`` via UDP broadcast.
 
@@ -536,11 +558,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # We do this asynchronously to not block the service return too long, 
                 # though here we await it for simplicity as the user expects "done" state.
                 # If performance is an issue, we could fire a task.
-                await client.async_cleanup_storage(
-                    max_items=DEFAULT_CLEANUP_MAX_ITEMS, 
-                    only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-                    preserve_current=DEFAULT_CLEANUP_PRESERVE_CURRENT
-                )
+                await client.async_cleanup_storage(**_cleanup_params(entry))
                 
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
