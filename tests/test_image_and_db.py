@@ -34,9 +34,16 @@ async def test_preprocess_fit_outputs_target_size(hass):
 
 
 async def test_upload_image_returns_tv_content_id(hass):
-    """Callers receive the exact content ID returned by the TV library."""
+    """Upload returns the TV ID, keeps the Art token, and closes Art sockets."""
+    art_clients = []
+    persisted_tokens = []
 
     class FakeArt:
+        def __init__(self):
+            self.token = "NEW"
+            self.closed = False
+            art_clients.append(self)
+
         def supported(self):
             return True
 
@@ -58,8 +65,11 @@ async def test_upload_image_returns_tv_content_id(hass):
         def change_matte(self, *_args, **_kwargs):
             return True
 
+        def close(self):
+            self.closed = True
+
     class FakeTV:
-        token = "token"
+        token = "OLD"
 
         def __init__(self, *_args, **_kwargs):
             self._art = FakeArt()
@@ -71,12 +81,16 @@ async def test_upload_image_returns_tv_content_id(hass):
             return None
 
     fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
-    client = SamsungFrameClient(hass, "1.2.3.4")
+    client = SamsungFrameClient(hass, "1.2.3.4", token="OLD")
+    client.set_token_persister(persisted_tokens.append)
 
     with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
         content_id = await client.async_upload_image(_jpeg(100, 100))
 
     assert content_id == "MY-CONTENT-123"
+    assert persisted_tokens == ["NEW"]
+    assert art_clients
+    assert all(art.closed for art in art_clients)
 
 
 async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
