@@ -1010,12 +1010,8 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
 
     # Force cleanup to keep integration-managed TV storage within the configured
     # limit. Manual and Art Store images are never deletion-eligible.
-    cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
     try:
-        await client.async_cleanup_storage(
-            max_items=cleanup_max,
-            only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-        )
+        await client.async_cleanup_storage(**_cleanup_params(entry))
     except Exception as e:
         _LOGGER.warning("Slideshow cleanup failed: %s", e)
 
