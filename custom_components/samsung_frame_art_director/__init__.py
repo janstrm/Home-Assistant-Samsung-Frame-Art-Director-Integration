@@ -648,9 +648,15 @@ async def async_setup_entry(
     )
 
     async def _svc_cleanup_storage(call: ServiceCall) -> None:
-        params = _cleanup_params(entry, call.data)
-        _LOGGER.debug("Action cleanup_storage called: %s", params)
-        async for client in _resolve_clients(call):
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            params = _cleanup_params(target.entry, call.data)
+            _LOGGER.debug(
+                "Action cleanup_storage called for host=%s: %s",
+                getattr(client, "host", "?"),
+                params,
+            )
             try:
                 summary = await client.async_cleanup_storage(**params)
                 _LOGGER.info("cleanup_storage summary on %s: %s", getattr(client, "host", "?"), summary)
