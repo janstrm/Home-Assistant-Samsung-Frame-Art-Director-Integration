@@ -1821,7 +1821,7 @@ class SamsungFrameClient:
                 return meta.get("last_displayed_at") or meta.get("created_at") or ""
             ordered = sorted(aged, key=_sort_key)  # oldest first
             # Determine how many to delete to reach the limit
-            excess = max(0, len(on_tv_ids) - int(max_items))
+            excess = max(0, len(to_consider) - int(max_items))
             if excess > 0:
                 ordered = ordered[:excess]
             else:
