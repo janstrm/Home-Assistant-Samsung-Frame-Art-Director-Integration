@@ -78,7 +78,11 @@ class SamsungFrameClient:
         """
         self._token_persister = persister
 
-    def _make_tv(self, port: Optional[int] = None):
+    def _make_tv(
+        self,
+        port: Optional[int] = None,
+        timeout: Optional[float] = None,
+    ):
         """Create a sync SamsungTVWS client that ALWAYS identifies with our
         client name and token (when known).
 
@@ -91,9 +95,21 @@ class SamsungFrameClient:
         from samsungtvws import SamsungTVWS  # type: ignore
         p = port or self._port or 8002
         try:
+            timeout_args = {"timeout": timeout} if timeout is not None else {}
             if self._token:
-                return SamsungTVWS(self._host, port=p, token=self._token, name=self._client_name)  # type: ignore[arg-type]
-            return SamsungTVWS(self._host, port=p, name=self._client_name)
+                return SamsungTVWS(
+                    self._host,
+                    port=p,
+                    token=self._token,
+                    name=self._client_name,
+                    **timeout_args,
+                )  # type: ignore[arg-type]
+            return SamsungTVWS(
+                self._host,
+                port=p,
+                name=self._client_name,
+                **timeout_args,
+            )
         except TypeError:
             # Very old library signature: keep at least the name so the TV
             # still recognizes a stable identity.
@@ -741,9 +757,11 @@ class SamsungFrameClient:
             [content_ids] if isinstance(content_ids, str) else content_ids
         )
 
-         # Fallback logic similar to upload select
+        # Fallback logic similar to upload select
         def _do_select():
-            tv = self._make_tv()
+            # The socket timeout must expire before the outer asyncio timeout;
+            # wait_for cannot cancel a blocking worker thread by itself.
+            tv = self._make_tv(timeout=25)
             art_client = None
             try:
                 art_client = tv.art()
@@ -1366,12 +1384,12 @@ class SamsungFrameClient:
                         ).fetchall()
                     return [str(row[0]) for row in rows]
                 except Exception as err:  # noqa: BLE001
-                    _LOGGER.debug(
+                    _LOGGER.warning(
                         "Upload: existing source lookup failed for %s: %r",
                         source_file,
                         err,
                     )
-                    return []
+                    raise
 
             existing_content_ids = await asyncio.to_thread(
                 _find_existing_content_ids

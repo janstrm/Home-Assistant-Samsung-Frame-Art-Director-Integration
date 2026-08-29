@@ -293,9 +293,10 @@ The `upload_art` service obtains the source bytes, then calls
    timeout and 20 MiB limit.
 2. Look up every tracked `content_id` for the exact `source_file`. Because the
    database is shared by all configured Frames, ask the target TV for its
-   available art (30-second timeout) and fast-select the first matching ID.
-   Update its tags and return without uploading. Only a successfully confirmed
-   absence permits a new upload; check/select failures abort to avoid duplicate
+   available art (25-second socket timeout, guarded by a 30-second async
+   timeout) and fast-select the first matching ID. Update its tags and return
+   without uploading. Only a successfully confirmed absence permits a new
+   upload; DB lookup, TV check, and selection failures abort to avoid duplicate
    copies. The check is repeated under `_art_lock` immediately before upload so
    concurrent calls for one source cannot both create a copy.
 3. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
