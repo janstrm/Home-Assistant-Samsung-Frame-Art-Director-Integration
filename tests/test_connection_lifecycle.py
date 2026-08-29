@@ -629,6 +629,7 @@ async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
 async def test_action_rejects_an_unknown_target(hass):
     """An action never reports success for an unresolved Frame entity."""
     hass.http = MagicMock()
+    assert await async_setup(hass, {})
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "frame.local", "port": 8002, "token": "SAVED"},

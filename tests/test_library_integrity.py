@@ -9,6 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import (
     _run_slideshow_job,
+    async_setup,
     async_setup_entry,
 )
 from custom_components.samsung_frame_art_director.const import (
@@ -22,6 +23,7 @@ from custom_components.samsung_frame_art_director.const import (
 async def test_sync_library_action_reports_curator_result(hass):
     """The public action reports every completed synchronization phase."""
     hass.http = MagicMock()
+    assert await async_setup(hass, {})
     client = MagicMock()
     client.host = "frame.local"
     client.token = "token"
@@ -107,6 +109,7 @@ async def test_slideshow_cleanup_uses_configured_options(hass, dashboard_filter)
 async def test_manual_cleanup_action_uses_complete_default_policy(hass):
     """The public cleanup action and automatic paths share safe defaults."""
     hass.http = MagicMock()
+    assert await async_setup(hass, {})
     client = MagicMock()
     client.host = "frame.local"
     client.token = "token"

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.samsung_frame_art_director import async_setup_entry
+from custom_components.samsung_frame_art_director import async_setup, async_setup_entry
 from custom_components.samsung_frame_art_director.const import DOMAIN
 
 
@@ -34,6 +34,7 @@ async def test_targeted_actions_use_only_the_selected_frames_runtime_and_options
 ):
     """Targeted actions cannot leak calls or options between two Frames."""
     hass.http = MagicMock()
+    assert await async_setup(hass, {})
     first_entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "frame-a.local", "token": "SAVED"},

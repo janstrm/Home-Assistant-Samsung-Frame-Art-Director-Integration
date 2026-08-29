@@ -55,6 +55,7 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
     from .views import SamsungFrameThumbnailView
 
     hass.http.register_view(SamsungFrameThumbnailView(hass))
+    _register_domain_actions(hass)
     return True
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
@@ -304,131 +305,8 @@ def _remote_filename(path: str) -> str:
     return filename
 
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: SamsungFrameConfigEntry
-) -> bool:
-    """Set up Samsung Frame Art Director from a config entry."""
-    _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
-
-    # Import here to avoid blocking config_flow import on package import
-    from .api import AuthenticationRejectedError, SamsungFrameClient
-
-    # Enable verbose logs from the beginning for diagnostics
-    _enable_verbose_logging()
-
-    # Compatibility Patch: fix missing is_true in samsungtvws.helper
-    try:
-        import samsungtvws.helper as _helper
-        if not hasattr(_helper, "is_true"):
-            _LOGGER.debug("Patching samsungtvws.helper.is_true")
-            _helper.is_true = lambda val: str(val).lower() in ("true", "1", "on", "yes")
-    except Exception:
-        pass
-
-    # Ensure /config/deps is on sys.path so HA can see manually installed deps
-    try:
-        import sys as _sys
-        import os as _os
-        deps_base = hass.config.path("deps")
-        candidates = [
-            deps_base,
-            _os.path.join(deps_base, f"lib/python{_sys.version_info.major}.{_sys.version_info.minor}/site-packages"),
-        ]
-        for cand in candidates:
-            if _os.path.isdir(cand) and cand not in _sys.path:
-                _sys.path.insert(0, cand)
-                _LOGGER.debug("Added to sys.path: %s", cand)
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Log samsungtvws version and whether async_art is available
-    try:
-        import samsungtvws  # type: ignore
-        ver = getattr(samsungtvws, "__version__", "unknown")
-        _LOGGER.info("samsungtvws package version: %s", ver)
-    except Exception as e:  # noqa: BLE001
-        _LOGGER.info("samsungtvws package not importable: %r", e)
-
-    # Respect diagnostics verbosity option (off by default)
-    try:
-        if entry.options.get("diagnostics_verbose", False):
-            _enable_verbose_logging()
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Best-effort: create the inbox/library folders so users can drop images
-    # immediately without first running a service.
-    try:
-        import os as _os
-        for _d in (
-            entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR,
-            entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR,
-        ):
-            _os.makedirs(_d, exist_ok=True)
-    except Exception:  # noqa: BLE001
-        _LOGGER.debug("Could not pre-create media folders", exc_info=True)
-
-    # Initialize with the persisted ConfigEntry identity. The pairing file path
-    # is retained only so an obsolete config-flow token file can be removed
-    # after authenticated startup succeeds.
-    host = entry.data.get("host")
-    safe_host = str(host).replace("/", "_").replace(".", "_")
-    token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
-    client = SamsungFrameClient(hass, host, entry.data.get("token"), token_file_path=token_file_path, port=entry.data.get("port"))
-
-    # Persist a refreshed token whenever the TV (re)issues one during normal
-    # operation, so authorization stays valid across reconnects and the TV
-    # stops re-prompting for access. Called from worker threads, so hop back
-    # onto the event loop before touching the config entry.
-    def _persist_token(new_token: str) -> None:
-        def _update() -> None:
-            cur = hass.config_entries.async_get_entry(entry.entry_id)
-            if cur and new_token and new_token != cur.data.get("token"):
-                _LOGGER.info("Persisting refreshed token for host=%s", host)
-                hass.config_entries.async_update_entry(cur, data={**cur.data, "token": new_token})
-        hass.loop.call_soon_threadsafe(_update)
-
-    client.set_token_persister(_persist_token)
-    client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
-
-    # Provide DB path for cleanup service (directory may not exist yet)
-    try:
-        import os as _os
-        db_dir = hass.config.path(DB_DIR)
-        _os.makedirs(db_dir, exist_ok=True)
-        client.set_db_path(hass.config.path(f"{DB_DIR}/{DB_FILE}"))
-        await client.async_initialize_database()
-    except Exception as err:  # noqa: BLE001
-        raise ConfigEntryNotReady(
-            f"Library database initialization failed: {err}"
-        ) from err
-    try:
-        # Validate the saved token without opening a new pairing flow. Only an
-        # explicit authentication failure starts reauth; reachability and
-        # missing device information remain retryable setup failures.
-        await client.async_connect_and_pair()
-    except AuthenticationRejectedError as err:
-        _LOGGER.debug("Client pairing failed (auth): %r", err, exc_info=True)
-        raise ConfigEntryAuthFailed from err
-    except Exception as err:  # noqa: BLE001
-        _LOGGER.debug("Client connect_and_pair failed: %r", err, exc_info=True)
-        raise ConfigEntryNotReady from err
-
-    # If we obtained a new token, persist it into the ConfigEntry
-    if client.token and client.token != entry.data.get("token"):
-        _LOGGER.info("Token updated for host=%s; persisting to ConfigEntry", entry.data.get("host"))
-        new_data = {**entry.data, "token": client.token}
-        hass.config_entries.async_update_entry(entry, data=new_data)
-
-    entry.runtime_data = SamsungFrameRuntimeData(client=client)
-
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        DATA_CLIENT: client,
-        **entry.data,
-    }
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
+def _register_domain_actions(hass: HomeAssistant) -> None:
+    """Register action handlers shared by every loaded Frame."""
     # Register domain-level actions (a.k.a. services) that accept target entities
     async def _resolve_clients(call: ServiceCall):
         for target in await async_resolve_action_targets(hass, call):
@@ -601,25 +479,23 @@ async def async_setup_entry(
         tags = call.data.get("tags")
         match_all = call.data.get("match_all", False)
         source = call.data.get("source", "library")
-        path = call.data.get("path")
+        requested_path = call.data.get("path")
         
-        _LOGGER.debug("Action rotate_art_now called: tags=%s match_all=%s source=%s path=%s", tags, match_all, source, path)
+        _LOGGER.debug("Action rotate_art_now called: tags=%s match_all=%s source=%s path=%s", tags, match_all, source, requested_path)
         
         tag_list = [t.strip() for t in tags.split(",")] if tags else None
 
-        # Get matte from configured style/color
-        matte = resolve_matte(entry.options)
-
-        async for client in _resolve_clients(call):
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            matte = resolve_matte(target.entry.options)
             try:
                 if source == "folder":
-                    # Use provided path or default from options
-                    if not path:
-                         # Try config entry options if available
-                         # We need to find the entry for this client
-                         # This implies we lookup the entry ID.
-                         # Simplified: if path is missing, use default const
-                         path = "/media/frame/library"
+                    path = (
+                        requested_path
+                        or target.entry.options.get(CONF_LIBRARY_DIR)
+                        or DEFAULT_LIBRARY_DIR
+                    )
                     success = await client.async_rotate_from_folder(path, matte=matte)
                     if success:
                         _LOGGER.info("rotate_art_now(folder) success on host=%s", getattr(client, "host", "?"))
@@ -676,9 +552,6 @@ async def async_setup_entry(
             vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
         }),
     )
-
-    # Setup slideshow timer if configured
-    await _reload_slideshow_timer(hass, entry)
 
     # Register Services
     async def async_service_handler(call: ServiceCall) -> None:
@@ -822,6 +695,135 @@ async def async_setup_entry(
                 pass
     
     hass.services.async_register(DOMAIN, "change_gallery_page", async_change_page)
+
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> bool:
+    """Set up Samsung Frame Art Director from a config entry."""
+    _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
+
+    # Import here to avoid blocking config_flow import on package import
+    from .api import AuthenticationRejectedError, SamsungFrameClient
+
+    # Enable verbose logs from the beginning for diagnostics
+    _enable_verbose_logging()
+
+    # Compatibility Patch: fix missing is_true in samsungtvws.helper
+    try:
+        import samsungtvws.helper as _helper
+        if not hasattr(_helper, "is_true"):
+            _LOGGER.debug("Patching samsungtvws.helper.is_true")
+            _helper.is_true = lambda val: str(val).lower() in ("true", "1", "on", "yes")
+    except Exception:
+        pass
+
+    # Ensure /config/deps is on sys.path so HA can see manually installed deps
+    try:
+        import sys as _sys
+        import os as _os
+        deps_base = hass.config.path("deps")
+        candidates = [
+            deps_base,
+            _os.path.join(deps_base, f"lib/python{_sys.version_info.major}.{_sys.version_info.minor}/site-packages"),
+        ]
+        for cand in candidates:
+            if _os.path.isdir(cand) and cand not in _sys.path:
+                _sys.path.insert(0, cand)
+                _LOGGER.debug("Added to sys.path: %s", cand)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Log samsungtvws version and whether async_art is available
+    try:
+        import samsungtvws  # type: ignore
+        ver = getattr(samsungtvws, "__version__", "unknown")
+        _LOGGER.info("samsungtvws package version: %s", ver)
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.info("samsungtvws package not importable: %r", e)
+
+    # Respect diagnostics verbosity option (off by default)
+    try:
+        if entry.options.get("diagnostics_verbose", False):
+            _enable_verbose_logging()
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Best-effort: create the inbox/library folders so users can drop images
+    # immediately without first running a service.
+    try:
+        import os as _os
+        for _d in (
+            entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR,
+            entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR,
+        ):
+            _os.makedirs(_d, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Could not pre-create media folders", exc_info=True)
+
+    # Initialize with the persisted ConfigEntry identity. The pairing file path
+    # is retained only so an obsolete config-flow token file can be removed
+    # after authenticated startup succeeds.
+    host = entry.data.get("host")
+    safe_host = str(host).replace("/", "_").replace(".", "_")
+    token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
+    client = SamsungFrameClient(hass, host, entry.data.get("token"), token_file_path=token_file_path, port=entry.data.get("port"))
+
+    # Persist a refreshed token whenever the TV (re)issues one during normal
+    # operation, so authorization stays valid across reconnects and the TV
+    # stops re-prompting for access. Called from worker threads, so hop back
+    # onto the event loop before touching the config entry.
+    def _persist_token(new_token: str) -> None:
+        def _update() -> None:
+            cur = hass.config_entries.async_get_entry(entry.entry_id)
+            if cur and new_token and new_token != cur.data.get("token"):
+                _LOGGER.info("Persisting refreshed token for host=%s", host)
+                hass.config_entries.async_update_entry(cur, data={**cur.data, "token": new_token})
+        hass.loop.call_soon_threadsafe(_update)
+
+    client.set_token_persister(_persist_token)
+    client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+
+    # Provide DB path for cleanup service (directory may not exist yet)
+    try:
+        import os as _os
+        db_dir = hass.config.path(DB_DIR)
+        _os.makedirs(db_dir, exist_ok=True)
+        client.set_db_path(hass.config.path(f"{DB_DIR}/{DB_FILE}"))
+        await client.async_initialize_database()
+    except Exception as err:  # noqa: BLE001
+        raise ConfigEntryNotReady(
+            f"Library database initialization failed: {err}"
+        ) from err
+    try:
+        # Validate the saved token without opening a new pairing flow. Only an
+        # explicit authentication failure starts reauth; reachability and
+        # missing device information remain retryable setup failures.
+        await client.async_connect_and_pair()
+    except AuthenticationRejectedError as err:
+        _LOGGER.debug("Client pairing failed (auth): %r", err, exc_info=True)
+        raise ConfigEntryAuthFailed from err
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.debug("Client connect_and_pair failed: %r", err, exc_info=True)
+        raise ConfigEntryNotReady from err
+
+    # If we obtained a new token, persist it into the ConfigEntry
+    if client.token and client.token != entry.data.get("token"):
+        _LOGGER.info("Token updated for host=%s; persisting to ConfigEntry", entry.data.get("host"))
+        new_data = {**entry.data, "token": client.token}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+
+    entry.runtime_data = SamsungFrameRuntimeData(client=client)
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        DATA_CLIENT: client,
+        **entry.data,
+    }
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    await _reload_slideshow_timer(hass, entry)
 
     # Register WebSocket API for Gallery Dashboard
     from homeassistant.components import websocket_api
