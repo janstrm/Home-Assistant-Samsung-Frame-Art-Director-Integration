@@ -340,11 +340,13 @@ The `upload_art` service obtains the source bytes, then calls
 
 ### Cleanup TV storage
 
-`async_cleanup_storage()` reads the TV's current + available content, optionally
-restricts to integration-managed ids, **preserves favorites and the current
-image**, applies optional age and `max_items` limits (deleting oldest first),
-then deletes via `delete_list` (fallback: per-id `delete`) and reconciles the
-`on_tv` flags in the DB. Supports `dry_run`.
+`async_cleanup_storage()` reads the TV's current + available content and always
+restricts deletion candidates to rows with a non-empty `source_file` (proof of
+integration upload provenance). Missing or unreadable provenance fails closed,
+so manual *My Photos* and Art Store items cannot be deleted. It **preserves
+favorites and the current image**, applies optional age and `max_items` limits
+(deleting oldest first), then deletes via `delete_list` (fallback: per-id
+`delete`) and reconciles the `on_tv` flags in the DB. Supports `dry_run`.
 
 ---
 

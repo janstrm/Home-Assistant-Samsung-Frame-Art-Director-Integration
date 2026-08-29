@@ -229,10 +229,16 @@ target:
 data:
   max_items: 50                  # Optional: keep at most N items
   max_age_days: 30               # Optional: delete items older than N days
-  preserve_current: true         # Optional: don't delete the currently displayed artwork
-  only_integration_managed: true # Optional: only delete items tracked by this integration
-  dry_run: false                 # Optional: preview what would be deleted without actually deleting
+  preserve_current: true # Optional: don't delete the currently displayed artwork
+  dry_run: false         # Optional: preview what would be deleted without actually deleting
 ```
+
+Cleanup is fail-safe: only artworks with integration upload provenance
+(`source_file`) can be deleted. Manually uploaded *My Photos* and Art Store
+items are protected even if the legacy `only_integration_managed` option is
+set to `false` in an older automation, or provenance data cannot be read. The
+legacy option is still accepted for compatibility but is no longer shown in
+new service and options forms.
 
 ### Diagnostics
 

@@ -91,11 +91,6 @@ cleanup_storage:
       example: true
       selector:
         boolean:
-    only_integration_managed:
-      description: Only delete items tracked by the integration DB
-      example: true
-      selector:
-        boolean:
     dry_run:
       description: Only report what would be deleted (no deletion)
       example: false

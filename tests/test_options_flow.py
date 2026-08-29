@@ -57,7 +57,6 @@ async def test_flatten_preserves_entity_managed_keys(hass):
             "cleanup_max_items": 50,
             "cleanup_max_age_days": 0,
             "cleanup_preserve_current": True,
-            "cleanup_only_integration_managed": True,
             "cleanup_dry_run": False,
         },
         "folders": {"inbox_dir": "/i", "library_dir": "/l", "resize_mode": "crop"},

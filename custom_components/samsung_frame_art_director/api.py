@@ -1535,20 +1535,32 @@ class SamsungFrameClient:
 
         current_id, on_tv_ids = await asyncio.to_thread(_fetch_tv_state)
 
-        # If only_integration_managed: filter via DB entries we know about
+        # Destructive cleanup is always provenance-gated. DB sync also records
+        # manually uploaded TV art, so mere DB presence is not proof that this
+        # integration owns an item. Only a non-empty source_file marks an image
+        # uploaded by this integration. If provenance cannot be read, fail
+        # closed and delete nothing.
         candidates: list[str] = list(on_tv_ids)
         skipped_favorites: list[str] = []
         db_rows: dict[str, dict] = {}
 
-        if only_integration_managed and self._db_path:
+        if not only_integration_managed:
+            _LOGGER.debug(
+                "Cleanup: ignoring only_integration_managed=False; "
+                "manual TV art is never deletion-eligible"
+            )
+
+        if self._db_path:
             import sqlite3
             def _db_fetch(ids: list[str]) -> dict[str, dict]:
                 if not ids:
                     return {}
                 placeholders = ",".join(["?"] * len(ids))
                 q = (
-                    f"SELECT content_id, is_favorite, created_at, last_displayed_at, on_tv FROM art_library "
-                    f"WHERE content_id IN ({placeholders})"
+                    "SELECT content_id, is_favorite, created_at, "
+                    "last_displayed_at, on_tv, source_file FROM art_library "
+                    f"WHERE content_id IN ({placeholders}) "
+                    "AND source_file IS NOT NULL AND TRIM(source_file) != ''"
                 )
                 out: dict[str, dict] = {}
                 try:
@@ -1561,6 +1573,7 @@ class SamsungFrameClient:
                                 "created_at": row[2],
                                 "last_displayed_at": row[3],
                                 "on_tv": bool(row[4]),
+                                "source_file": row[5],
                             }
                     finally:
                         conn.close()
@@ -1568,8 +1581,8 @@ class SamsungFrameClient:
                     _LOGGER.debug("Cleanup: DB fetch failed: %r", e)
                 return out
             db_rows = await asyncio.to_thread(_db_fetch, candidates)
-            # Restrict candidates to items we know and track
-            candidates = [cid for cid in candidates if cid in db_rows]
+
+        candidates = [cid for cid in candidates if cid in db_rows]
 
         # Filter favorites and optionally current
         if db_rows:

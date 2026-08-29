@@ -17,6 +17,34 @@ def _jpeg(width: int, height: int) -> bytes:
     return buf.getvalue()
 
 
+def _cleanup_samsungtvws(available_ids, deleted_ids):
+    """Return a fake TV boundary that records cleanup deletions."""
+
+    class FakeArt:
+        def get_current(self):
+            return None
+
+        def available(self):
+            return [{"content_id": content_id} for content_id in available_ids]
+
+        def delete_list(self, content_ids):
+            deleted_ids.extend(content_ids)
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    return SimpleNamespace(SamsungTVWS=FakeTV)
+
+
 async def test_preprocess_crop_outputs_target_size(hass):
     client = SamsungFrameClient(hass, "1.2.3.4")
     client.set_resize_mode("crop")
@@ -146,6 +174,72 @@ async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
 
     assert content_id == "MY-CONTENT-1"
     assert upload_calls == 1
+
+
+async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
+    """Automatic cleanup only deletes art with integration provenance."""
+    deleted_ids = []
+
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-MANUAL")
+    await client.async_track_art(
+        "MY-INTEGRATION",
+        source_file="/media/frame/library/managed.jpg",
+    )
+
+    fake_samsungtvws = _cleanup_samsungtvws(
+        ["MY-MANUAL", "MY-INTEGRATION"],
+        deleted_ids,
+    )
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            only_integration_managed=False,
+            preserve_current=False,
+        )
+
+    assert summary["deleted"] == ["MY-INTEGRATION"]
+    assert deleted_ids == ["MY-INTEGRATION"]
+
+
+async def test_cleanup_without_provenance_db_deletes_nothing(hass):
+    """Cleanup fails closed when no provenance database is configured."""
+    deleted_ids = []
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    fake_samsungtvws = _cleanup_samsungtvws(["MY-MANUAL"], deleted_ids)
+
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            only_integration_managed=False,
+            preserve_current=False,
+        )
+
+    assert summary["to_delete"] == []
+    assert summary["deleted"] == []
+    assert deleted_ids == []
+
+
+async def test_cleanup_dry_run_excludes_manual_tv_art(hass, tmp_path):
+    """The reported dry-run scenario contains no manual deletion candidates."""
+    deleted_ids = []
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-MANUAL")
+    fake_samsungtvws = _cleanup_samsungtvws(["MY-MANUAL"], deleted_ids)
+
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            only_integration_managed=False,
+            preserve_current=False,
+            dry_run=True,
+        )
+
+    assert summary["to_delete"] == []
+    assert summary["deleted"] == []
+    assert deleted_ids == []
 
 
 async def test_get_state_falls_back_gracefully_without_tv(hass):
