@@ -14,6 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.samsung_frame_art_director import (
     _enable_verbose_logging,
     async_setup_entry,
+    async_unload_entry,
 )
 from custom_components.samsung_frame_art_director.api import (
     AuthenticationRejectedError,
@@ -552,6 +553,48 @@ async def test_setup_stops_before_tv_connection_when_database_init_fails(hass):
         await async_setup_entry(hass, entry)
 
     client.async_connect_and_pair.assert_not_awaited()
+
+
+async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
+    """A loaded entry retains and disconnects its own Frame client."""
+    hass.http = MagicMock()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock()
+    client.async_connect_and_pair = AsyncMock()
+    client.async_disconnect = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+    ):
+        assert await async_setup_entry(hass, entry)
+        assert entry.runtime_data.client is client
+
+        # Runtime ownership must not depend on the legacy hass.data mirror.
+        hass.data[DOMAIN].pop(entry.entry_id)
+        assert await async_unload_entry(hass, entry)
+
+    client.async_disconnect.assert_awaited_once_with()
 
 
 @pytest.mark.parametrize(
