@@ -8,7 +8,11 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.samsung_frame_art_director import async_setup, async_setup_entry
+from custom_components.samsung_frame_art_director import (
+    async_setup,
+    async_setup_entry,
+    async_unload_entry,
+)
 from custom_components.samsung_frame_art_director.api import DeviceUnavailableError
 from custom_components.samsung_frame_art_director.const import DB_DIR, DB_FILE, DOMAIN
 from custom_components.samsung_frame_art_director.media_player import (
@@ -36,6 +40,7 @@ def _client(host: str) -> MagicMock:
     client.async_cleanup_storage = AsyncMock()
     client.async_purge_database = AsyncMock()
     client.async_toggle_favorite = AsyncMock(return_value=True)
+    client.async_disconnect = AsyncMock()
     return client
 
 
@@ -126,6 +131,53 @@ async def test_setup_migrates_legacy_database_into_entry_owned_database(
             "SELECT value FROM migration_marker"
         ).fetchone()
     assert marker == ("preserved",)
+
+
+async def test_unloading_one_frame_keeps_actions_for_the_remaining_runtime(hass):
+    """An unloaded runtime cannot make the remaining Frame target ambiguous."""
+    hass.http = MagicMock()
+    assert await async_setup(hass, {})
+    first_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame-a.local", "token": "SAVED"},
+        unique_id="frame-unload-a",
+    )
+    second_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame-b.local", "token": "SAVED"},
+        unique_id="frame-unload-b",
+    )
+    first_entry.add_to_hass(hass)
+    second_entry.add_to_hass(hass)
+    first_client = _client("frame-a.local")
+    second_client = _client("frame-b.local")
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            side_effect=[first_client, second_client],
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+    ):
+        assert await async_setup_entry(hass, first_entry)
+        assert await async_setup_entry(hass, second_entry)
+        assert await async_unload_entry(hass, first_entry)
+
+    assert hass.services.has_service(DOMAIN, "purge_database")
+    await hass.services.async_call(DOMAIN, "purge_database", blocking=True)
+
+    first_client.async_disconnect.assert_awaited_once_with()
+    first_client.async_purge_database.assert_not_awaited()
+    second_client.async_purge_database.assert_awaited_once_with()
 
 
 async def test_change_gallery_page_uses_renamed_controls_of_targeted_frame(hass):
