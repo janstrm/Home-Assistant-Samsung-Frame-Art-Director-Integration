@@ -734,49 +734,51 @@ async def async_setup_entry(
 
     # New Favorites Services
     async def async_fav_handler(call: ServiceCall) -> None:
-        stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if not stored: return
-        client = stored.get(DATA_CLIENT)
-        if not client: return
-        
-        elif call.service == "toggle_favorite":
-            content_id = call.data.get("content_id")
-            if not content_id:
-                # Default to whatever is currently displayed on the TV.
-                try:
-                    current = await client.async_get_current_art()
-                    content_id = current.get("content_id")
-                except Exception:  # noqa: BLE001
-                    content_id = None
-            if content_id:
-                new_state = await client.async_toggle_favorite(content_id)
-                _LOGGER.debug(f"Toggled favorite for {content_id}: {new_state}")
-                persistent_notification.async_create(
-                    hass,
-                    f"{'Added to' if new_state else 'Removed from'} favorites: {content_id}",
-                    title="Art Director",
-                )
-            else:
-                _LOGGER.warning("toggle_favorite: no content_id provided and no current artwork detected")
-
-        elif call.service == "delete_art":
-            content_id = call.data.get("content_id")
-            if content_id:
-                success = await client.async_delete_art(content_id)
-                if success:
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            if call.service == "toggle_favorite":
+                content_id = call.data.get("content_id")
+                if not content_id:
+                    try:
+                        current = await client.async_get_current_art()
+                        content_id = current.get("content_id")
+                    except Exception:  # noqa: BLE001
+                        content_id = None
+                if content_id:
+                    new_state = await client.async_toggle_favorite(content_id)
+                    _LOGGER.debug(
+                        "Toggled favorite for %s on host=%s: %s",
+                        content_id,
+                        getattr(client, "host", "?"),
+                        new_state,
+                    )
                     persistent_notification.async_create(
                         hass,
-                        f"Deleted 1 item ({content_id}) from library.",
-                        title="Art Director"
+                        f"{'Added to' if new_state else 'Removed from'} favorites: {content_id}",
+                        title="Art Director",
                     )
                 else:
-                    raise ServiceValidationError(
-                        "Artwork is not a tracked local artwork or could not be deleted"
+                    _LOGGER.warning(
+                        "toggle_favorite: no content_id provided and no current artwork detected"
                     )
-                
-        elif call.service == "rotate_favorites":
-            matte = resolve_matte(entry.options)
-            await client.async_rotate_art(source="favorites", matte=matte)
+            elif call.service == "delete_art":
+                content_id = call.data.get("content_id")
+                if content_id:
+                    success = await client.async_delete_art(content_id)
+                    if success:
+                        persistent_notification.async_create(
+                            hass,
+                            f"Deleted 1 item ({content_id}) from library.",
+                            title="Art Director",
+                        )
+                    else:
+                        raise ServiceValidationError(
+                            "Artwork is not a tracked local artwork or could not be deleted"
+                        )
+            elif call.service == "rotate_favorites":
+                matte = resolve_matte(target.entry.options)
+                await client.async_rotate_art(source="favorites", matte=matte)
             
     hass.services.async_register(DOMAIN, "toggle_favorite", async_fav_handler)
     hass.services.async_register(DOMAIN, "delete_art", async_fav_handler)
