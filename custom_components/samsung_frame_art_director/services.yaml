@@ -92,7 +92,7 @@ cleanup_storage:
       selector:
         boolean:
     only_integration_managed:
-      description: Only delete items tracked by the integration DB
+      description: Legacy compatibility option. Cleanup always protects images without integration upload provenance.
       example: true
       selector:
         boolean:

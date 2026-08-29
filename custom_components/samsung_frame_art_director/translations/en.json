@@ -89,13 +89,13 @@
               "cleanup_max_items": "Max items on TV",
               "cleanup_max_age_days": "Max age",
               "cleanup_preserve_current": "Keep the current image",
-              "cleanup_only_integration_managed": "Only delete images this integration uploaded",
+              "cleanup_only_integration_managed": "Protect manually uploaded images (always enabled)",
               "cleanup_dry_run": "Dry run (log only, don't delete)"
             },
             "data_description": {
               "cleanup_max_items": "Maximum artworks to keep on the TV; oldest are deleted first.",
               "cleanup_max_age_days": "Delete artworks older than this many days. 0 disables the age limit.",
-              "cleanup_only_integration_managed": "Never deletes your own or Art Store items.",
+              "cleanup_only_integration_managed": "Compatibility setting; your own and Art Store images are always protected.",
               "cleanup_dry_run": "Preview cleanup in the logs without deleting anything."
             }
           },
