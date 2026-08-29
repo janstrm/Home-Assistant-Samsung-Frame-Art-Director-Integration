@@ -9,6 +9,7 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import async_setup, async_setup_entry
+from custom_components.samsung_frame_art_director.api import DeviceUnavailableError
 from custom_components.samsung_frame_art_director.const import DB_DIR, DB_FILE, DOMAIN
 from custom_components.samsung_frame_art_director.media_player import (
     async_setup_entry as async_setup_media_player,
@@ -49,7 +50,11 @@ async def test_media_player_coordinator_is_owned_by_its_config_entry(hass):
     entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
     client = _client("frame.local")
     client.async_get_state = AsyncMock(
-        return_value={"status": "on", "content_id": "MY-FRAME"}
+        side_effect=[
+            {"status": "on", "content_id": "MY-FRAME"},
+            DeviceUnavailableError("offline"),
+            {"status": "on", "content_id": "MY-RECOVERED"},
+        ]
     )
     entry.runtime_data = SamsungFrameRuntimeData(client=client)
     add_entities = MagicMock()
@@ -62,6 +67,18 @@ async def test_media_player_coordinator_is_owned_by_its_config_entry(hass):
         "content_id": "MY-FRAME",
     }
     add_entities.assert_called_once()
+    entity = add_entities.call_args.args[0][0]
+    assert entity.available is True
+
+    await entry.runtime_data.coordinator.async_refresh()
+    assert entity.available is False
+
+    await entry.runtime_data.coordinator.async_refresh()
+    assert entity.available is True
+    assert entry.runtime_data.coordinator.data == {
+        "status": "on",
+        "content_id": "MY-RECOVERED",
+    }
 
 
 async def test_setup_migrates_legacy_database_into_entry_owned_database(
