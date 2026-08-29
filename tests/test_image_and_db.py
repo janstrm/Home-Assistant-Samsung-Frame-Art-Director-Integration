@@ -730,8 +730,23 @@ async def test_concurrent_uploads_create_only_one_tv_copy(hass, tmp_path):
     assert upload_calls == 1
 
 
-async def test_upload_reuses_content_for_equivalent_source_paths(hass, tmp_path):
-    """Harmless path aliases identify one tracked upload."""
+@pytest.mark.parametrize(
+    "source_aliases",
+    [
+        (
+            "/media/frame/library/paintings/../sunrise.jpg",
+            "/media/frame/library/sunrise.jpg",
+        ),
+        (
+            "HTTPS://Render.Local:443/gallery/../sunrise.jpg#preview",
+            "https://render.local/sunrise.jpg",
+        ),
+    ],
+)
+async def test_upload_reuses_content_for_equivalent_source_paths(
+    hass, tmp_path, source_aliases
+):
+    """Harmless local and URL aliases identify one tracked upload."""
     upload_calls = 0
     uploaded_ids = []
 
@@ -768,16 +783,12 @@ async def test_upload_reuses_content_for_equivalent_source_paths(hass, tmp_path)
 
     client = SamsungFrameClient(hass, "1.2.3.4", token="token")
     client.set_db_path(str(tmp_path / "art.db"))
-    aliases = (
-        "/media/frame/library/paintings/../sunrise.jpg",
-        "/media/frame/library/sunrise.jpg",
-    )
 
     fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
     with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
         results = [
             await client.async_upload_image(_jpeg(100, 100), source_file=source)
-            for source in aliases
+            for source in source_aliases
         ]
 
     assert results == ["MY-NEW-1", "MY-NEW-1"]
