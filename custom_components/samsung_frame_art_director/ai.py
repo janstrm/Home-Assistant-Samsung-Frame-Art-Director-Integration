@@ -1,211 +1,261 @@
-"""AI Vision Engine for Samsung Frame Art Director.
+"""AI vision providers used to generate artwork tags."""
 
-This module abstracts the interaction with various AI providers (Gemini, OpenAI)
-to analyze images and generate descriptive tags.
-It is designed to be usable standalone (for testing) or within HA.
-"""
-import logging
-import base64
-import time
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
+import base64
+import logging
+import time
+from typing import Any
 
-# Configure logging for standalone use
-logging.basicConfig(level=logging.INFO)
+from aiohttp import ClientTimeout
+
 _LOGGER = logging.getLogger(__name__)
+
+AI_REQUEST_ERROR = "AI provider request failed"
+
+
+def detect_image_mime(image_bytes: bytes) -> str:
+    """Return the supported image MIME type derived from its signature."""
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if (
+        len(image_bytes) >= 12
+        and image_bytes.startswith(b"RIFF")
+        and image_bytes[8:12] == b"WEBP"
+    ):
+        return "image/webp"
+    raise ValueError("Unsupported or invalid image format")
+
+
+async def _async_post_provider_json(
+    session: Any,
+    url: str,
+    *,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    provider: str,
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """POST one provider request with shared timeout and safe failures."""
+    try:
+        async with session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=ClientTimeout(total=30),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                _LOGGER.warning(
+                    "%s request returned HTTP %s",
+                    provider,
+                    response.status,
+                )
+                return None, {
+                    "error": f"{AI_REQUEST_ERROR} (HTTP {response.status})",
+                    "provider": provider,
+                }
+            return await response.json(), None
+    except Exception:  # noqa: BLE001 - provider exceptions are untrusted
+        _LOGGER.error("%s request failed", provider)
+        return None, {"error": AI_REQUEST_ERROR, "provider": provider}
+
+
+def _analysis_result(
+    text: str,
+    *,
+    provider: str,
+    model: str,
+    start_time: float,
+) -> dict[str, Any]:
+    """Build the common successful provider result."""
+    tags = [
+        tag.strip().lower()
+        for tag in text.replace("\n", ",").split(",")
+        if tag.strip()
+    ]
+    return {
+        "tags": tags[:15],
+        "description": text,
+        "provider": provider,
+        "model": model,
+        "duration": round(time.monotonic() - start_time, 3),
+    }
+
 
 class ImageAnalyzer(ABC):
     """Abstract base class for AI image analyzers."""
 
-    def __init__(self, api_key: str, model_name: str = "default"):
-        self.api_key = api_key
+    def __init__(self, session: Any, model_name: str) -> None:
+        self._session = session
         self.model_name = model_name
 
     @abstractmethod
-    async def analyze_image(self, image_bytes: bytes, prompt: str) -> dict:
-        """Analyze image and return tags and metadata.
-        
-        Returns:
-            dict: {
-                "tags": list[str],
-                "description": str,
-                "provider": str,
-                "model": str,
-                "duration": float
-            }
-        """
-        pass
+    async def analyze_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        api_key: str,
+    ) -> dict:
+        """Analyze image bytes with a credential supplied only for this call."""
+
 
 class GeminiAnalyzer(ImageAnalyzer):
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
-        self.api_key = api_key
-        self.model_name = model
-        self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    """Google Gemini REST analyzer using Home Assistant's HTTP session."""
 
-    async def analyze_image(self, image_data: bytes, prompt: str = "Describe this art") -> Dict[str, Any]:
-        """Analyze image using Gemini Vision REST API."""
-        import base64
-        import aiohttp
-        
-        start_time = time.time()
-        
-        # Prepare structured prompt
+    def __init__(self, session: Any, model: str = "gemini-2.5-flash") -> None:
+        super().__init__(session, model)
+        self.url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent"
+        )
+
+    async def analyze_image(
+        self,
+        image_data: bytes,
+        prompt: str = "Describe this art",
+        *,
+        api_key: str,
+    ) -> dict[str, Any]:
+        """Analyze an image using the Gemini Vision REST API."""
+        start_time = time.monotonic()
         structured_prompt = (
             f"{prompt}\n"
             "Return exactly 15 descriptive keywords or short phrases separated by commas. "
             "Include visual style (e.g. oil painting), subject (e.g. mountains), "
-            "and explicitly infer: Weather (e.g. sunny, rainy), Lighting (e.g. golden hour, dark), "
-            "and Mood (e.g. calm, energetic). "
-            "Example: landscape, mountains, sunny, clear sky, morning light, calm, nature, river, clouds, impressionism, bright, blue, summer, peaceful, outdoors"
+            "and explicitly infer: Weather (e.g. sunny, rainy), "
+            "Lighting (e.g. golden hour, dark), and Mood (e.g. calm, energetic). "
+            "Example: landscape, mountains, sunny, clear sky, morning light, calm, "
+            "nature, river, clouds, impressionism, bright, blue, summer, peaceful, outdoors"
         )
-
-        # Prepare JSON payload
-        b64_image = base64.b64encode(image_data).decode('utf-8')
         payload = {
-            "contents": [{
-                "parts": [
-                    {"text": structured_prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg", # Assuming JPEG/PNG, API handles generic well usually, but we stick to jpeg/png
-                            "data": b64_image
-                        }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "maxOutputTokens": 500,
-                "temperature": 0.4
-            }
+            "contents": [
+                {
+                    "parts": [
+                        {"text": structured_prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": detect_image_mime(image_data),
+                                "data": base64.b64encode(image_data).decode("ascii"),
+                            }
+                        },
+                    ]
+                }
+            ],
+            "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4},
         }
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(self.url, json=payload, timeout=30) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        _LOGGER.error(f"Gemini API Error {response.status}: {error_text}")
-                        return {"error": f"API Error {response.status}"}
-                    
-                    data = await response.json()
-                    
-                    # Parse response
-                    try:
-                        # Candidate -> Content -> Parts -> Text
-                        text = data['candidates'][0]['content']['parts'][0]['text']
-                    except (KeyError, IndexError):
-                        _LOGGER.error(f"Malformed Gemini Response: {data}")
-                        return {"error": "Malformed Response"}
-                    
-                    # Process Tags
-                    tags = [t.strip().lower() for t in text.split(',') if t.strip()]
-                    duration = time.time() - start_time
-                    
-                    return {
-                        "tags": tags[:15], # Limit to 15
-                        "description": text,
-                        "provider": "Google Gemini (REST)",
-                        "model": self.model_name,
-                        "duration": duration
-                    }
+        provider = "Google Gemini (REST)"
+        data, error = await _async_post_provider_json(
+            self._session,
+            self.url,
+            payload=payload,
+            headers={"x-goog-api-key": api_key},
+            provider=provider,
+        )
+        if error:
+            return error
 
-        except Exception as e:
-            _LOGGER.error(f"Gemini Request Failed: {e}")
-            return {"error": str(e)}
+        try:
+            if data is not None:
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+            if data is None or not isinstance(text, str):
+                raise TypeError("Provider response text is not a string")
+        except (KeyError, IndexError, TypeError):
+            _LOGGER.warning("Gemini returned a malformed response")
+            return {
+                "error": "AI provider returned a malformed response",
+                "provider": provider,
+            }
+
+        return _analysis_result(
+            text,
+            provider=provider,
+            model=self.model_name,
+            start_time=start_time,
+        )
 
 
 class OpenAIAnalyzer(ImageAnalyzer):
-    """OpenAI GPT-4o Vision Analyzer."""
-    
-    def __init__(self, api_key: str, model_name: str = "gpt-4o"):
-        super().__init__(api_key, model_name)
-        try:
-            from openai import AsyncOpenAI
-            self._client = AsyncOpenAI(api_key=api_key)
-        except ImportError:
-            _LOGGER.error("openai package not installed")
-            self._client = None
+    """OpenAI REST analyzer using Home Assistant's HTTP session."""
 
-    async def analyze_image(self, image_bytes: bytes, prompt: str) -> dict:
-        if not self._client:
-            return {"error": "Dependency missing"}
-            
-        start_time = time.time()
-        try:
-            # OpenAI requires base64 encoded image
-            b64_image = base64.b64encode(image_bytes).decode('utf-8')
-            
-            response = await self._client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{b64_image}"
-                                }
+    def __init__(self, session: Any, model_name: str = "gpt-4o") -> None:
+        super().__init__(session, model_name)
+        self.url = "https://api.openai.com/v1/chat/completions"
+
+    async def analyze_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        api_key: str,
+    ) -> dict:
+        """Analyze an image using OpenAI's REST API."""
+        start_time = time.monotonic()
+        mime_type = detect_image_mime(image_bytes)
+        image_data = base64.b64encode(image_bytes).decode("ascii")
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{image_data}"
                             },
-                        ],
-                    }
-                ],
-                max_tokens=300,
-            )
-            
-            text = response.choices[0].message.content
-            tags = [t.strip().lower() for t in text.replace("\n", ",").split(",") if t.strip()]
-            
-            duration = time.time() - start_time
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 300,
+        }
+
+        provider = "OpenAI"
+        data, error = await _async_post_provider_json(
+            self._session,
+            self.url,
+            payload=payload,
+            headers={"Authorization": f"Bearer {api_key}"},
+            provider=provider,
+        )
+        if error:
+            return error
+
+        try:
+            if data is not None:
+                text = data["choices"][0]["message"]["content"]
+            if data is None or not isinstance(text, str):
+                raise TypeError("Provider response text is not a string")
+        except (KeyError, IndexError, TypeError):
+            _LOGGER.warning("OpenAI returned a malformed response")
             return {
-                "tags": tags[:15],
-                "description": text,
-                "provider": "OpenAI",
-                "model": self.model_name,
-                "duration": round(duration, 3)
+                "error": "AI provider returned a malformed response",
+                "provider": provider,
             }
-            
-        except Exception as e:
-            _LOGGER.error("OpenAI analysis failed: %s", e)
-            return {"error": str(e), "provider": "OpenAI"}
+
+        return _analysis_result(
+            text,
+            provider=provider,
+            model=self.model_name,
+            start_time=start_time,
+        )
 
 
 def create_analyzer(
     provider: str,
-    gemini_api_key: str = "",
-    openai_api_key: str = "",
     model: str = "",
-) -> tuple[Optional[ImageAnalyzer], Optional[str]]:
-    """Build the configured image analyzer.
-
-    This is the single wiring point between the integration's options and the
-    concrete :class:`ImageAnalyzer` implementations. To add a new provider,
-    implement an ``ImageAnalyzer`` subclass and add a branch here.
-
-    Returns a ``(analyzer, error)`` tuple. On success ``error`` is ``None``; on
-    failure ``analyzer`` is ``None`` and ``error`` is a human-readable reason
-    suitable for logging and persistent notifications.
-    """
+    *,
+    session: Any | None = None,
+) -> tuple[ImageAnalyzer | None, str | None]:
+    """Build the configured analyzer without accepting or storing API keys."""
     provider = (provider or "gemini").lower()
     model = (model or "").strip()
-
+    if session is None:
+        return None, "AI HTTP session is unavailable."
     if provider == "openai":
-        if not openai_api_key:
-            return None, (
-                "OpenAI selected but no OpenAI API key configured. "
-                "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
-            )
-        if model:
-            return OpenAIAnalyzer(openai_api_key, model_name=model), None
-        return OpenAIAnalyzer(openai_api_key), None
-
-    # Default provider: Google Gemini
-    if not gemini_api_key:
-        return None, (
-            "No Gemini API key configured. "
-            "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
-        )
-    if model:
-        return GeminiAnalyzer(gemini_api_key, model=model), None
-    return GeminiAnalyzer(gemini_api_key), None
+        return OpenAIAnalyzer(session, model or "gpt-4o"), None
+    return GeminiAnalyzer(session, model or "gemini-2.5-flash"), None

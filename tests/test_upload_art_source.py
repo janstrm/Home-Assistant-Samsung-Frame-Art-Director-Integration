@@ -1,4 +1,6 @@
 """Tests for upload_art image sourcing: http(s) URL vs local path."""
+import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, mock_open, patch
 
 import pytest
@@ -31,12 +33,17 @@ class _FakeResponse:
         data: bytes,
         content_length: int | None | object = _DEFAULT_CONTENT_LENGTH,
         chunks: list[bytes] | None = None,
+        *,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
     ):
         self._data = data
         self.content_length = (
             len(data) if content_length is _DEFAULT_CONTENT_LENGTH else content_length
         )
         self.content = _FakeContent(chunks if chunks is not None else [data])
+        self.status = status
+        self.headers = headers or {}
         self.raised = False
 
     def raise_for_status(self) -> None:
@@ -58,15 +65,19 @@ class _FakeGet:
 
 
 class _FakeSession:
-    def __init__(self, resp: _FakeResponse):
-        self._resp = resp
+    def __init__(self, resp: _FakeResponse | list[_FakeResponse]):
+        self._responses = list(resp) if isinstance(resp, list) else [resp]
         self.requested_url = None
+        self.requested_urls = []
         self.timeout = None
+        self.allow_redirects = None
 
-    def get(self, url, timeout=None):
+    def get(self, url, timeout=None, allow_redirects=None):
         self.requested_url = url
+        self.requested_urls.append(url)
         self.timeout = timeout
-        return _FakeGet(self._resp)
+        self.allow_redirects = allow_redirects
+        return _FakeGet(self._responses.pop(0))
 
 
 @pytest.fixture
@@ -77,17 +88,26 @@ async def upload_service(hass):
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
+    client.async_initialize_database = AsyncMock()
     client.async_get_artmode_status = AsyncMock()
     client.async_send_key = AsyncMock()
     client.async_set_artmode = AsyncMock()
     client.async_upload_image = AsyncMock()
     client.async_track_art = AsyncMock()
     client.async_cleanup_storage = AsyncMock()
+    client.async_delete_art = AsyncMock()
+    client.async_read_local_art = AsyncMock()
 
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "frame.local", "token": "token"},
-        options={"use_power_key_on_off": True},
+        options={
+            "use_power_key_on_off": True,
+            "cleanup_max_items": 7,
+            "cleanup_max_age_days": 14,
+            "cleanup_preserve_current": False,
+            "cleanup_dry_run": True,
+        },
     )
     entry.add_to_hass(hass)
 
@@ -108,8 +128,34 @@ async def upload_service(hass):
     yield client
 
 
+async def test_upload_art_cleanup_uses_configured_options(hass, upload_service):
+    """Automatic cleanup after upload uses the same configured policy."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    upload_service.async_upload_image.return_value = "MY-UPLOADED"
+    session = _FakeSession(_FakeResponse(b"JPEGDATA"))
+    with patch(
+        "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+        return_value=session,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/art.jpg"},
+            blocking=True,
+        )
+
+    upload_service.async_cleanup_storage.assert_awaited_once_with(
+        max_items=7,
+        max_age_days=14,
+        preserve_current=False,
+        only_integration_managed=True,
+        dry_run=True,
+    )
+
+
 async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_service):
     """The public service accepts URL schemes regardless of letter case."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
     resp = _FakeResponse(b"JPEGDATA")
     session = _FakeSession(resp)
     with patch(
@@ -135,8 +181,143 @@ async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_ser
     upload_service.async_track_art.assert_not_awaited()
 
 
+async def test_upload_art_rejects_an_untrusted_remote_host(hass, upload_service):
+    """The public service must not contact a URL outside HA's allowlist."""
+    resp = _FakeResponse(b"JPEGDATA")
+    session = _FakeSession(resp)
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="allowlist_external_urls"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://untrusted.example/image.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_url is None
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_rejects_credentials_in_a_remote_url(hass, upload_service):
+    """A trusted host still cannot receive credentials embedded in its URL."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    session = _FakeSession(_FakeResponse(b"JPEGDATA"))
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="credentials"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://user:secret@render.local/image.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_urls == []
+
+
+async def test_upload_art_rejects_an_unsupported_remote_scheme(hass, upload_service):
+    """URL-like sources must use HTTP or HTTPS."""
+    with pytest.raises(ServiceValidationError, match="Unsupported image URL scheme"):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "ftp://render.local/image.jpg"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_revalidates_redirects_before_following_them(
+    hass,
+    upload_service,
+):
+    """A trusted source cannot redirect the shared client to an untrusted host."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    session = _FakeSession(
+        [
+            _FakeResponse(
+                b"",
+                status=302,
+                headers={"Location": "https://untrusted.example/image.jpg"},
+            ),
+            _FakeResponse(b"ESCAPED"),
+        ]
+    )
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="allowlist_external_urls"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/start.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_urls == ["https://render.local/start.jpg"]
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_follows_a_trusted_relative_redirect(hass, upload_service):
+    """Redirect validation preserves legitimate renderer redirects."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
+    session = _FakeSession(
+        [
+            _FakeResponse(b"", status=302, headers={"Location": "/final.jpg"}),
+            _FakeResponse(b"JPEGDATA"),
+        ]
+    )
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        patch(
+            "custom_components.samsung_frame_art_director.asyncio.timeout",
+            wraps=asyncio.timeout,
+        ) as total_timeout,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://render.local/start.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_urls == [
+        "https://render.local/start.jpg",
+        "https://render.local/final.jpg",
+    ]
+    assert session.allow_redirects is False
+    total_timeout.assert_called_once_with(30)
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"JPEGDATA",
+        matte="none",
+        source_file="https://render.local/start.jpg",
+        tags=None,
+    )
+
+
 async def test_upload_art_rejects_declared_oversized_download(hass, upload_service):
     """The public service rejects a remote image larger than 20 MiB."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
     resp = _FakeResponse(b"", content_length=20 * 1024 * 1024 + 1)
     session = _FakeSession(resp)
 
@@ -159,6 +340,7 @@ async def test_upload_art_rejects_declared_oversized_download(hass, upload_servi
 
 async def test_upload_art_rejects_streamed_oversized_download(hass, upload_service):
     """The size limit also applies when the server omits Content-Length."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
     one_mib = b"x" * (1024 * 1024)
     resp = _FakeResponse(b"", content_length=None, chunks=[one_mib] * 21)
     session = _FakeSession(resp)
@@ -205,7 +387,10 @@ async def test_upload_art_rejects_url_without_filename(hass, upload_service):
 
 async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
     """A bare filename still resolves through the existing local file path."""
-    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+    with (
+        patch("pathlib.Path.is_file", return_value=True),
+        patch("pathlib.Path.open", mock_open(read_data=b"LOCALIMAGE")),
+    ):
         await hass.services.async_call(
             DOMAIN,
             "upload_art",
@@ -222,11 +407,92 @@ async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
     upload_service.async_track_art.assert_not_awaited()
 
 
+async def test_upload_art_accepts_a_tracked_opaque_library_id(hass, upload_service):
+    """The gallery can upload a tracked item without exposing its filesystem path."""
+    media_id = f"local-{'a' * 64}"
+    upload_service.async_read_local_art.return_value = {
+        "data": b"TRACKEDIMAGE",
+        "path": "/media/frame/library/tracked.png",
+        "content_type": "image/png",
+    }
+
+    await hass.services.async_call(
+        DOMAIN,
+        "upload_art",
+        {"path": media_id},
+        blocking=True,
+    )
+
+    upload_service.async_read_local_art.assert_awaited_once_with(media_id)
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"TRACKEDIMAGE",
+        matte="none",
+        source_file="/media/frame/library/tracked.png",
+        tags=None,
+    )
+
+
+async def test_upload_art_reads_a_file_through_the_config_alias(
+    hass,
+    upload_service,
+):
+    """The documented /config path remains compatible after canonicalization."""
+    image_path = Path(hass.config.path("www", "frame-test.png"))
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"CONFIGIMAGE")
+
+    await hass.services.async_call(
+        DOMAIN,
+        "upload_art",
+        {"path": "/config/www/frame-test.png"},
+        blocking=True,
+    )
+
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"CONFIGIMAGE",
+        matte="none",
+        source_file="/config/www/frame-test.png",
+        tags=None,
+    )
+
+
+async def test_upload_art_rejects_config_traversal(hass, upload_service):
+    """A /config alias cannot escape into a similarly named sibling directory."""
+    with pytest.raises(ServiceValidationError, match="outside the allowed"):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "/config/../config-secret/credentials.png"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_rejects_absolute_prefix_collision(hass, upload_service):
+    """A directory whose name merely starts with the config root is not trusted."""
+    config_root = Path(hass.config.path())
+    outside = config_root.with_name(f"{config_root.name}-secret") / "art.png"
+
+    with pytest.raises(ServiceValidationError, match="outside the allowed"):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": str(outside)},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
+
+
 async def test_upload_art_returns_real_tv_content_id(hass, upload_service):
     """Callers can request the exact content ID as a service response."""
     upload_service.async_upload_image.return_value = "MY-CONTENT-123"
 
-    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+    with (
+        patch("pathlib.Path.is_file", return_value=True),
+        patch("pathlib.Path.open", mock_open(read_data=b"LOCALIMAGE")),
+    ):
         response = await hass.services.async_call(
             DOMAIN,
             "upload_art",
@@ -245,7 +511,10 @@ async def test_upload_art_tracks_tags_on_the_real_content_id(hass, upload_servic
     """Tracking inputs travel with the upload instead of a basename upsert."""
     upload_service.async_upload_image.return_value = "MY-CONTENT-123"
 
-    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+    with (
+        patch("pathlib.Path.is_file", return_value=True),
+        patch("pathlib.Path.open", mock_open(read_data=b"LOCALIMAGE")),
+    ):
         await hass.services.async_call(
             DOMAIN,
             "upload_art",
@@ -260,6 +529,19 @@ async def test_upload_art_tracks_tags_on_the_real_content_id(hass, upload_servic
         tags="morning",
     )
     upload_service.async_track_art.assert_not_awaited()
+
+
+async def test_delete_art_reports_a_rejected_identifier(hass, upload_service):
+    """The public action clearly rejects an untracked or path-like identifier."""
+    upload_service.async_delete_art.return_value = False
+
+    with pytest.raises(ServiceValidationError, match="tracked local artwork"):
+        await hass.services.async_call(
+            DOMAIN,
+            "delete_art",
+            {"content_id": "/config/configuration.yaml"},
+            blocking=True,
+        )
 
 
 async def test_power_key_wake_requires_explicit_off_status(hass, upload_service):

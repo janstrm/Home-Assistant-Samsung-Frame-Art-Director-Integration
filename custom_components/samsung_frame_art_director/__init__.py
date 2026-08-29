@@ -38,6 +38,11 @@ from .const import (
     resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+from .file_access import (
+    UnsafeLocalPathError,
+    is_local_media_identifier,
+    resolve_upload_source,
+)
 
 
 # This integration is configured via the UI only (config entries), not YAML.
@@ -52,6 +57,29 @@ PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sen
 _LOGGER = logging.getLogger(__name__)
 
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_REMOTE_REDIRECTS = 5
+
+
+def _cleanup_params(entry: ConfigEntry, overrides=None) -> dict:
+    """Build one cleanup policy from config-entry options and call overrides."""
+    params = {
+        "max_items": entry.options.get(
+            "cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS
+        ),
+        "max_age_days": entry.options.get("cleanup_max_age_days") or None,
+        "preserve_current": entry.options.get(
+            "cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT
+        ),
+        "only_integration_managed": entry.options.get(
+            "cleanup_only_integration_managed",
+            DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
+        ),
+        "dry_run": entry.options.get("cleanup_dry_run", DEFAULT_CLEANUP_DRY_RUN),
+    }
+    for key, value in (overrides or {}).items():
+        if key in params:
+            params[key] = value
+    return params
 
 
 def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None:
@@ -138,10 +166,36 @@ def _enable_verbose_logging() -> None:
         logging.getLogger("samsung_frame_art_director").setLevel(logging.DEBUG)
         # Third-party lib at info
         logging.getLogger("samsungtvws").setLevel(logging.INFO)
+        # samsungtvws 3.0.5 includes token values in connection INFO logs.
+        logging.getLogger("samsungtvws.connection").setLevel(logging.WARNING)
         _LOGGER.info("Verbose logging enabled for Samsung Frame Art Director (debug) and samsungtvws (info)")
     except Exception:  # noqa: BLE001
         # Best effort; logging config is managed by HA logger integration normally
         pass
+
+
+def _validate_remote_image_url(hass: HomeAssistant, url: str) -> None:
+    """Reject unsafe remote artwork URLs before they reach the HTTP client."""
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+    except ValueError as err:
+        raise ServiceValidationError("Remote image URL is invalid") from err
+
+    if scheme not in ("http", "https"):
+        raise ServiceValidationError("Unsupported image URL scheme; use HTTP or HTTPS")
+    if not hostname:
+        raise ServiceValidationError("Remote image URL must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ServiceValidationError("Remote image URL must not include credentials")
+    if not hass.config.is_allowed_external_url(url):
+        raise ServiceValidationError(
+            "Remote image URL is not trusted; add it to Home Assistant's "
+            "allowlist_external_urls"
+        )
 
 
 async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
@@ -153,46 +207,79 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
     host's filesystem first. Local paths keep the existing ``/media``/``/config``
     sandboxing and are read off-loop in an executor.
     """
-    from urllib.parse import urlsplit
+    from urllib.parse import urljoin, urlsplit
 
-    if urlsplit(path).scheme.lower() in ("http", "https"):
+    parsed_scheme = urlsplit(path).scheme.lower()
+    if parsed_scheme in ("http", "https"):
         from aiohttp import ClientTimeout
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+        _validate_remote_image_url(hass, path)
         session = async_get_clientsession(hass)
-        async with session.get(path, timeout=ClientTimeout(total=30)) as resp:
-            resp.raise_for_status()
-            if (
-                resp.content_length is not None
-                and resp.content_length > MAX_REMOTE_IMAGE_BYTES
-            ):
-                raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
-            image_bytes = bytearray()
-            async for chunk in resp.content.iter_chunked(64 * 1024):
-                if len(image_bytes) + len(chunk) > MAX_REMOTE_IMAGE_BYTES:
-                    raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
-                image_bytes.extend(chunk)
-            return bytes(image_bytes)
+        timeout = ClientTimeout(total=30)
+        current_url = path
+        redirect_statuses = {301, 302, 303, 307, 308}
+
+        try:
+            async with asyncio.timeout(30):
+                for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
+                    async with session.get(
+                        current_url,
+                        timeout=timeout,
+                        allow_redirects=False,
+                    ) as resp:
+                        if resp.status in redirect_statuses:
+                            location = resp.headers.get("Location")
+                            if not location:
+                                raise ServiceValidationError(
+                                    "Remote image redirect is missing a destination"
+                                )
+                            if redirect_count >= MAX_REMOTE_REDIRECTS:
+                                raise ServiceValidationError(
+                                    "Remote image exceeded the redirect limit"
+                                )
+                            current_url = urljoin(current_url, location)
+                            _validate_remote_image_url(hass, current_url)
+                            continue
+
+                        _remote_filename(current_url)
+                        resp.raise_for_status()
+                        if (
+                            resp.content_length is not None
+                            and resp.content_length > MAX_REMOTE_IMAGE_BYTES
+                        ):
+                            raise ServiceValidationError(
+                                "Remote image exceeds the 20 MiB limit"
+                            )
+                        image_bytes = bytearray()
+                        async for chunk in resp.content.iter_chunked(64 * 1024):
+                            if (
+                                len(image_bytes) + len(chunk)
+                                > MAX_REMOTE_IMAGE_BYTES
+                            ):
+                                raise ServiceValidationError(
+                                    "Remote image exceeds the 20 MiB limit"
+                                )
+                            image_bytes.extend(chunk)
+                        return bytes(image_bytes)
+        except TimeoutError as err:
+            raise ServiceValidationError(
+                "Remote image download timed out after 30 seconds"
+            ) from err
+
+    if parsed_scheme and "://" in path:
+        raise ServiceValidationError(
+            "Unsupported image URL scheme; use HTTP or HTTPS"
+        )
 
     def _read() -> bytes:
-        import os
-        # Accept absolute /media/... or /config/...; else assume under /media/frame/library/
-        norm = os.path.expanduser(path)
-        if not norm.startswith("/media/") and not norm.startswith("/config/"):
-            norm = "/media/frame/library/" + norm.lstrip("/")
-
-        # Security: Prevent path traversal by resolving the absolute path
-        # and ensuring it's within the allowed directories
-        abs_norm = os.path.abspath(norm)
-        allowed_media = os.path.abspath("/media")
-        allowed_config = os.path.abspath(hass.config.path())
-        if not abs_norm.startswith(allowed_media) and not abs_norm.startswith(allowed_config):
-            raise ValueError(f"Path traversal detected or unallowed path: {abs_norm}")
-
-        _LOGGER.debug("upload_art: resolved path=%s", abs_norm)
-        # Map /media to real FS under HA config; hass.config.path maps /config
-        # Supervisor mounts /media; opening /media/... directly should work. Keep as-is.
-        with open(abs_norm, "rb") as f:
+        try:
+            resolved = resolve_upload_source(hass, path)
+        except UnsafeLocalPathError as err:
+            raise ServiceValidationError(str(err)) from err
+        if not resolved.is_file():
+            raise ServiceValidationError("Local artwork file does not exist")
+        with resolved.open("rb") as f:
             return f.read()
 
     return await hass.async_add_executor_job(_read)
@@ -218,7 +305,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
 
     # Import here to avoid blocking config_flow import on package import
-    from .api import SamsungFrameClient, PairingTimeoutError
+    from .api import AuthenticationRejectedError, SamsungFrameClient
 
     # Enable verbose logs from the beginning for diagnostics
     _enable_verbose_logging()
@@ -275,7 +362,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001
         _LOGGER.debug("Could not pre-create media folders", exc_info=True)
 
-    # Initialize and connect client; use persistent token file under /config
+    # Initialize with the persisted ConfigEntry identity. The pairing file path
+    # is retained only so an obsolete config-flow token file can be removed
+    # after authenticated startup succeeds.
     host = entry.data.get("host")
     safe_host = str(host).replace("/", "_").replace(".", "_")
     token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
@@ -302,14 +391,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         db_dir = hass.config.path(DB_DIR)
         _os.makedirs(db_dir, exist_ok=True)
         client.set_db_path(hass.config.path(f"{DB_DIR}/{DB_FILE}"))
-    except Exception:  # noqa: BLE001
-        pass
+        await client.async_initialize_database()
+    except Exception as err:  # noqa: BLE001
+        raise ConfigEntryNotReady(
+            f"Library database initialization failed: {err}"
+        ) from err
     try:
-        # Validate token at setup. PairingTimeoutError means the device identity
-        # could not be established (no token/duid) -> trigger reauth so the user
-        # can re-accept on the TV. Other failures are treated as transient.
+        # Validate the saved token without opening a new pairing flow. Only an
+        # explicit authentication failure starts reauth; reachability and
+        # missing device information remain retryable setup failures.
         await client.async_connect_and_pair()
-    except PairingTimeoutError as err:
+    except AuthenticationRejectedError as err:
         _LOGGER.debug("Client pairing failed (auth): %r", err, exc_info=True)
         raise ConfigEntryAuthFailed from err
     except Exception as err:  # noqa: BLE001
@@ -428,21 +520,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
-        # Preserve the established validation that a source has a usable name.
-        _remote_filename(path)
-        # Read the image (http(s) URL fetched via the shared aiohttp client; a
-        # local path is sandboxed + read off-loop in an executor).
-        image_bytes = await _async_read_image_bytes(hass, path)
-        found = False
+        clients = [client async for client in _resolve_clients(call)]
+        if not clients:
+            _LOGGER.debug("upload_art: no target client resolved; nothing executed")
+            return None
+
+        if is_local_media_identifier(path):
+            artwork = None
+            for client in clients:
+                if artwork := await client.async_read_local_art(path):
+                    break
+            if not artwork:
+                raise ServiceValidationError(
+                    "Artwork is not in the tracked local library"
+                )
+            image_bytes = artwork["data"]
+            source_file = artwork["path"]
+        else:
+            # Preserve the established validation that a source has a usable name.
+            _remote_filename(path)
+            # HTTP(S) is streamed with limits; a local path is sandboxed and
+            # read off-loop. Existing path/URL calls remain compatible.
+            image_bytes = await _async_read_image_bytes(hass, path)
+            source_file = path
+
         content_ids: list[str] = []
-        async for client in _resolve_clients(call):
-            found = True
+        for client in clients:
             _LOGGER.debug("upload_art: invoking client on host=%s", getattr(client, "host", "?"))
             try:
                 content_id = await client.async_upload_image(
                     image_bytes,
                     matte=matte,
-                    source_file=path,
+                    source_file=source_file,
                     tags=tags,
                 )
                 if content_id:
@@ -452,16 +561,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # We do this asynchronously to not block the service return too long, 
                 # though here we await it for simplicity as the user expects "done" state.
                 # If performance is an issue, we could fire a task.
-                await client.async_cleanup_storage(
-                    max_items=DEFAULT_CLEANUP_MAX_ITEMS, 
-                    only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-                    preserve_current=DEFAULT_CLEANUP_PRESERVE_CURRENT
-                )
+                await client.async_cleanup_storage(**_cleanup_params(entry))
                 
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
-        if not found:
-            _LOGGER.debug("upload_art: no target client resolved; nothing executed")
         if call.return_response:
             return {
                 "content_id": content_ids[0] if len(content_ids) == 1 else None,
@@ -551,13 +654,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     async def _svc_cleanup_storage(call: ha_service.ServiceCall) -> None:
-        params = {
-            "max_items": call.data.get("max_items", entry.options.get("cleanup_max_items")),
-            "max_age_days": call.data.get("max_age_days", (entry.options.get("cleanup_max_age_days") or None) ),
-            "preserve_current": call.data.get("preserve_current", entry.options.get("cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT)),
-            "only_integration_managed": call.data.get("only_integration_managed", entry.options.get("cleanup_only_integration_managed", DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED)),
-            "dry_run": call.data.get("dry_run", entry.options.get("cleanup_dry_run", DEFAULT_CLEANUP_DRY_RUN)),
-        }
+        params = _cleanup_params(entry, call.data)
         _LOGGER.debug("Action cleanup_storage called: %s", params)
         async for client in _resolve_clients(call):
             try:
@@ -617,18 +714,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             client = stored.get(DATA_CLIENT)
             curator = ContentCurator(hass, entry, client)
             result = await curator.async_sync_library()
-            
+
             if result.get("error"):
                 persistent_notification.async_create(
                     hass,
                     f"Library Sync Failed: {result['error']}",
-                    title="Art Director"
+                    title="Art Director",
                 )
             else:
+                duplicates = result["duplicates_removed"]
                 persistent_notification.async_create(
                     hass,
-                    f"Synced {result['count']} untracked images to the database.",
-                    title="Art Director"
+                    f"Library sync complete: {result['added']} added, "
+                    f"{result['stale_removed']} stale removed, "
+                    f"{duplicates} "
+                    f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
+                    title="Art Director",
                 )
             return
 
@@ -687,6 +788,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         f"Deleted 1 item ({content_id}) from library.",
                         title="Art Director"
                     )
+                else:
+                    raise ServiceValidationError(
+                        "Artwork is not a tracked local artwork or could not be deleted"
+                    )
                 
         elif call.service == "rotate_favorites":
             matte = resolve_matte(entry.options)
@@ -742,6 +847,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
              return
         client = stored.get(DATA_CLIENT)
         data = await client.async_get_library_data()
+        from .media_source import signed_thumbnail_url
+
+        for item in data.get("items", []):
+            item["thumbnail"] = signed_thumbnail_url(hass, item["id"])
         connection.send_result(msg["id"], data)
         
     try:
@@ -866,12 +975,8 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
             matte=matte
         )
         # Cleanup and exit early (skip default logic)
-        cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
         try:
-            await client.async_cleanup_storage(
-                max_items=cleanup_max,
-                only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-            )
+            await client.async_cleanup_storage(**_cleanup_params(entry))
         except Exception:
             pass
         return
@@ -898,12 +1003,8 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
 
     # Force cleanup to keep integration-managed TV storage within the configured
     # limit. Manual and Art Store images are never deletion-eligible.
-    cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
     try:
-        await client.async_cleanup_storage(
-            max_items=cleanup_max,
-            only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-        )
+        await client.async_cleanup_storage(**_cleanup_params(entry))
     except Exception as e:
         _LOGGER.warning("Slideshow cleanup failed: %s", e)
 

@@ -55,8 +55,8 @@ toggle_favorite:
     content_id:
       name: Content ID
       description: >-
-        The content ID (or local file path) to toggle. Leave empty to favorite
-        the artwork currently on screen.
+        A TV content ID or the opaque local-... library ID. Leave empty to
+        favorite the artwork currently on screen. Raw local paths are rejected.
       example: "MY-C0002_xxxxxxxx"
       selector:
         text:
@@ -111,12 +111,14 @@ upload_art:
     path:
       name: Path
       description: >-
-        Path or URL to the image. Use absolute /media paths (e.g.
+        Path, trusted library ID, or URL to the image. Gallery items use an opaque
+        local-... ID. Use absolute /media paths (e.g.
         /media/frame/library/example.jpg); you may also pass just a filename and it
         will assume /media/frame/library/<filename>. An http(s):// URL is also
         accepted and fetched directly (handy when the image is rendered on another
         host on the network). Remote downloads have a 30-second timeout and a 20 MiB
-        limit. Only use URLs from hosts you trust.
+        limit. The URL and every redirect must match Home Assistant's
+        allowlist_external_urls; embedded credentials are rejected.
       example: /media/frame/library/example.jpg
       required: true
       selector:
@@ -157,11 +159,11 @@ purge_database:
 
 delete_art:
   name: "Delete Art"
-  description: "Delete a specific artwork from the library database."
+  description: "Permanently delete a tracked local artwork file and its library records. Raw filesystem paths and untracked files are rejected."
   fields:
     content_id:
       name: Content ID
-      description: "The content ID of the artwork to delete."
+      description: "The opaque local ID exposed by the art library sensor (local-…)."
       required: true
       selector:
         text:

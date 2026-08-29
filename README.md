@@ -127,8 +127,9 @@ data:
 ```
 
 #### upload_art
-Upload and immediately display an image from your HA filesystem or a trusted
-HTTP(S) URL. Remote downloads have a 30-second timeout and a 20 MiB size limit.
+Upload and immediately display an image from your HA filesystem, an opaque
+`local-…` gallery ID, or a trusted HTTP(S) URL. Remote downloads have a
+30-second timeout and a 20 MiB size limit.
 
 Local file:
 ```yaml
@@ -137,6 +138,15 @@ target:
   entity_id: media_player.samsung_frame
 data:
   path: /media/frame/library/example.jpg
+```
+
+Tracked gallery item (the dashboard uses this form so it never exposes a path):
+```yaml
+service: samsung_frame_art_director.upload_art
+target:
+  entity_id: media_player.samsung_frame
+data:
+  path: "local-<opaque-library-id>"
 ```
 
 Remote file:
@@ -150,8 +160,21 @@ data:
 response_variable: upload_result
 ```
 
-Local paths must reside in `/media` or `/config`. Only configure remote URLs
-from hosts you trust; Home Assistant fetches the URL directly from its network.
+Before using a remote source, explicitly trust its URL prefix in Home
+Assistant's `configuration.yaml`, then restart Home Assistant:
+
+```yaml
+homeassistant:
+  allowlist_external_urls:
+    - "https://render-host.local/"
+    - "http://192.168.68.20:8080/"
+```
+
+Local paths must reside in `/media` or `/config`. Home Assistant fetches remote
+URLs directly from its network, rejects embedded credentials and non-HTTP(S)
+schemes, and rechecks every redirect against `allowlist_external_urls`. Keep the
+allowed prefix as narrow as your renderer permits. The 30-second timeout and
+20 MiB streaming limit also apply when a server omits or misreports its size.
 When `response_variable` is requested, `upload_result.content_id` contains the
 exact TV content ID for a single target and `upload_result.content_ids` contains
 all returned IDs when multiple Frames are targeted.
@@ -189,7 +212,11 @@ Scan `/media/frame/inbox`, analyze each image with Gemini, move to `/media/frame
 ```yaml
 service: samsung_frame_art_director.process_inbox
 ```
-> **Note:** Requires a Gemini API key in the integration options. If rate-limited (HTTP 429), processing pauses and logs how many images were completed.
+> **Note:** Requires a Gemini API key in the integration options. JPEG, PNG and
+> WebP inputs are validated before upload to the provider and limited to 20 MiB,
+> 40 megapixels and 16,384 pixels on either side. If rate-limited (HTTP 429),
+> processing pauses and logs how many images were completed. Provider errors do
+> not include API keys or response bodies.
 
 #### sync_library
 Full bidirectional sync of the library database:
@@ -215,16 +242,22 @@ Toggle the favorite status of an artwork in the library database.
 ```yaml
 service: samsung_frame_art_director.toggle_favorite
 data:
-  content_id: "MY-C0002_xxxxxxxx"
+  content_id: "local-<opaque-library-id>"
 ```
 
 #### delete_art
-Delete an artwork from the library database.
+Permanently delete a tracked local artwork file and its library records. Use
+the opaque `local-…` ID exposed by `sensor.samsung_frame_art_library`; raw file
+paths and untracked files are rejected.
 ```yaml
 service: samsung_frame_art_director.delete_art
 data:
-  content_id: "MY-C0002_xxxxxxxx"
+  content_id: "local-<opaque-library-id>"
 ```
+
+Gallery thumbnails use short-lived Home Assistant signed URLs. Filesystem paths
+are never placed in gallery attributes, thumbnail URLs, or Media Source
+identifiers.
 
 #### cleanup_storage
 Remove non-favorite artworks from the **TV's internal storage** to free up space.
@@ -244,7 +277,12 @@ Cleanup is fail-safe: only artworks with integration upload provenance
 items are protected even if the legacy `only_integration_managed` option is
 set to `false` in an older automation, or provenance data cannot be read. The
 legacy option is still accepted for compatibility but is no longer shown in
-new service and options forms.
+new service and options forms. `max_items` counts only deletion-eligible uploads
+managed by this integration, not protected TV art. With `preserve_current`
+enabled, an unknown current artwork aborts cleanup without deleting anything;
+`dry_run` performs the same safety checks and reports that plan without applying
+it. The saved cleanup policy is also used after uploads and slideshows and by a
+manual cleanup action unless the action explicitly overrides a value.
 
 ### Diagnostics
 
@@ -303,7 +341,7 @@ When configured, the integration creates the following entities (where `samsung_
 ### Sensors
 | Entity | Description |
 |---|---|
-| `sensor.samsung_frame_art_library` | Reports total tracked artworks. Attributes include the full `items` list for dashboard gallery rendering. |
+| `sensor.samsung_frame_art_library` | Reports total tracked artworks. Live attributes include the paged `items` list for dashboard gallery rendering; the volatile gallery payload is excluded from Recorder history. |
 
 ---
 
@@ -325,6 +363,7 @@ trigger:
 | Problem | Solution |
 |---|---|
 | Art uploads stall or fail | Ensure the TV is paired. Try turning on manually and watching for permission popups. |
+| The TV repeatedly asks to allow Home Assistant | Update the integration, restart HA, and confirm the TV's **Device Connection Manager → Access Notification** setting is **First Time Only**. A normal restart reuses the saved token and must not show a prompt; a single new prompt is expected only when HA starts reauthentication for an explicitly rejected/expired token. |
 | "No Gemini API key" warning | Add your API key in **Settings → Devices → Samsung Frame Art Director → Configure**. |
 | "Local file missing" warnings during rotation | Run **Purge Database** then **Sync Library** to clean up stale entries. |
 | Gallery shows no images | Ensure images exist in `/media/frame/library/` and run **Sync Library**. |

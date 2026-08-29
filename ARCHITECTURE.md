@@ -91,6 +91,7 @@ custom_components/samsung_frame_art_director/
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
 ├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
 ├── const.py           # Constants, option keys, defaults
+├── file_access.py     # Canonical local-path boundary, opaque IDs, image MIME types
 ├── views.py           # HTTP view serving local thumbnails to the dashboard
 ├── media_source.py    # Media Source provider (browse library in the Media panel)
 ├── sensor.py          # Gallery library sensor (+ gallery page number)
@@ -122,7 +123,8 @@ method is `async`, and any blocking `samsungtvws` call is run via
 
 Responsibilities:
 
-- **Connection & pairing** — `async_connect_and_pair()` (token capture, DUID).
+- **Startup authentication** — `async_connect_and_pair()` (saved-token
+  validation, token rotation capture, DUID).
 - **Art Mode** — `async_set_artmode()`, `async_get_artmode_status()`.
 - **Upload** — `async_preprocess_image()` (Pillow resize/crop), `async_upload_image()`.
 - **Rotation** — `async_rotate_art()` (DB-driven, tag/favorite filtered),
@@ -135,9 +137,10 @@ Responsibilities:
 - **TV storage cleanup** — `async_cleanup_storage()`.
 - **Diagnostics** — `async_art_diagnostics()`.
 
-A single `asyncio.Lock` (`self._art_lock`) serializes all "art channel"
-operations (set-artmode, upload, select, cleanup) so concurrent calls don't
-collide on the TV's single WebSocket art channel.
+A single `asyncio.Lock` (`self._art_lock`) serializes every "art channel"
+operation, including reads/polling, previews, settings, upload, select,
+diagnostics, and cleanup, so concurrent calls don't collide on the TV's single
+WebSocket art channel.
 
 ### `bridge.py`
 
@@ -197,7 +200,9 @@ art preview, brightness, color temperature) stay primary. Notable:
 
 The DB lives at `<config>/samsung_frame_director/art_library.db`
 (`DB_DIR`/`DB_FILE` in `const.py`). It is opened **per operation** (no long-lived
-connection) and initialized lazily via `_ensure_db()`.
+connection). Config-entry setup eagerly creates or migrates it through
+`async_initialize_database()` so a broken DB stops setup visibly; public DB
+operations still call `_ensure_db()` defensively.
 
 There are **two tables**, and understanding the split is key:
 
@@ -206,6 +211,11 @@ There are **two tables**, and understanding the split is key:
 Rows represent **image files on the HA filesystem** (in `/media/frame/library`),
 tagged by AI. This is what the gallery sensor, dashboard, and rotation primarily
 read from.
+
+The filesystem path remains the database key but is never exposed as a media or
+thumbnail identifier. Public gallery items use a stable opaque `local-…` ID;
+every read or delete resolves that ID back through `local_art`, canonicalizes the
+path, and verifies it remains below an allowed Home Assistant media/config root.
 
 | column | meaning |
 |---|---|
@@ -234,8 +244,10 @@ The columns the code actually reads/writes are: `content_id` (PK), `tags`,
 > places** — the `CREATE TABLE` (for fresh installs) and an
 > `if "<col>" not in existing_cols` migration (for existing installs).
 > Databases created by a much older schema (`date_added`/`last_seen`/`source`)
-> keep those now-unused columns as harmless leftovers; the migrations fill in
-> everything the current code needs.
+> keep those old columns as harmless leftovers; their values are copied into
+> `created_at`/`last_displayed_at`/`source_file`. Existing source identities are
+> canonicalized once in place, and the SQLite `user_version` records that data
+> migration without deleting rows.
 
 ### Why two tables?
 
@@ -259,13 +271,16 @@ while preserving favorites and the currently-displayed image.
    provokes the on-TV "Allow" prompt, and polls up to ~10 attempts for the user
    to accept. On success a **token** is captured (from the remote object or the
    `token_file`) and stored in the `ConfigEntry`.
-4. On every setup, `async_connect_and_pair()` re-validates the token. A
-   `PairingTimeoutError` (no token/duid established) raises
-   `ConfigEntryAuthFailed`, which triggers the **reauth flow**
-   (`async_step_reauth` → `async_step_reauth_confirm`) so the user can
-   re-accept on the TV; the new token replaces the old one via
-   `async_update_reload_and_abort`. Other (transient/connectivity) failures
-   raise `ConfigEntryNotReady` so HA retries.
+4. On every later setup, `async_connect_and_pair()` reuses the exact saved
+   `(client name, token)` identity and validates it through an authenticated Art
+   child. It never opens a token-file pairing flow during a normal restart, and
+   public REST DUID data alone cannot mark setup successful. An explicit
+   `UnauthorizedError` becomes `AuthenticationRejectedError` and then
+   `ConfigEntryAuthFailed`, which starts the **reauth flow**
+   (`async_step_reauth` → `async_step_reauth_confirm`) once. Offline/timeouts or
+   missing device info become `ConfigEntryNotReady`, so HA retries without an
+   approval prompt. A rotated token is persisted and the obsolete pairing file
+   is removed after successful validation.
 
 User-entered hosts are cleaned by `_normalize_host()` (trims whitespace,
 strips a `scheme://`, path, and trailing `:port`) before probing.
@@ -288,11 +303,15 @@ strips a `scheme://`, path, and trailing `:port`) before probing.
 The `upload_art` service obtains the source bytes, then calls
 `async_upload_image(bytes, matte, source_file, tags) -> content_id | None`:
 
-1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch a trusted
-   HTTP(S) URL through Home Assistant's shared aiohttp client with a 30-second
-   timeout and 20 MiB limit.
-2. Look up every tracked `content_id` for the exact `source_file`. Because the
-   database is shared by all configured Frames, ask the target TV for its
+1. Read a sandboxed local `/media`/`/config` path off-loop, or fetch an HTTP(S)
+   URL allowed by Home Assistant's `allowlist_external_urls` through its shared
+   aiohttp client with a 30-second timeout and 20 MiB streaming limit. Redirects
+   are followed manually (maximum five) and each destination is revalidated;
+   embedded credentials and unsupported schemes are rejected before I/O.
+2. Canonicalize the source identity (local path aliases resolve to one absolute
+   path; URL scheme/host/default ports/path aliases normalize while the query is
+   preserved), then look up every tracked `content_id` for that identity. Because
+   the database is shared by all configured Frames, ask the target TV for its
    available art (30-second socket timeout) and fast-select the first matching
    ID. The blocking worker is cancellation-contained: its caller retains
    `_art_lock` until the worker exits, so it cannot perform a late selection
@@ -358,8 +377,12 @@ restricts deletion candidates to rows with a non-empty `source_file` (proof of
 integration upload provenance). Missing or unreadable provenance fails closed,
 so manual *My Photos* and Art Store items cannot be deleted. It **preserves
 favorites and the current image**, applies optional age and `max_items` limits
-(deleting oldest first), then deletes via `delete_list` (fallback: per-id
-`delete`) and reconciles the `on_tv` flags in the DB. Supports `dry_run`.
+(counting only deletion-eligible integration uploads and deleting oldest first),
+then deletes via `delete_list` (fallback: per-id `delete`) and reconciles the
+`on_tv` flags in the DB. If current art is unknown initially or at the final
+pre-delete check, it deletes nothing. `dry_run` follows that same planning path.
+Saved cleanup options are used consistently after uploads, slideshows, and the
+manual cleanup action unless that action explicitly overrides a value.
 
 ---
 
@@ -384,8 +407,10 @@ Patterns you will see repeated, and why they exist:
 - **Connection model.** Every art operation opens a short-lived, properly
   identified `SamsungTVWS` and uses its synchronous `art()` API off the event
   loop via `asyncio.to_thread` (`async_get_state`, `_async_art`,
-  `async_upload_image`, `async_set_artmode`, …). There is no long-lived
-  connection; the `_art_lock` serializes concurrent art operations.
+  `async_upload_image`, `async_set_artmode`, …). Each parent creates exactly one
+  Art child; `_close_art_connection()` captures the child's freshest token and
+  closes child then parent exactly once. There is no long-lived connection;
+  the `_art_lock` serializes reads and writes alike.
 - **Pairing vs. art operations.** `bridge.py` uses the official async/encrypted
   clients for discovery and pairing. Runtime Art API calls use short-lived sync
   clients in worker threads because the full Art Mode settings API is exposed
@@ -411,6 +436,9 @@ Patterns you will see repeated, and why they exist:
 - **Broad `except` with debug logging.** Many TV calls raise spurious errors
   (e.g. the `clientConnect` handshake event) even when the action succeeded, so
   failures are logged at debug and the flow continues.
+- **No token material in logs.** Integration messages expose only whether a
+  token exists. The `samsungtvws.connection` logger remains at WARNING because
+  version 3.0.5 includes raw token values in lower-level connection messages.
 
 When changing this layer, prefer **adding** a guarded path over removing one,
 and keep the debug logging — it is the only diagnostic tool users have.
@@ -421,17 +449,26 @@ and keep the debug logging — it is the only diagnostic tool users have.
 
 `ai.py` defines:
 
-- `ImageAnalyzer` (ABC) — `analyze_image(bytes, prompt) -> dict` returning
+- `ImageAnalyzer` (ABC) — `analyze_image(bytes, prompt, api_key=...) -> dict`
+  returning
   `{tags, description, provider, model, duration}` or `{error}`.
-- `GeminiAnalyzer` — Google Gemini via REST (`aiohttp`), default model
-  `gemini-2.0-flash`. Prompts for ~15 keywords including weather/lighting/mood.
-- `OpenAIAnalyzer` — GPT-4o vision via the `openai` SDK. **Optional dependency:**
-  `openai` is *not* in `manifest.json` requirements, so selecting OpenAI requires
-  the package to be installed; the analyzer degrades gracefully (returns an
-  error dict) if it's missing.
-- `create_analyzer(provider, gemini_api_key, openai_api_key)` — the **factory**
-  and the only place that maps the `ai_provider` option to a concrete class.
-  Returns `(analyzer, error)`.
+- `GeminiAnalyzer` — Google Gemini via REST over Home Assistant's shared aiohttp
+  session, default model `gemini-2.5-flash`. The API key travels in the
+  `x-goog-api-key` header, never in the request URL or analyzer state.
+  Prompts for ~15 keywords including weather/lighting/mood.
+- `OpenAIAnalyzer` — GPT-4o vision via REST over the same shared aiohttp session.
+- `create_analyzer(provider, model, session=...)` — the **factory** and the only
+  place that maps the `ai_provider` option to a concrete class. Returns
+  `(analyzer, error)`. The curator supplies the selected credential only to the
+  individual `analyze_image` call; analyzer objects never retain it. Both
+  providers disable redirects and use fixed HTTPS endpoints with 30-second
+  timeouts.
+
+Before either provider is called, `curator.py` reads at most 20 MiB off-loop,
+detects JPEG/PNG/WebP from the byte signature, verifies the image with Pillow,
+and rejects images over 40 megapixels or 16,384 pixels on either side. Provider
+response bodies and exception text are not copied into logs or user-facing
+errors.
 
 The curator never instantiates a concrete analyzer directly; it calls
 `self._build_analyzer()` → `create_analyzer()`. **To add a provider:** implement
@@ -457,7 +494,10 @@ deliberately does **not** register entity-platform services for the same names
 A **WebSocket command** `samsung_frame_art_director/get_library` and the
 `SamsungFrameThumbnailView` HTTP view feed the example gallery dashboard. The
 gallery is also exposed via the `..._art_library` sensor's `items` attribute for
-template/auto-entities use. The full user-facing service/entity catalog is in
+template/auto-entities use. Thumbnail requests require Home Assistant
+authentication; gallery and Media Source results carry short-lived signed paths
+so browser image requests work without exposing an unauthenticated endpoint.
+The full user-facing service/entity catalog is in
 the [README](README.md#-services).
 
 ---
@@ -468,10 +508,16 @@ the [README](README.md#-services).
 - All `samsungtvws` and filesystem/Pillow calls run off-loop via
   `asyncio.to_thread` or `hass.async_add_executor_job`.
 - TV art-channel operations are serialized with `SamsungFrameClient._art_lock`.
+- Timed synchronous socket calls run through
+  `_async_run_blocking_contained()`. Because a Python worker thread cannot be
+  cancelled, timeout/cancellation drains that worker before the surrounding
+  lock or port attempt can continue; a late operation cannot overlap its
+  successor.
 - SQLite is accessed with short-lived per-call connections inside executor jobs
   (`_get_db()` / `sqlite3.connect`), avoiding cross-thread connection sharing.
-- Network calls use explicit timeouts, either `asyncio.wait_for` or a
-  client-specific timeout such as `aiohttp.ClientTimeout` (typically 10–120s).
+- Network calls use explicit client timeouts plus an aggregate timeout, either
+  `_async_run_blocking_contained()` for synchronous TV calls or
+  `aiohttp.ClientTimeout` for HTTP (typically 10–120s).
 
 ---
 
@@ -480,9 +526,6 @@ the [README](README.md#-services).
 - **`art_library` schema is two-place** — `CREATE TABLE` *and* the `ALTER`
   migrations must stay in sync (see [§5](#5-data-model-sqlite)). Adding a column
   in only one place silently breaks either fresh installs or upgrades.
-- **`OpenAIAnalyzer` needs a manual dependency.** `openai` isn't declared in
-  `manifest.json`. This is intentional (don't force the dep on Gemini users) but
-  means OpenAI silently errors until the package is installed.
 - **`async_rotate_art_now()` legacy modes.** Its `library` and `aware` modes are
   unimplemented no-ops; the live rotation path is `async_rotate_art()` /
   `async_rotate_from_folder()`. Don't confuse the two.
