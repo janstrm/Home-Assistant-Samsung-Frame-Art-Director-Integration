@@ -753,8 +753,12 @@ class SamsungFrameClient:
                     return True
                 
                 elif winner['type'] == 'local':
+                    media_id = await asyncio.to_thread(
+                        media_identifier,
+                        winner["path"],
+                    )
                     artwork = await self.async_read_local_art(
-                        media_identifier(winner["path"])
+                        media_id
                     )
                     if not artwork:
                         _LOGGER.warning(
