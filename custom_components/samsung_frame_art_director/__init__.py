@@ -51,7 +51,10 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config) -> bool:
-    """Set up via configuration.yaml (not used)."""
+    """Set up domain-wide interfaces shared by every Frame entry."""
+    from .views import SamsungFrameThumbnailView
+
+    hass.http.register_view(SamsungFrameThumbnailView(hass))
     return True
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
@@ -425,10 +428,6 @@ async def async_setup_entry(
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Register HTTP View for Thumbnails
-    from .views import SamsungFrameThumbnailView
-    hass.http.register_view(SamsungFrameThumbnailView(hass))
 
     # Register domain-level actions (a.k.a. services) that accept target entities
     async def _resolve_clients(call: ha_service.ServiceCall):
