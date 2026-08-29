@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 
-from custom_components.samsung_frame_art_director.ai import create_analyzer
+from custom_components.samsung_frame_art_director.ai import (
+    AI_REQUEST_ERROR,
+    OpenAIAnalyzer,
+    create_analyzer,
+)
 from custom_components.samsung_frame_art_director.curator import ContentCurator
 
 
@@ -98,3 +102,47 @@ async def test_process_inbox_uses_home_assistant_shared_session(hass):
     assert result["count"] == 1
     assert session.url.endswith(":generateContent")
     api.async_add_local_art.assert_awaited_once()
+
+
+async def test_gemini_provider_failure_does_not_expose_key(caplog):
+    """Untrusted provider exception text is neither returned nor logged."""
+    secret = "never-log-this-key"
+
+    class _FailingSession:
+        def post(self, *args, **kwargs):
+            raise RuntimeError(f"request failed with key={secret}")
+
+    analyzer, error = create_analyzer(
+        "gemini",
+        gemini_api_key=secret,
+        session=_FailingSession(),
+    )
+    assert error is None
+
+    result = await analyzer.analyze_image(_png_bytes(), prompt="Describe this image")
+
+    assert result["error"] == AI_REQUEST_ERROR
+    assert secret not in str(result)
+    assert secret not in caplog.text
+
+
+async def test_openai_uses_detected_png_mime_type():
+    """The OpenAI data URI describes the actual image format."""
+    completion = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="calm, blue, abstract")
+                )
+            ]
+        )
+    )
+    analyzer = OpenAIAnalyzer(completion)
+
+    result = await analyzer.analyze_image(_png_bytes(), prompt="Describe this image")
+
+    assert result["tags"] == ["calm", "blue", "abstract"]
+    data_uri = completion.await_args.kwargs["messages"][0]["content"][1][
+        "image_url"
+    ]["url"]
+    assert data_uri.startswith("data:image/png;base64,")
