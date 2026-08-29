@@ -1345,7 +1345,7 @@ class SamsungFrameClient:
                             """
                             SELECT content_id
                             FROM art_library
-                            WHERE source_file = ? AND on_tv = 1
+                            WHERE source_file = ?
                             ORDER BY COALESCE(last_displayed_at, created_at) DESC
                             """,
                             (source_file,),
