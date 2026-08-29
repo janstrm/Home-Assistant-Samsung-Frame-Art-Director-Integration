@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import (
@@ -69,7 +70,8 @@ async def test_sync_library_action_reports_curator_result(hass):
     )
 
 
-async def test_slideshow_cleanup_uses_configured_options(hass):
+@pytest.mark.parametrize("dashboard_filter", [False, True])
+async def test_slideshow_cleanup_uses_configured_options(hass, dashboard_filter):
     """The scheduled slideshow applies the same configured cleanup policy."""
     client = MagicMock()
     client.async_get_artmode_status = AsyncMock(return_value="on")
@@ -87,6 +89,8 @@ async def test_slideshow_cleanup_uses_configured_options(hass):
     )
     entry.add_to_hass(hass)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: client}
+    if dashboard_filter:
+        hass.states.async_set("switch.samsung_frame_gallery_favorites_only", "on")
 
     await _run_slideshow_job(hass, entry)
 
