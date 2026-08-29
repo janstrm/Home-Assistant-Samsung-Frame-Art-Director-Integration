@@ -651,13 +651,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     async def _svc_cleanup_storage(call: ha_service.ServiceCall) -> None:
-        params = {
-            "max_items": call.data.get("max_items", entry.options.get("cleanup_max_items")),
-            "max_age_days": call.data.get("max_age_days", (entry.options.get("cleanup_max_age_days") or None) ),
-            "preserve_current": call.data.get("preserve_current", entry.options.get("cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT)),
-            "only_integration_managed": call.data.get("only_integration_managed", entry.options.get("cleanup_only_integration_managed", DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED)),
-            "dry_run": call.data.get("dry_run", entry.options.get("cleanup_dry_run", DEFAULT_CLEANUP_DRY_RUN)),
-        }
+        params = _cleanup_params(entry, call.data)
         _LOGGER.debug("Action cleanup_storage called: %s", params)
         async for client in _resolve_clients(call):
             try:
