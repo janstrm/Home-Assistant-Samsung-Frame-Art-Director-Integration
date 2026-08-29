@@ -1176,7 +1176,7 @@ async def test_cleanup_dry_run_excludes_manual_tv_art(hass, tmp_path):
 async def test_get_state_reports_unavailable_without_tv(hass):
     """A failed poll must make the coordinator unavailable, not look empty."""
     client = SamsungFrameClient(hass, "127.0.0.1")
-    with pytest.raises(DeviceUnavailableError, match="State refresh failed"):
+    with pytest.raises(DeviceUnavailableError, match="State refresh"):
         await client.async_get_state()
     assert client.is_connected is False
 

@@ -337,6 +337,10 @@ class SamsungFrameClient:
                         content_id = cur.get("content_id") or cur.get("contentId")
                 except Exception:  # noqa: BLE001
                     pass
+                if status is None and content_id is None:
+                    raise DeviceUnavailableError(
+                        f"State refresh returned no data for {self._host}"
+                    )
             finally:
                 self._close_art_connection(tv, art)
             return {
@@ -346,9 +350,16 @@ class SamsungFrameClient:
 
         async with self._art_lock:
             try:
-                return await self._async_run_blocking_contained(_read, 10)
-            except Exception:  # noqa: BLE001
-                return {"status": None, "content_id": None}
+                state = await self._async_run_blocking_contained(_read, 10)
+            except Exception as err:  # noqa: BLE001
+                self._connected = False
+                if isinstance(err, DeviceUnavailableError):
+                    raise
+                raise DeviceUnavailableError(
+                    f"State refresh failed for {self._host}: {err}"
+                ) from err
+            self._connected = True
+            return state
 
     async def async_get_artmode_setting(self, setting: str):
         """Return an art-mode setting value (motion_sensitivity, motion_timer,
