@@ -677,69 +677,56 @@ async def async_setup_entry(
     # Register Services
     async def async_service_handler(call: ServiceCall) -> None:
         """Handle service calls."""
-        if call.service == "process_inbox":
-            from .curator import ContentCurator
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if not stored:
-                return
-            client = stored.get(DATA_CLIENT)
-            curator = ContentCurator(hass, entry, client)
-            result = await curator.async_process_inbox()
-            
-            if result.get("error"):
-                persistent_notification.async_create(
-                    hass,
-                    f"Inbox Processing Failed: {result['error']}",
-                    title="Art Director"
-                )
-            else:
-                persistent_notification.async_create(
-                    hass,
-                    f"Processed {result['count']} images from Inbox.",
-                    title="Art Director"
-                )
-            return
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            if call.service == "process_inbox":
+                from .curator import ContentCurator
 
-        elif call.service == "sync_library":
-            from .curator import ContentCurator
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if not stored:
-                return
-            client = stored.get(DATA_CLIENT)
-            curator = ContentCurator(hass, entry, client)
-            result = await curator.async_sync_library()
+                curator = ContentCurator(hass, target.entry, client)
+                result = await curator.async_process_inbox()
 
-            if result.get("error"):
-                persistent_notification.async_create(
-                    hass,
-                    f"Library Sync Failed: {result['error']}",
-                    title="Art Director",
-                )
-            else:
-                duplicates = result["duplicates_removed"]
-                persistent_notification.async_create(
-                    hass,
-                    f"Library sync complete: {result['added']} added, "
-                    f"{result['stale_removed']} stale removed, "
-                    f"{duplicates} "
-                    f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
-                    title="Art Director",
-                )
-            return
+                if result.get("error"):
+                    persistent_notification.async_create(
+                        hass,
+                        f"Inbox Processing Failed: {result['error']}",
+                        title="Art Director",
+                    )
+                else:
+                    persistent_notification.async_create(
+                        hass,
+                        f"Processed {result['count']} images from Inbox.",
+                        title="Art Director",
+                    )
+            elif call.service == "sync_library":
+                from .curator import ContentCurator
 
-        elif call.service == "purge_database":
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if not stored:
-                return
-            client = stored.get(DATA_CLIENT)
-            if client:
+                curator = ContentCurator(hass, target.entry, client)
+                result = await curator.async_sync_library()
+
+                if result.get("error"):
+                    persistent_notification.async_create(
+                        hass,
+                        f"Library Sync Failed: {result['error']}",
+                        title="Art Director",
+                    )
+                else:
+                    duplicates = result["duplicates_removed"]
+                    persistent_notification.async_create(
+                        hass,
+                        f"Library sync complete: {result['added']} added, "
+                        f"{result['stale_removed']} stale removed, "
+                        f"{duplicates} "
+                        f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
+                        title="Art Director",
+                    )
+            elif call.service == "purge_database":
                 await client.async_purge_database()
                 persistent_notification.async_create(
                     hass,
                     "Database purged successfully. Art history and local tags have been cleared.",
-                    title="Art Director"
+                    title="Art Director",
                 )
-            return
 
     hass.services.async_register(DOMAIN, "process_inbox", async_service_handler)
     hass.services.async_register(DOMAIN, "sync_library", async_service_handler)
