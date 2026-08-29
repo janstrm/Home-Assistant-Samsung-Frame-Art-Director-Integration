@@ -20,17 +20,22 @@ class FrameActionTarget:
     runtime: SamsungFrameRuntimeData
 
 
+def loaded_frame_targets(hass: HomeAssistant) -> list[FrameActionTarget]:
+    """Return every config entry that currently owns a loaded Frame runtime."""
+    return [
+        FrameActionTarget(entry, runtime)
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if (runtime := getattr(entry, "runtime_data", None)) is not None
+    ]
+
+
 async def async_resolve_action_targets(
     hass: HomeAssistant, call: ServiceCall
 ) -> list[FrameActionTarget]:
     """Resolve an action target or raise a clear validation error."""
     entity_ids = await ha_service.async_extract_entity_ids(call)
     if not entity_ids:
-        loaded = [
-            FrameActionTarget(entry, runtime)
-            for entry in hass.config_entries.async_entries(DOMAIN)
-            if (runtime := getattr(entry, "runtime_data", None)) is not None
-        ]
+        loaded = loaded_frame_targets(hass)
         if len(loaded) == 1:
             return loaded
         if not loaded:

@@ -43,7 +43,7 @@ from .file_access import (
     resolve_upload_source,
 )
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
-from .targets import async_resolve_action_targets
+from .targets import async_resolve_action_targets, loaded_frame_targets
 
 
 # This integration is configured via the UI only (config entries), not YAML.
@@ -56,6 +56,7 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
 
     hass.http.register_view(SamsungFrameThumbnailView(hass))
     _register_domain_actions(hass)
+    _register_domain_websocket(hass)
     return True
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
@@ -303,6 +304,52 @@ def _remote_filename(path: str) -> str:
     if not filename:
         raise ServiceValidationError("Image source must include a filename")
     return filename
+
+
+def _register_domain_websocket(hass: HomeAssistant) -> None:
+    """Register the Gallery WebSocket command once for the integration."""
+    from homeassistant.components import websocket_api
+
+    @websocket_api.websocket_command(
+        {
+            vol.Required("type"): f"{DOMAIN}/get_library",
+            vol.Optional("config_entry_id"): str,
+        }
+    )
+    @websocket_api.async_response
+    async def websocket_get_library(hass, connection, msg):
+        targets = loaded_frame_targets(hass)
+        config_entry_id = msg.get("config_entry_id")
+        if config_entry_id:
+            targets = [
+                target
+                for target in targets
+                if target.entry.entry_id == config_entry_id
+            ]
+            if not targets:
+                connection.send_error(
+                    msg["id"],
+                    "frame_not_loaded",
+                    "The selected Samsung Frame is not loaded",
+                )
+                return
+        elif len(targets) != 1:
+            connection.send_error(
+                msg["id"],
+                "target_required",
+                "config_entry_id is required unless exactly one Samsung Frame is loaded",
+            )
+            return
+
+        target = targets[0]
+        data = await target.runtime.client.async_get_library_data()
+        from .media_source import signed_thumbnail_url
+
+        for item in data.get("items", []):
+            item["thumbnail"] = signed_thumbnail_url(hass, item["id"])
+        connection.send_result(msg["id"], data)
+
+    websocket_api.async_register_command(hass, websocket_get_library)
 
 
 def _register_domain_actions(hass: HomeAssistant) -> None:
@@ -825,31 +872,6 @@ async def async_setup_entry(
 
     await _reload_slideshow_timer(hass, entry)
 
-    # Register WebSocket API for Gallery Dashboard
-    from homeassistant.components import websocket_api
-    @websocket_api.websocket_command({
-        "type": f"{DOMAIN}/get_library"
-    })
-    @websocket_api.async_response
-    async def websocket_get_library(hass, connection, msg):
-        stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if not stored:
-             connection.send_result(msg["id"], {"items": []})
-             return
-        client = stored.get(DATA_CLIENT)
-        data = await client.async_get_library_data()
-        from .media_source import signed_thumbnail_url
-
-        for item in data.get("items", []):
-            item["thumbnail"] = signed_thumbnail_url(hass, item["id"])
-        connection.send_result(msg["id"], data)
-        
-    try:
-        websocket_api.async_register_command(hass, websocket_get_library)
-    except Exception:
-        # Already registered
-        pass
-    
     # Register update listener to reload entry when options change
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
