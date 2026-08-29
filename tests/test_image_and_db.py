@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
+import pytest
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
 
@@ -361,6 +362,129 @@ async def test_upload_checks_all_source_ids_for_the_target_tv(hass, tmp_path):
     assert content_id == "MY-THIS-TV"
     assert upload_calls == 0
     assert selected_ids == ["MY-THIS-TV"]
+
+
+async def test_upload_does_not_duplicate_when_reuse_check_fails(hass, tmp_path):
+    """A transient target-TV check failure must not trigger a fresh upload."""
+    upload_calls = 0
+    configured_timeouts = []
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            raise ConnectionError("target TV unavailable")
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    real_wait_for = asyncio.wait_for
+
+    async def recording_wait_for(awaitable, timeout):
+        configured_timeouts.append(timeout)
+        return await real_wait_for(awaitable, timeout=timeout)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}),
+        patch(
+            "custom_components.samsung_frame_art_director.api.asyncio.wait_for",
+            side_effect=recording_wait_for,
+        ),
+        pytest.raises(ConnectionError, match="target TV unavailable"),
+    ):
+        await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+    assert upload_calls == 0
+    assert configured_timeouts == [30]
+
+
+async def test_concurrent_uploads_create_only_one_tv_copy(hass, tmp_path):
+    """Concurrent first displays of one source share the first TV upload."""
+    upload_calls = 0
+    uploaded_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def available(self):
+            return [{"content_id": content_id} for content_id in uploaded_ids]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            content_id = f"MY-NEW-{upload_calls}"
+            uploaded_ids.append(content_id)
+            return content_id
+
+        def select_image(self, _content_id, *, show=True, **_kwargs):
+            assert show is True
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        results = await asyncio.gather(
+            client.async_upload_image(
+                _jpeg(100, 100),
+                source_file=source_file,
+            ),
+            client.async_upload_image(
+                _jpeg(100, 100),
+                source_file=source_file,
+            ),
+        )
+
+    assert results == ["MY-NEW-1", "MY-NEW-1"]
+    assert upload_calls == 1
 
 
 async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
