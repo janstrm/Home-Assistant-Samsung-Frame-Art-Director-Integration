@@ -12,18 +12,19 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, DATA_CLIENT, CONF_DUID
+from .const import CONF_DUID, DOMAIN
 from .media_source import signed_thumbnail_url
+from .runtime import SamsungFrameConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: SamsungFrameConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Samsung Frame Sensor platform."""
-    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    client = entry.runtime_data.client
     
     # Create a simple coordinator to fetch library data periodically
     # or on demand via event listeners if we get fancy later.
