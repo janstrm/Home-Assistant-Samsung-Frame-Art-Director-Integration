@@ -304,7 +304,10 @@ The `upload_art` service obtains the source bytes, then calls
 3. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
    **3840×2160**, JPEG q85.
 4. Under `_art_lock`, use the synchronous Art API on port 8002 in a worker
-   thread to upload, select, and apply the matte.
+   thread to upload, select, and apply the landscape matte. On samsungtvws
+   versions whose `select_image()` has no `matte` argument, fall back to
+   `change_matte(content_id, matte_id=...)` without overwriting the optional
+   portrait matte; LS03D/LS03F reject that extra parameter with error `-7`.
 5. Retry up to 5× with exponential backoff, priming the art channel before
    each attempt and recreating the client on `ConnectionFailure`.
 6. Track the exact TV-returned `content_id` once in `art_library`, together with

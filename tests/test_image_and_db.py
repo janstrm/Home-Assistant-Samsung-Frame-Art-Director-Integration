@@ -179,9 +179,79 @@ async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
     assert upload_calls == 1
 
 
+@pytest.mark.parametrize("matte", ["none", "shadowbox_polar"])
+async def test_upload_matte_fallback_does_not_overwrite_portrait_matte(
+    hass,
+    matte,
+):
+    """LS03D/F accepts a landscape matte when portrait matte is omitted."""
+    matte_calls = []
+    applied_mattes = []
+
+    class FakeResponseError(Exception):
+        pass
+
+    class FakeArt:
+        token = "token"
+
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def upload(self, _image, **_kwargs):
+            return "MY-MATTE"
+
+        def select_image(self, _content_id, *, show=True):
+            assert show is True
+
+        def change_matte(
+            self,
+            content_id,
+            matte_id=None,
+            portrait_matte=None,
+        ):
+            matte_calls.append((content_id, matte_id, portrait_matte))
+            if portrait_matte is not None:
+                raise FakeResponseError(
+                    "`change_matte` request failed with error number -7"
+                )
+            applied_mattes.append(matte_id)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(
+            _jpeg(100, 100),
+            matte=matte,
+        )
+
+    assert content_id == "MY-MATTE"
+    assert matte_calls == [("MY-MATTE", matte, None)]
+    assert applied_mattes == [matte]
+
+
 async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path):
     """An already uploaded source is selected instead of uploaded again."""
     upload_calls = 0
+    matte_calls = []
     selected_ids = []
 
     class FakeArt:
@@ -204,9 +274,12 @@ async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path
             upload_calls += 1
             return "MY-NEW"
 
-        def select_image(self, content_id, *, show=True, **_kwargs):
+        def select_image(self, content_id, *, show=True):
             assert show is True
             selected_ids.append(content_id)
+
+        def change_matte(self, content_id, matte_id=None, portrait_matte=None):
+            matte_calls.append((content_id, matte_id, portrait_matte))
 
         def close(self):
             return None
@@ -232,12 +305,72 @@ async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path
     with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
         content_id = await client.async_upload_image(
             _jpeg(100, 100),
+            matte="shadowbox_polar",
             source_file=source_file,
         )
 
     assert content_id == "MY-EXISTING"
     assert upload_calls == 0
+    assert matte_calls == [("MY-EXISTING", "shadowbox_polar", None)]
     assert selected_ids == ["MY-EXISTING"]
+
+
+async def test_upload_reuse_propagates_matte_failure_without_upload(hass, tmp_path):
+    """A reused image cannot report success when its requested matte failed."""
+    upload_calls = 0
+
+    class FakeResponseError(Exception):
+        pass
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            return [{"content_id": "MY-EXISTING"}]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def select_image(self, _content_id, *, show=True):
+            assert show is True
+
+        def change_matte(self, _content_id, matte_id=None):
+            raise FakeResponseError(f"matte rejected: {matte_id}")
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with (
+        patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}),
+        pytest.raises(FakeResponseError, match="matte rejected"),
+    ):
+        await client.async_upload_image(
+            _jpeg(100, 100),
+            matte="shadowbox_polar",
+            source_file=source_file,
+        )
+
+    assert upload_calls == 0
 
 
 async def test_upload_does_not_reuse_source_missing_from_target_tv(hass, tmp_path):
