@@ -48,15 +48,6 @@ def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
     )
 
 
-def _mask_secret(value: Optional[str]) -> str:
-    """Mask a secret value for logs."""
-    if not value:
-        return "<empty>"
-    if len(value) <= 8:
-        return "***"
-    return f"{value[:4]}...{value[-4:]}"
-
-
 class AuthenticationRejectedError(Exception):
     """Raised when the TV explicitly rejects the persisted identity."""
 
@@ -317,10 +308,11 @@ class SamsungFrameClient:
                 "content_id": content_id,
             }
 
-        try:
-            return await asyncio.wait_for(asyncio.to_thread(_read), timeout=10)
-        except Exception:  # noqa: BLE001
-            return {"status": None, "content_id": None}
+        async with self._art_lock:
+            try:
+                return await self._async_run_blocking_contained(_read, 10)
+            except Exception:  # noqa: BLE001
+                return {"status": None, "content_id": None}
 
     async def async_get_artmode_setting(self, setting: str):
         """Return an art-mode setting value (motion_sensitivity, motion_timer,
@@ -1052,6 +1044,11 @@ class SamsungFrameClient:
 
     async def async_get_artmode_status(self) -> Optional[str]:
         """Return current Art Mode status as 'on'/'off'/None with best effort logging."""
+        async with self._art_lock:
+            return await self._async_get_artmode_status_locked()
+
+    async def _async_get_artmode_status_locked(self) -> Optional[str]:
+        """Read Art Mode status while the caller owns ``_art_lock``."""
         try:
             from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
         except Exception as err:  # noqa: BLE001
@@ -1060,29 +1057,25 @@ class SamsungFrameClient:
 
         def _read_status() -> Optional[str]:
             tv = None
+            art = None
             try:
                 tv = self._make_tv()
             except (ConnectionError, TimeoutError, OSError) as e:
                 _LOGGER.debug("get_artmode: connection error on %s: %r", self._host, e)
                 return None
             try:
-                status = tv.art().get_artmode()
+                art = tv.art()
+                status = art.get_artmode()
                 return str(status).lower() if status is not None else None
             except (ConnectionError, TimeoutError, ValueError, OSError) as e:
                 _LOGGER.debug("get_artmode: request error on %s: %r", self._host, e)
                 return None
             finally:
                 if tv is not None:
-                    self._capture_token(tv)
-                    try:
-                        close_fn = getattr(tv, "close", None)
-                        if callable(close_fn):
-                            close_fn()
-                    except (ConnectionError, OSError):
-                        pass
+                    self._close_art_connection(tv, art)
 
         try:
-            status = await asyncio.wait_for(asyncio.to_thread(_read_status), timeout=10)
+            status = await self._async_run_blocking_contained(_read_status, 10)
         except Exception:
             status = None
         _LOGGER.debug("get_artmode: status=%s on %s", status, self._host)
@@ -1103,6 +1096,7 @@ class SamsungFrameClient:
 
         def _fetch():
             tv = None
+            art_client = None
             try:
                 tv = self._make_tv()
                 art_client = tv.art()
@@ -1179,7 +1173,7 @@ class SamsungFrameClient:
                             _LOGGER.debug("Art Preview: get_preview failed for %s: %r", results["content_id"], e)
 
                     # 3. Try get_photo as final fallback
-                    get_photo_fn = getattr(tv.art(), "get_photo", None)
+                    get_photo_fn = getattr(art_client, "get_photo", None)
                     if get_photo_fn:
                         try:
                             _LOGGER.debug("Art Preview: calling get_photo for %s", results["content_id"])
@@ -1197,18 +1191,18 @@ class SamsungFrameClient:
                 _LOGGER.debug("Error fetching current art: %r", e)
             finally:
                 if tv:
-                    self._capture_token(tv)
-                    try:
-                        tv.close()
-                    except Exception:
-                        pass
+                    self._close_art_connection(tv, art_client)
 
-        try:
-            await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=15)
-        except asyncio.TimeoutError:
-            _LOGGER.debug("Art Preview: fetch thread timed out after 15s")
-        except Exception as e:
-            _LOGGER.debug("Art Preview: fetch thread error: %r", e)
+        async with self._art_lock:
+            try:
+                await self._async_run_blocking_contained(
+                    _fetch,
+                    ART_OPERATION_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                _LOGGER.debug("Art Preview: fetch thread timed out after 15s")
+            except Exception as e:
+                _LOGGER.debug("Art Preview: fetch thread error: %r", e)
             
         self._art_preview_cache = results
         self._art_preview_cache_time = now
@@ -1223,7 +1217,7 @@ class SamsungFrameClient:
         """Internal set_artmode assuming caller holds _art_lock."""
         # Early exit if already in desired state to avoid unnecessary requests
         try:
-            current = await self.async_get_artmode_status()
+            current = await self._async_get_artmode_status_locked()
             if current is not None:
                 if bool(enabled) and current in ("on", "true", "1"):
                     _LOGGER.debug("ArtMode: already on for %s; skipping", self._host)
@@ -1242,26 +1236,32 @@ class SamsungFrameClient:
             return
 
         def _make_client():
-            _LOGGER.debug("Creating client (token=%s)", _mask_secret(self._token))
+            _LOGGER.debug(
+                "Creating identified client for host=%s token_present=%s",
+                self._host,
+                bool(self._token),
+            )
             return self._make_tv(port=self._port)
 
         def _set():
             tv_local = _make_client()
+            art_client = None
             _LOGGER.debug("ArtMode: sending set_artmode(%s) to %s", bool(enabled), self._host)
             import time
             last_status = None
             # Precompute selection candidate once to reduce available() calls
             selection_candidate = None
             try:
+                art_client = tv_local.art()
                 try:
-                    current = tv_local.art().get_current()
+                    current = art_client.get_current()
                 except Exception:
                     current = None
                 if isinstance(current, dict):
                     selection_candidate = current.get("content_id") or current.get("contentId")
                 if not selection_candidate:
                     try:
-                        avail = tv_local.art().available() or []
+                        avail = art_client.available() or []
                     except Exception:
                         avail = []
                     for item in avail:
@@ -1280,46 +1280,43 @@ class SamsungFrameClient:
                         if not selection_candidate and normalized_dash.upper().startswith("SAM-"):
                             selection_candidate = image_id
                 try:
-                    tv_local.art().set_artmode(bool(enabled))
+                    art_client.set_artmode(bool(enabled))
                 except Exception as exc:  # noqa: BLE001
                     # Note: This often fires due to the TV's clientConnect handshake event
                     # being misinterpreted as a failure. Art Mode usually still activates.
                     _LOGGER.debug("ArtMode: set_artmode(%s) initial call on %s: %r", bool(enabled), self._host, exc)
 
+                # Verification + fallback loop (up to ~10s)
+                for attempt in range(1, 3 + 1):
+                    try:
+                        status = art_client.get_artmode()
+                        last_status = status
+                        _LOGGER.debug("ArtMode: attempt %s status=%s on %s", attempt, status, self._host)
+                        if bool(enabled) and str(status).lower() in ("on", "true", "1"):
+                            break
+                        if not bool(enabled) and str(status).lower() in ("off", "false", "0", "none"):
+                            break
+                    except Exception:  # noqa: BLE001
+                        _LOGGER.debug("ArtMode: verification not available at attempt %s on %s", attempt, self._host)
+                    # On enable, force-select an image to coax Art Mode ON (even if current exists)
+                    if bool(enabled) and attempt in (1, 3):
+                        try:
+                            if selection_candidate:
+                                _LOGGER.debug("ArtMode: selecting image %s on %s to force Art Mode on", selection_candidate, self._host)
+                                art_client.select_image(selection_candidate, show=True)
+                        except Exception as sel_err:
+                            _LOGGER.debug("ArtMode: select image fallback failed on %s: %r", self._host, sel_err)
+                    time.sleep(2)
+                _LOGGER.debug("ArtMode: final status=%s on %s", last_status, self._host)
             except Exception:  # noqa: BLE001
                 pass
+            finally:
+                self._close_art_connection(tv_local, art_client)
 
-            # Verification + fallback loop (up to ~10s)
-            for attempt in range(1, 3 + 1):
-                try:
-                    status = tv_local.art().get_artmode()
-                    last_status = status
-                    _LOGGER.debug("ArtMode: attempt %s status=%s on %s", attempt, status, self._host)
-                    if bool(enabled) and str(status).lower() in ("on", "true", "1"):
-                        break
-                    if not bool(enabled) and str(status).lower() in ("off", "false", "0", "none"):
-                        break
-                except Exception:  # noqa: BLE001
-                    _LOGGER.debug("ArtMode: verification not available at attempt %s on %s", attempt, self._host)
-                # On enable, force-select an image to coax Art Mode ON (even if current exists)
-                if bool(enabled) and attempt in (1, 3):
-                    try:
-                        if selection_candidate:
-                            _LOGGER.debug("ArtMode: selecting image %s on %s to force Art Mode on", selection_candidate, self._host)
-                            tv_local.art().select_image(selection_candidate, show=True)
-                    except Exception as sel_err:
-                        _LOGGER.debug("ArtMode: select image fallback failed on %s: %r", self._host, sel_err)
-                time.sleep(2)
-            _LOGGER.debug("ArtMode: final status=%s on %s", last_status, self._host)
-            self._capture_token(tv_local)
-            try:
-                close_fn = getattr(tv_local, "close", None)
-                if callable(close_fn):
-                    close_fn()
-            except Exception:
-                pass
-
-        await asyncio.to_thread(_set)
+        await self._async_run_blocking_contained(
+            _set,
+            ART_OPERATION_TIMEOUT_SECONDS,
+        )
 
     async def async_preprocess_image(self, image_bytes: bytes) -> bytes:
         """Resize to 3840x2160 and return JPEG bytes.
@@ -1542,7 +1539,10 @@ class SamsungFrameClient:
                     except Exception:
                         pass
 
-                    res = await asyncio.wait_for(asyncio.to_thread(_upload_once), timeout=120)
+                    res = await self._async_run_blocking_contained(
+                        _upload_once,
+                        120,
+                    )
                     _LOGGER.info("Upload success on host=%s (attempt %s, content_id=%s)", self._host, attempt, res)
                     if res:
                         await self.async_track_art(
@@ -1551,9 +1551,9 @@ class SamsungFrameClient:
                             source_file=source_file,
                         )
                         try:
-                            await asyncio.wait_for(
-                                asyncio.to_thread(_select_once, str(res)),
-                                timeout=30,
+                            await self._async_run_blocking_contained(
+                                lambda: _select_once(str(res)),
+                                30,
                             )
                         except asyncio.TimeoutError:
                             _LOGGER.warning(
@@ -1573,7 +1573,9 @@ class SamsungFrameClient:
                         self._fire_art_changed(res)
                     try:
                         # Confirm selection by logging current content id
-                        diag_ok = await self.async_art_diagnostics(max_ids=1)
+                        diag_ok = await self._async_art_diagnostics_locked(
+                            max_ids=1
+                        )
                         _LOGGER.debug("Upload post-check on %s: current=%s", self._host, diag_ok.get("current"))
                     except Exception:
                         pass
@@ -1606,6 +1608,11 @@ class SamsungFrameClient:
 
         Returns dict with supported, status, current id, available sample ids.
         """
+        async with self._art_lock:
+            return await self._async_art_diagnostics_locked(max_ids)
+
+    async def _async_art_diagnostics_locked(self, max_ids: int = 10) -> dict:
+        """Collect diagnostics while the caller owns ``_art_lock``."""
         try:
             from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
         except Exception as err:  # noqa: BLE001
@@ -1656,7 +1663,10 @@ class SamsungFrameClient:
             finally:
                 self._close_art_connection(tv, art)
 
-        data = await asyncio.to_thread(_collect)
+        data = await self._async_run_blocking_contained(
+            _collect,
+            ART_OPERATION_TIMEOUT_SECONDS,
+        )
         _LOGGER.info("Diagnostics(Art): %s", data)
         return data
 
@@ -1671,25 +1681,23 @@ class SamsungFrameClient:
 
         def _fetch_tv_state():
             tv = self._make_tv()
+            art = None
             current_id = None
             available: list = []
             try:
-                cur = tv.art().get_current()
+                art = tv.art()
+                cur = art.get_current()
                 if isinstance(cur, dict):
                     current_id = cur.get("content_id") or cur.get("contentId")
             except Exception:
                 current_id = None
             try:
-                available = tv.art().available() or []
+                if art is not None:
+                    available = art.available() or []
             except Exception:
                 available = []
-            self._capture_token(tv)
-            try:
-                closer = getattr(tv, "close", None)
-                if callable(closer):
-                    closer()
-            except Exception:
-                pass
+            finally:
+                self._close_art_connection(tv, art)
             normalized_ids: list[str] = []
             for item in available:
                 if isinstance(item, dict):
@@ -1701,7 +1709,11 @@ class SamsungFrameClient:
             # Deduplicate to prevent double-counting or errors
             return current_id, list(dict.fromkeys(normalized_ids))
 
-        current_id, on_tv_ids = await asyncio.to_thread(_fetch_tv_state)
+        async with self._art_lock:
+            current_id, on_tv_ids = await self._async_run_blocking_contained(
+                _fetch_tv_state,
+                ART_OPERATION_TIMEOUT_SECONDS,
+            )
 
         # Destructive cleanup is always provenance-gated. DB sync also records
         # manually uploaded TV art, so mere DB presence is not proof that this
@@ -1832,31 +1844,30 @@ class SamsungFrameClient:
                 if not ids:
                     return deleted, errors
                 tv = self._make_tv()
+                art = None
                 try:
+                    art = tv.art()
                     batch = list(ids)
                     # Prefer delete_list if present
                     try:
-                        tv.art().delete_list(batch)
+                        art.delete_list(batch)
                         deleted = batch
                     except Exception:
                         # Fallback: delete one by one
                         for cid in batch:
                             try:
-                                tv.art().delete(cid)
+                                art.delete(cid)
                                 deleted.append(cid)
                             except Exception as e:  # noqa: BLE001
                                 errors.append(f"{cid}: {e!r}")
                 finally:
-                    self._capture_token(tv)
-                    try:
-                        closer = getattr(tv, "close", None)
-                        if callable(closer):
-                            closer()
-                    except Exception:
-                        pass
+                    self._close_art_connection(tv, art)
                 return deleted, errors
 
-            deleted, errs = await asyncio.to_thread(_delete, to_delete)
+            deleted, errs = await self._async_run_blocking_contained(
+                lambda: _delete(to_delete),
+                ART_OPERATION_TIMEOUT_SECONDS,
+            )
             summary["deleted"] = deleted
             summary["errors"] = errs
 
