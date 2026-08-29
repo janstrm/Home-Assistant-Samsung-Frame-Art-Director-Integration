@@ -295,3 +295,155 @@ def test_shared_close_helper_closes_each_object_once(hass):
     client._close_art_connection(shared, shared)
 
     assert shared.close_calls == 1
+
+
+async def test_status_poll_closes_art_and_parent_exactly_once(hass):
+    """Coordinator polling must not leave its short-lived Art channel open."""
+    art_clients = []
+    tv_clients = []
+
+    class FakeArt:
+        token = "SAVED"
+
+        def __init__(self):
+            self.close_calls = 0
+            art_clients.append(self)
+
+        def get_artmode(self):
+            return "on"
+
+        def close(self):
+            self.close_calls += 1
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **_kwargs):
+            self.close_calls = 0
+            self._art = FakeArt()
+            tv_clients.append(self)
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            self.close_calls += 1
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED")
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        assert await client.async_get_artmode_status() == "on"
+
+    assert len(art_clients) == len(tv_clients) == 1
+    assert art_clients[0].close_calls == 1
+    assert tv_clients[0].close_calls == 1
+
+
+async def test_preview_reuses_one_art_child_and_closes_it(hass):
+    """Thumbnail fallbacks stay on the same Art child for one parent client."""
+    art_calls = 0
+    art_client = None
+    tv_client = None
+
+    class FakeArt:
+        token = "SAVED"
+
+        def __init__(self):
+            self.close_calls = 0
+
+        def supported(self):
+            return True
+
+        def get_current(self):
+            return {"content_id": "MY-PREVIEW"}
+
+        def get_photo(self, _content_id):
+            return b"preview"
+
+        def close(self):
+            self.close_calls += 1
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **_kwargs):
+            nonlocal art_client, tv_client
+            self.close_calls = 0
+            self._art = FakeArt()
+            art_client = self._art
+            tv_client = self
+
+        def art(self):
+            nonlocal art_calls
+            art_calls += 1
+            return self._art
+
+        def close(self):
+            self.close_calls += 1
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED")
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        result = await client.async_get_current_art()
+
+    assert result == {"content_id": "MY-PREVIEW", "image": b"preview"}
+    assert art_calls == 1
+    assert art_client.close_calls == 1
+    assert tv_client.close_calls == 1
+
+
+async def test_state_poll_and_setting_call_share_one_serialization_lock(hass):
+    """Different public Art operations cannot run concurrently."""
+    events = []
+    state_started = asyncio.Event()
+    release_state = asyncio.Event()
+
+    class FakeArt:
+        token = "SAVED"
+
+        def get_artmode(self):
+            events.append("state-start")
+            hass.loop.call_soon_threadsafe(state_started.set)
+            while not release_state.is_set():
+                time.sleep(0.005)
+            events.append("state-end")
+            return "on"
+
+        def get_current(self):
+            return {"content_id": "MY-CURRENT"}
+
+        def get_brightness(self):
+            events.append("brightness")
+            return 5
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED")
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        state_task = asyncio.create_task(client.async_get_state())
+        await state_started.wait()
+        brightness_task = asyncio.create_task(client.async_get_brightness())
+        await asyncio.sleep(0.02)
+        assert events == ["state-start"]
+        release_state.set()
+        assert await state_task == {
+            "status": "on",
+            "content_id": "MY-CURRENT",
+        }
+        assert await brightness_task == 5
+
+    assert events == ["state-start", "state-end", "brightness"]
