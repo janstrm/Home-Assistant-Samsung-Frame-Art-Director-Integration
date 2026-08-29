@@ -7,6 +7,12 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import async_setup, async_setup_entry
 from custom_components.samsung_frame_art_director.const import DOMAIN
+from custom_components.samsung_frame_art_director.media_player import (
+    async_setup_entry as async_setup_media_player,
+)
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
+)
 
 
 def _client(host: str) -> MagicMock:
@@ -27,6 +33,31 @@ def _client(host: str) -> MagicMock:
     client.async_purge_database = AsyncMock()
     client.async_toggle_favorite = AsyncMock(return_value=True)
     return client
+
+
+async def test_media_player_coordinator_is_owned_by_its_config_entry(hass):
+    """The media-player platform needs no global hass.data client mirror."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "token": "SAVED"},
+        unique_id="frame-runtime",
+    )
+    entry.add_to_hass(hass)
+    client = _client("frame.local")
+    client.async_get_state = AsyncMock(
+        return_value={"status": "on", "content_id": "MY-FRAME"}
+    )
+    entry.runtime_data = SamsungFrameRuntimeData(client=client)
+    add_entities = MagicMock()
+
+    await async_setup_media_player(hass, entry, add_entities)
+
+    assert entry.runtime_data.coordinator is not None
+    assert entry.runtime_data.coordinator.data == {
+        "status": "on",
+        "content_id": "MY-FRAME",
+    }
+    add_entities.assert_called_once()
 
 
 async def test_targeted_actions_use_only_the_selected_frames_runtime_and_options(
