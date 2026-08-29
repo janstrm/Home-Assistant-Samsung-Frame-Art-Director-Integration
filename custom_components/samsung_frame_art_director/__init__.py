@@ -43,6 +43,7 @@ from .file_access import (
     is_local_media_identifier,
     resolve_upload_source,
 )
+from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
 
 
 # This integration is configured via the UI only (config entries), not YAML.
@@ -300,7 +301,9 @@ def _remote_filename(path: str) -> str:
     return filename
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> bool:
     """Set up Samsung Frame Art Director from a config entry."""
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
 
@@ -413,6 +416,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info("Token updated for host=%s; persisting to ConfigEntry", entry.data.get("host"))
         new_data = {**entry.data, "token": client.token}
         hass.config_entries.async_update_entry(entry, data=new_data)
+
+    entry.runtime_data = SamsungFrameRuntimeData(client=client)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         DATA_CLIENT: client,
@@ -1009,7 +1014,9 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
         _LOGGER.warning("Slideshow cleanup failed: %s", e)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> bool:
     """Unload a config entry."""
     _LOGGER.info("Unloading Samsung Frame Art Director")
     
@@ -1021,9 +1028,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        # Disconnect client
+        # Disconnect the client owned by this entry. The hass.data lookup is a
+        # temporary compatibility fallback for entries loaded before runtime
+        # ownership was introduced.
         stored = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-        if stored and (client := stored.get(DATA_CLIENT)):
+        runtime = getattr(entry, "runtime_data", None)
+        client = runtime.client if runtime else None
+        if client is None and stored:
+            client = stored.get(DATA_CLIENT)
+        if client:
             await client.async_disconnect()
 
     return unload_ok
