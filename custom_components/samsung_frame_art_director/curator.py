@@ -43,12 +43,15 @@ class ContentCurator:
 
         Returns ``(analyzer, error)``; ``error`` is ``None`` on success.
         """
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
         provider = self.entry.options.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)
         return create_analyzer(
             provider,
             gemini_api_key=self.entry.options.get(CONF_GEMINI_API_KEY, ""),
             openai_api_key=self.entry.options.get(CONF_OPENAI_API_KEY, ""),
             model=self.entry.options.get(CONF_AI_MODEL, ""),
+            session=async_get_clientsession(self.hass),
         )
 
     async def async_process_inbox(self):
