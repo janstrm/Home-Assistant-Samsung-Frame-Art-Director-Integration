@@ -146,39 +146,54 @@ async def async_try_connect(host: str, port: int, token: Optional[str], token_fi
         _LOGGER.debug("AsyncRemote path failed, falling back to sync: %r", err, exc_info=True)
 
     def _attempt() -> PairResult:
+        tv = None
+        art = None
         try:
             from samsungtvws import SamsungTVWS  # type: ignore
 
             if token:
-                tv = SamsungTVWS(host, port=port, token=token, name=CLIENT_NAME)
+                tv = SamsungTVWS(
+                    host,
+                    port=port,
+                    token=token,
+                    name=CLIENT_NAME,
+                    timeout=31,
+                )
             else:
                 # Provide token_file to ensure token is persisted when user accepts
                 if token_file_path:
-                    tv = SamsungTVWS(host, port=port, token_file=token_file_path, name=CLIENT_NAME)
+                    tv = SamsungTVWS(
+                        host,
+                        port=port,
+                        token_file=token_file_path,
+                        name=CLIENT_NAME,
+                        timeout=31,
+                    )
                 else:
-                    tv = SamsungTVWS(host, port=port, name=CLIENT_NAME)
+                    tv = SamsungTVWS(
+                        host,
+                        port=port,
+                        name=CLIENT_NAME,
+                        timeout=31,
+                    )
 
-            # Touch art / device info to provoke handshake
+            # Open one authenticated Art child to provoke/confirm pairing.
+            art = tv.art()
             try:
-                # Provoke pairing prompt on Frame models
-                try:
-                    tv.art().supported()
-                except Exception:
-                    pass
-                try:
-                    tv.art().get_artmode()
-                except Exception:
-                    pass
-                try:
-                    tv.art().available()
-                except Exception:
-                    pass
+                art.open()
+            except Exception as err:  # noqa: BLE001
+                if type(err).__name__ == "UnauthorizedError":
+                    _LOGGER.info("Auth missing: host=%s port=%s", host, port)
+                    return PairResult(RESULT_AUTH_MISSING)
+                raise
+
+            try:
                 info = tv.rest_device_info()
             except Exception:
                 info = None
 
-            # If we already have a token or one was persisted, consider success
-            new_token = getattr(tv, "token", None)
+            # Prefer the Art child's freshest token, then the parent/file.
+            new_token = getattr(art, "token", None) or getattr(tv, "token", None)
             # If token not set on object, try reading token_file if provided
             if not new_token and token_file_path:
                 try:
@@ -192,10 +207,6 @@ async def async_try_connect(host: str, port: int, token: Optional[str], token_fi
                 except Exception:  # noqa: BLE001
                     new_token = None
             if new_token:
-                # Close before returning to flush token file writes in the library
-                close_fn = getattr(tv, "close", None)
-                if callable(close_fn):
-                    close_fn()
                 _LOGGER.info(
                     "Connect success: host=%s port=%s token_captured=%s",
                     host,
@@ -205,14 +216,23 @@ async def async_try_connect(host: str, port: int, token: Optional[str], token_fi
                 return PairResult(RESULT_SUCCESS, token=new_token, info=info or {})
 
             # No token yet, likely needs user acceptance
-            close_fn = getattr(tv, "close", None)
-            if callable(close_fn):
-                close_fn()
             _LOGGER.info("Auth missing: host=%s port=%s (accept on TV)", host, port)
             return PairResult(RESULT_AUTH_MISSING)
         except Exception:
             _LOGGER.debug("Cannot connect: host=%s port=%s", host, port)
             return PairResult(RESULT_CANNOT_CONNECT)
+        finally:
+            closed_ids: set[int] = set()
+            for client in (art, tv):
+                if client is None or id(client) in closed_ids:
+                    continue
+                closed_ids.add(id(client))
+                closer = getattr(client, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
 
     return await asyncio.to_thread(_attempt)
 

@@ -358,6 +358,7 @@ trigger:
 | Problem | Solution |
 |---|---|
 | Art uploads stall or fail | Ensure the TV is paired. Try turning on manually and watching for permission popups. |
+| The TV repeatedly asks to allow Home Assistant | Update the integration, restart HA, and confirm the TV's **Device Connection Manager → Access Notification** setting is **First Time Only**. A normal restart reuses the saved token and must not show a prompt; a single new prompt is expected only when HA starts reauthentication for an explicitly rejected/expired token. |
 | "No Gemini API key" warning | Add your API key in **Settings → Devices → Samsung Frame Art Director → Configure**. |
 | "Local file missing" warnings during rotation | Run **Purge Database** then **Sync Library** to clean up stale entries. |
 | Gallery shows no images | Ensure images exist in `/media/frame/library/` and run **Sync Library**. |

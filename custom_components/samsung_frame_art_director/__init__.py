@@ -144,6 +144,8 @@ def _enable_verbose_logging() -> None:
         logging.getLogger("samsung_frame_art_director").setLevel(logging.DEBUG)
         # Third-party lib at info
         logging.getLogger("samsungtvws").setLevel(logging.INFO)
+        # samsungtvws 3.0.5 includes token values in connection INFO logs.
+        logging.getLogger("samsungtvws.connection").setLevel(logging.WARNING)
         _LOGGER.info("Verbose logging enabled for Samsung Frame Art Director (debug) and samsungtvws (info)")
     except Exception:  # noqa: BLE001
         # Best effort; logging config is managed by HA logger integration normally
@@ -281,7 +283,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
 
     # Import here to avoid blocking config_flow import on package import
-    from .api import SamsungFrameClient, PairingTimeoutError
+    from .api import AuthenticationRejectedError, SamsungFrameClient
 
     # Enable verbose logs from the beginning for diagnostics
     _enable_verbose_logging()
@@ -338,7 +340,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001
         _LOGGER.debug("Could not pre-create media folders", exc_info=True)
 
-    # Initialize and connect client; use persistent token file under /config
+    # Initialize with the persisted ConfigEntry identity. The pairing file path
+    # is retained only so an obsolete config-flow token file can be removed
+    # after authenticated startup succeeds.
     host = entry.data.get("host")
     safe_host = str(host).replace("/", "_").replace(".", "_")
     token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
@@ -368,11 +372,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001
         pass
     try:
-        # Validate token at setup. PairingTimeoutError means the device identity
-        # could not be established (no token/duid) -> trigger reauth so the user
-        # can re-accept on the TV. Other failures are treated as transient.
+        # Validate the saved token without opening a new pairing flow. Only an
+        # explicit authentication failure starts reauth; reachability and
+        # missing device information remain retryable setup failures.
         await client.async_connect_and_pair()
-    except PairingTimeoutError as err:
+    except AuthenticationRejectedError as err:
         _LOGGER.debug("Client pairing failed (auth): %r", err, exc_info=True)
         raise ConfigEntryAuthFailed from err
     except Exception as err:  # noqa: BLE001
