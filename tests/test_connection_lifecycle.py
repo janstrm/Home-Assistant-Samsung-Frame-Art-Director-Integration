@@ -57,6 +57,18 @@ async def test_domain_setup_registers_shared_interfaces(hass):
         assert hass.services.has_service(DOMAIN, action), action
 
 
+async def test_domain_setup_registers_websocket_interface(hass):
+    """The gallery WebSocket command is owned by domain setup."""
+    hass.http = MagicMock()
+
+    with patch(
+        "homeassistant.components.websocket_api.async_register_command"
+    ) as register_command:
+        assert await async_setup(hass, {})
+
+    register_command.assert_called_once()
+
+
 async def test_startup_reuses_saved_token_without_token_file_pairing(
     hass,
     tmp_path,
