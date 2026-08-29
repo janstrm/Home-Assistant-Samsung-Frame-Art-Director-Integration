@@ -11,19 +11,25 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
-from custom_components.samsung_frame_art_director.const import DATA_CLIENT, DOMAIN
+from custom_components.samsung_frame_art_director.const import DOMAIN
 from custom_components.samsung_frame_art_director.media_player import (
     SamsungFrameMediaPlayer,
+)
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
 )
 
 
 def _media_player(hass, entry, client):
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: client}
     coordinator = DataUpdateCoordinator(
         hass,
         logging.getLogger(__name__),
         name="test-frame",
         config_entry=entry,
+    )
+    entry.runtime_data = SamsungFrameRuntimeData(
+        client=client,
+        coordinator=coordinator,
     )
     return SamsungFrameMediaPlayer(hass, entry, coordinator)
 

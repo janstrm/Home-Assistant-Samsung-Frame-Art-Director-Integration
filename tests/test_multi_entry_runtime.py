@@ -2,6 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -43,6 +44,7 @@ async def test_media_player_coordinator_is_owned_by_its_config_entry(hass):
         unique_id="frame-runtime",
     )
     entry.add_to_hass(hass)
+    entry.mock_state(hass, ConfigEntryState.SETUP_IN_PROGRESS)
     client = _client("frame.local")
     client.async_get_state = AsyncMock(
         return_value={"status": "on", "content_id": "MY-FRAME"}
