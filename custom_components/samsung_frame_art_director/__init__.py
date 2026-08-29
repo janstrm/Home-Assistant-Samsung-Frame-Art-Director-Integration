@@ -978,12 +978,8 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
             matte=matte
         )
         # Cleanup and exit early (skip default logic)
-        cleanup_max = entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS)
         try:
-            await client.async_cleanup_storage(
-                max_items=cleanup_max,
-                only_integration_managed=DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
-            )
+            await client.async_cleanup_storage(**_cleanup_params(entry))
         except Exception:
             pass
         return
