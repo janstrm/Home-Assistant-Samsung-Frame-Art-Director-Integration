@@ -1,5 +1,7 @@
 """Regression tests for independent Samsung Frame config entries."""
 
+import sqlite3
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
@@ -7,7 +9,7 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import async_setup, async_setup_entry
-from custom_components.samsung_frame_art_director.const import DOMAIN
+from custom_components.samsung_frame_art_director.const import DB_DIR, DB_FILE, DOMAIN
 from custom_components.samsung_frame_art_director.media_player import (
     async_setup_entry as async_setup_media_player,
 )
@@ -60,6 +62,53 @@ async def test_media_player_coordinator_is_owned_by_its_config_entry(hass):
         "content_id": "MY-FRAME",
     }
     add_entities.assert_called_once()
+
+
+async def test_setup_migrates_legacy_database_into_entry_owned_database(
+    hass, tmp_path
+):
+    """Per-Frame isolation preserves data from the previous shared database."""
+    legacy_db_path = tmp_path / DB_DIR / DB_FILE
+    legacy_db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(legacy_db_path) as connection:
+        connection.execute("CREATE TABLE migration_marker (value TEXT)")
+        connection.execute(
+            "INSERT INTO migration_marker (value) VALUES (?)", ("preserved",)
+        )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "token": "SAVED"},
+        unique_id="frame-migration",
+    )
+    entry.add_to_hass(hass)
+    client = _client("frame.local")
+
+    with (
+        patch.object(
+            hass.config,
+            "path",
+            side_effect=lambda relative_path: str(tmp_path / relative_path),
+        ),
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+    ):
+        assert await async_setup_entry(hass, entry)
+
+    entry_db_path = Path(client.set_db_path.call_args.args[0])
+    assert entry_db_path.exists()
+    with sqlite3.connect(entry_db_path) as connection:
+        marker = connection.execute(
+            "SELECT value FROM migration_marker"
+        ).fetchone()
+    assert marker == ("preserved",)
 
 
 async def test_change_gallery_page_uses_renamed_controls_of_targeted_frame(hass):
