@@ -95,6 +95,33 @@ async def test_tracking_art_migrates_legacy_dimension_columns(hass, tmp_path):
     assert {"width", "height"} <= columns
 
 
+async def test_tracking_canonicalizes_source_off_the_event_loop(hass, tmp_path):
+    """Local source resolution must not perform filesystem work on HA's loop."""
+    event_loop_thread = threading.get_ident()
+    canonicalization_threads = []
+
+    def _record_canonicalization(_hass, source):
+        canonicalization_threads.append(threading.get_ident())
+        return source
+
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    with patch(
+        "custom_components.samsung_frame_art_director.api."
+        "_canonical_source_identity",
+        side_effect=_record_canonicalization,
+    ):
+        await client.async_track_art(
+            "MY-OFF-LOOP",
+            source_file="/media/frame/library/off-loop.jpg",
+        )
+
+    assert canonicalization_threads
+    assert all(
+        thread_id != event_loop_thread for thread_id in canonicalization_threads
+    )
+
+
 async def test_database_migration_preserves_and_canonicalizes_legacy_sources(
     hass, tmp_path
 ):
