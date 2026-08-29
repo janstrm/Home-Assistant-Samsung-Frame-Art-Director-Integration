@@ -759,9 +759,7 @@ class SamsungFrameClient:
 
         # Fallback logic similar to upload select
         def _do_select():
-            # The socket timeout must expire before the outer asyncio timeout;
-            # wait_for cannot cancel a blocking worker thread by itself.
-            tv = self._make_tv(timeout=25)
+            tv = self._make_tv(timeout=30)
             art_client = None
             try:
                 art_client = tv.art()
@@ -833,16 +831,18 @@ class SamsungFrameClient:
             finally:
                 self._close_art_connection(tv, art_client)
 
+        worker = asyncio.create_task(asyncio.to_thread(_do_select))
         try:
-            selected_content_id = await asyncio.wait_for(
-                asyncio.to_thread(_do_select),
-                timeout=30,
-            )
-        except asyncio.TimeoutError:
-            _LOGGER.debug("Select timed out on host=%s", self._host)
-            if require_available:
-                raise
-            return None
+            selected_content_id = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # A blocking thread cannot be cancelled safely. Keep the caller
+            # (and its _art_lock) alive until the socket-bounded worker exits,
+            # so no late selection can race a following Art operation.
+            try:
+                await worker
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         if selected_content_id:
             self._fire_art_changed(selected_content_id)
             return str(selected_content_id)
