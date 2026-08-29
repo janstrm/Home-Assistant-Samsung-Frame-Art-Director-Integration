@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
@@ -19,6 +20,8 @@ class SamsungFrameRuntimeData:
 
     client: SamsungFrameClient
     coordinator: DataUpdateCoordinator[dict[str, Any]] | None = None
+    timer_unsub: Callable[[], None] | None = None
+    slideshow_running: bool = False
 
 
 type SamsungFrameConfigEntry = ConfigEntry[SamsungFrameRuntimeData]

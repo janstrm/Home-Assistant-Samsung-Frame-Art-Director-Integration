@@ -14,9 +14,11 @@ from custom_components.samsung_frame_art_director import (
 )
 from custom_components.samsung_frame_art_director.const import (
     CONF_SLIDESHOW_SOURCE_TYPE,
-    DATA_CLIENT,
     DOMAIN,
     SLIDESHOW_SOURCE_LIBRARY,
+)
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
 )
 
 
@@ -91,7 +93,7 @@ async def test_slideshow_cleanup_uses_configured_options(hass, dashboard_filter)
         },
     )
     entry.add_to_hass(hass)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: client}
+    entry.runtime_data = SamsungFrameRuntimeData(client=client)
     if dashboard_filter:
         hass.states.async_set("switch.samsung_frame_gallery_favorites_only", "on")
 

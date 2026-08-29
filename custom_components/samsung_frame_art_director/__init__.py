@@ -12,7 +12,6 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components import persistent_notification
 
 from .const import (
-    DATA_CLIENT,
     DOMAIN,
     CONF_SLIDESHOW_INTERVAL,
     CONF_SLIDESHOW_SOURCE_PATH,
@@ -362,23 +361,12 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
     async def _svc_set_artmode(call: ServiceCall) -> None:
         enabled = bool(call.data.get("enabled"))
         _LOGGER.debug("Action set_artmode called: enabled=%s, data=%s", enabled, dict(call.data))
-        found = False
-        async for client in _resolve_clients(call):
-            found = True
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            opts = target.entry.options
             _LOGGER.debug("set_artmode: invoking client on host=%s", getattr(client, "host", "?"))
             try:
-                # Options: WoL before ON, POWER key after OFF failure
-                entry_id = None
-                # Find the corresponding entry id for this client
-                for cid, stored in hass.data.get(DOMAIN, {}).items():
-                    if stored.get(DATA_CLIENT) is client:
-                        entry_id = cid
-                        break
-                opts = None
-                if entry_id:
-                    entry_obj = hass.config_entries.async_get_entry(entry_id)
-                    if entry_obj:
-                        opts = entry_obj.options or {}
                 if enabled and opts and opts.get("use_wol_before_on"):
                     mac = opts.get("mac_address")
                     if mac:
@@ -425,8 +413,6 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                             _LOGGER.debug("OFF fallback: POWER key path unavailable")
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("set_artmode error on host=%s: %r", getattr(client, "host", "?"), err)
-        if not found:
-            _LOGGER.debug("set_artmode: no target client resolved; nothing executed")
 
     async def _svc_upload_art(call: ServiceCall) -> dict | None:
         path = call.data.get("path")
@@ -863,11 +849,6 @@ async def async_setup_entry(
 
     entry.runtime_data = SamsungFrameRuntimeData(client=client)
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        DATA_CLIENT: client,
-        **entry.data,
-    }
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     await _reload_slideshow_timer(hass, entry)
@@ -878,16 +859,18 @@ async def async_setup_entry(
     return True
 
 
-async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def async_update_options(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> None:
     """Update options."""
     # Check if we need a full reload (e.g. if non-slideshow options changed)
     # For now, we assume most option changes are slideshow related and can be hot-reloaded.
     # If connection-critical options were in 'options', we would check them here.
     
     # Re-apply runtime client preferences
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if data and (client := data.get(DATA_CLIENT)):
-        client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+    entry.runtime_data.client.set_resize_mode(
+        entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE)
+    )
 
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)
@@ -896,16 +879,16 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # Note: If you add options that require restart (like mac address), handle them here.
 
 
-async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _reload_slideshow_timer(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> None:
     """Start or stop the slideshow timer based on options."""
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if not data:
-        return
+    runtime = entry.runtime_data
 
     # Cancel existing timer if any
-    if "timer_unsub" in data:
-        data["timer_unsub"]()
-        data.pop("timer_unsub")
+    if runtime.timer_unsub:
+        runtime.timer_unsub()
+        runtime.timer_unsub = None
 
     interval = entry.options.get(CONF_SLIDESHOW_INTERVAL) or DEFAULT_SLIDESHOW_INTERVAL
     enabled = entry.options.get(CONF_SLIDESHOW_ENABLED, False)
@@ -918,29 +901,29 @@ async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> No
         async def _tick(now):
             await _run_slideshow_job(hass, entry)
 
-        data["timer_unsub"] = async_track_time_interval(hass, _tick, timedelta(minutes=interval))
+        runtime.timer_unsub = async_track_time_interval(
+            hass, _tick, timedelta(minutes=interval)
+        )
 
 
-async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _run_slideshow_job(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> None:
     """Pick a random image from source_dir and upload it."""
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if not data:
-        return
-    client = data.get(DATA_CLIENT)
-    if not client:
-        return
+    runtime = entry.runtime_data
+    client = runtime.client
 
     # Skip this tick if the previous slideshow upload is still running. Uploading
     # over a slow Frame connection can take longer than an aggressive interval,
     # and without this guard ticks would pile up and overwhelm the TV.
-    if data.get("slideshow_running"):
+    if runtime.slideshow_running:
         _LOGGER.debug("Slideshow skipped: previous rotation still in progress")
         return
-    data["slideshow_running"] = True
+    runtime.slideshow_running = True
     try:
         await _do_slideshow_rotation(hass, entry, client)
     finally:
-        data["slideshow_running"] = False
+        runtime.slideshow_running = False
 
 
 async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client) -> None:
@@ -1028,24 +1011,14 @@ async def async_unload_entry(
     """Unload a config entry."""
     _LOGGER.info("Unloading Samsung Frame Art Director")
     
-    # Cancel timer
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if data and "timer_unsub" in data:
-        data["timer_unsub"]()
-        data.pop("timer_unsub")
+    runtime = entry.runtime_data
+    if runtime.timer_unsub:
+        runtime.timer_unsub()
+        runtime.timer_unsub = None
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        # Disconnect the client owned by this entry. The hass.data lookup is a
-        # temporary compatibility fallback for entries loaded before runtime
-        # ownership was introduced.
-        stored = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-        runtime = getattr(entry, "runtime_data", None)
-        client = runtime.client if runtime else None
-        if client is None and stored:
-            client = stored.get(DATA_CLIENT)
-        if client:
-            await client.async_disconnect()
+        await runtime.client.async_disconnect()
 
     return unload_ok
 
