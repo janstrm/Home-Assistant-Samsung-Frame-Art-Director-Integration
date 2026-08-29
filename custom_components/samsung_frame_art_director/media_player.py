@@ -17,6 +17,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import CONF_DUID, DOMAIN, resolve_matte
 from .runtime import SamsungFrameConfigEntry
+from .media_source import split_media_identifier
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -132,7 +133,9 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         from urllib.parse import unquote
 
-        media_id = unquote(sourced.identifier)
+        _source_entry_id, media_id = split_media_identifier(
+            unquote(sourced.identifier)
+        )
         artwork = await self._client.async_read_local_art(media_id)
         if not artwork:
             raise HomeAssistantError("Artwork is not in the tracked local library")

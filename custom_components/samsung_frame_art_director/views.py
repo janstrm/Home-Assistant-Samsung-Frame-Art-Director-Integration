@@ -6,14 +6,17 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, DATA_CLIENT
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 class SamsungFrameThumbnailView(HomeAssistantView):
     """View to serve artwork thumbnails."""
 
-    url = "/api/samsung_frame_art_director/thumbnail/{content_id:.+}"
+    url = (
+        "/api/samsung_frame_art_director/thumbnail/"
+        "{config_entry_id}/{content_id:.+}"
+    )
     name = "api:samsung_frame_art_director:thumbnail"
     requires_auth = True
 
@@ -21,25 +24,19 @@ class SamsungFrameThumbnailView(HomeAssistantView):
         """Initialize view."""
         self.hass = hass
 
-    async def get(self, request: web.Request, content_id: str) -> web.Response:
+    async def get(
+        self,
+        request: web.Request,
+        config_entry_id: str,
+        content_id: str,
+    ) -> web.Response:
         """Handle GET request for thumbnail."""
-        client = None
-
-        # Find loaded config entry
-        entries = self.hass.config_entries.async_entries(DOMAIN)
-        if not entries:
+        entry = self.hass.config_entries.async_get_entry(config_entry_id)
+        runtime = getattr(entry, "runtime_data", None) if entry else None
+        if entry is None or entry.domain != DOMAIN or runtime is None:
             return web.Response(status=HTTPStatus.NOT_FOUND)
-        
-        # Use the first loaded one
-        entry = entries[0]
-        data = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if data:
-            client = data.get(DATA_CLIENT)
-            
-        if not client:
-             return web.Response(status=HTTPStatus.NOT_FOUND)
 
-        thumbnail = await client.async_get_thumbnail(content_id)
+        thumbnail = await runtime.client.async_get_thumbnail(content_id)
 
         if not thumbnail:
             return web.Response(status=HTTPStatus.NOT_FOUND)

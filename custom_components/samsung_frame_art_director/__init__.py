@@ -345,7 +345,9 @@ def _register_domain_websocket(hass: HomeAssistant) -> None:
         from .media_source import signed_thumbnail_url
 
         for item in data.get("items", []):
-            item["thumbnail"] = signed_thumbnail_url(hass, item["id"])
+            item["thumbnail"] = signed_thumbnail_url(
+                hass, target.entry.entry_id, item["id"]
+            )
         connection.send_result(msg["id"], data)
 
     websocket_api.async_register_command(hass, websocket_get_library)

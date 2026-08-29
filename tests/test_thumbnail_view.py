@@ -8,7 +8,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
-from custom_components.samsung_frame_art_director.const import DATA_CLIENT, DOMAIN
+from custom_components.samsung_frame_art_director.const import DOMAIN
 from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
     signed_thumbnail_url,
@@ -67,7 +67,8 @@ async def test_thumbnail_requires_home_assistant_authentication(
     client = await hass_client_no_auth()
 
     response = await client.get(
-        "/api/samsung_frame_art_director/thumbnail/untrusted-identifier"
+        "/api/samsung_frame_art_director/thumbnail/untrusted-entry/"
+        "untrusted-identifier"
     )
 
     assert response.status == 401
@@ -108,9 +109,7 @@ async def test_signed_thumbnail_uses_an_opaque_library_identifier(
 
     entry = MockConfigEntry(domain=DOMAIN, data={"host": "frame.local"})
     entry.add_to_hass(hass)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        DATA_CLIENT: frame_client,
-    }
+    entry.runtime_data = SamsungFrameRuntimeData(client=frame_client)
 
     source = ArtLibraryMediaSource(hass)
     library = await source.async_browse_media(type("Item", (), {"identifier": None})())
@@ -149,11 +148,13 @@ async def test_signed_unknown_and_path_like_identifiers_return_not_found(
     frame_client.set_db_path(str(tmp_path / "frame-art.db"))
     entry = MockConfigEntry(domain=DOMAIN, data={"host": "frame.local"})
     entry.add_to_hass(hass)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: frame_client}
+    entry.runtime_data = SamsungFrameRuntimeData(client=frame_client)
     hass.http.register_view(SamsungFrameThumbnailView(hass))
     client = await hass_client_no_auth()
 
-    response = await client.get(signed_thumbnail_url(hass, identifier))
+    response = await client.get(
+        signed_thumbnail_url(hass, entry.entry_id, identifier)
+    )
 
     assert response.status == 404
 
@@ -179,9 +180,7 @@ async def test_library_hides_a_tracked_symlink_that_escapes_allowed_roots(
     )
     entry = MockConfigEntry(domain=DOMAIN, data={"host": "frame.local"})
     entry.add_to_hass(hass)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        DATA_CLIENT: frame_client,
-    }
+    entry.runtime_data = SamsungFrameRuntimeData(client=frame_client)
 
     library = await ArtLibraryMediaSource(hass).async_browse_media(
         type("Item", (), {"identifier": None})()

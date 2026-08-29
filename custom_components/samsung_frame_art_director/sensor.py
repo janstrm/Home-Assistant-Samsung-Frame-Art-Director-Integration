@@ -99,7 +99,9 @@ async def async_setup_entry(
                 "category": item.get("category", "Gallery"),
                 "tags": item.get("tags"),
                 "name": item.get("name"),
-                "thumbnail": signed_thumbnail_url(hass, item["id"]),
+                "thumbnail": signed_thumbnail_url(
+                    hass, entry.entry_id, item["id"]
+                ),
             })
 
         # 4. Extract Top Tags from Favorites for Quick Selection
