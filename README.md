@@ -277,7 +277,12 @@ Cleanup is fail-safe: only artworks with integration upload provenance
 items are protected even if the legacy `only_integration_managed` option is
 set to `false` in an older automation, or provenance data cannot be read. The
 legacy option is still accepted for compatibility but is no longer shown in
-new service and options forms.
+new service and options forms. `max_items` counts only deletion-eligible uploads
+managed by this integration, not protected TV art. With `preserve_current`
+enabled, an unknown current artwork aborts cleanup without deleting anything;
+`dry_run` performs the same safety checks and reports that plan without applying
+it. The saved cleanup policy is also used after uploads and slideshows and by a
+manual cleanup action unless the action explicitly overrides a value.
 
 ### Diagnostics
 
