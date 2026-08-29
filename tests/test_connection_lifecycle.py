@@ -33,13 +33,28 @@ def _fake_module(tv_type):
     return SimpleNamespace(SamsungTVWS=tv_type)
 
 
-async def test_domain_setup_registers_thumbnail_view(hass):
-    """The domain owns the shared thumbnail HTTP interface."""
+async def test_domain_setup_registers_shared_interfaces(hass):
+    """The domain owns shared HTTP and action interfaces."""
     hass.http = MagicMock()
 
     assert await async_setup(hass, {})
 
     hass.http.register_view.assert_called_once()
+    for action in (
+        "set_artmode",
+        "upload_art",
+        "art_diagnostics",
+        "rotate_art_now",
+        "cleanup_storage",
+        "process_inbox",
+        "sync_library",
+        "purge_database",
+        "toggle_favorite",
+        "delete_art",
+        "rotate_favorites",
+        "change_gallery_page",
+    ):
+        assert hass.services.has_service(DOMAIN, action), action
 
 
 async def test_startup_reuses_saved_token_without_token_file_pairing(
