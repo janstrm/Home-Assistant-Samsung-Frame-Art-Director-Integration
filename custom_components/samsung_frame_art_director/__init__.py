@@ -1037,7 +1037,10 @@ async def async_unload_entry(
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        await runtime.client.async_disconnect()
+        try:
+            await runtime.client.async_disconnect()
+        finally:
+            entry.runtime_data = None
 
     return unload_ok
 
