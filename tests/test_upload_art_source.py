@@ -1,4 +1,5 @@
 """Tests for upload_art image sourcing: http(s) URL vs local path."""
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, mock_open, patch
 
@@ -251,9 +252,15 @@ async def test_upload_art_follows_a_trusted_relative_redirect(hass, upload_servi
         ]
     )
 
-    with patch(
-        "homeassistant.helpers.aiohttp_client.async_get_clientsession",
-        return_value=session,
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        patch(
+            "custom_components.samsung_frame_art_director.asyncio.timeout",
+            wraps=asyncio.timeout,
+        ) as total_timeout,
     ):
         await hass.services.async_call(
             DOMAIN,
@@ -267,6 +274,7 @@ async def test_upload_art_follows_a_trusted_relative_redirect(hass, upload_servi
         "https://render.local/final.jpg",
     ]
     assert session.allow_redirects is False
+    total_timeout.assert_called_once_with(30)
     upload_service.async_upload_image.assert_awaited_once_with(
         b"JPEGDATA",
         matte="none",

@@ -9,7 +9,6 @@ from PIL import Image
 
 from custom_components.samsung_frame_art_director.ai import (
     AI_REQUEST_ERROR,
-    OpenAIAnalyzer,
     create_analyzer,
 )
 from custom_components.samsung_frame_art_director.curator import ContentCurator
@@ -32,19 +31,27 @@ class _FakeGeminiResponse:
         }
 
 
+class _FakeOpenAIResponse(_FakeGeminiResponse):
+    async def json(self):
+        return {"choices": [{"message": {"content": "calm, blue, abstract"}}]}
+
+
 class _FakeSession:
-    def __init__(self):
+    def __init__(self, response=None):
+        self.response = response or _FakeGeminiResponse()
         self.url = None
         self.json = None
         self.headers = None
         self.timeout = None
+        self.allow_redirects = None
 
-    def post(self, url, *, json, headers, timeout):
+    def post(self, url, *, json, headers, timeout, allow_redirects):
         self.url = url
         self.json = json
         self.headers = headers
         self.timeout = timeout
-        return _FakeGeminiResponse()
+        self.allow_redirects = allow_redirects
+        return self.response
 
 
 def _png_bytes() -> bytes:
@@ -60,19 +67,24 @@ async def test_gemini_uses_injected_session_without_persisting_key():
 
     analyzer, error = create_analyzer(
         "gemini",
-        gemini_api_key=secret,
         session=session,
     )
     assert error is None
 
-    result = await analyzer.analyze_image(_png_bytes(), prompt="Describe this image")
+    result = await analyzer.analyze_image(
+        _png_bytes(),
+        prompt="Describe this image",
+        api_key=secret,
+    )
 
     assert result["tags"] == ["calm", "blue", "abstract"]
     assert session.url.endswith(":generateContent")
     assert secret not in session.url
     assert session.headers == {"x-goog-api-key": secret}
+    assert session.allow_redirects is False
     assert session.json["contents"][0]["parts"][1]["inline_data"]["mime_type"] == "image/png"
     assert secret not in repr(analyzer.__dict__)
+    assert not any(callable(value) for value in analyzer.__dict__.values())
 
 
 async def test_process_inbox_uses_home_assistant_shared_session(hass):
@@ -114,12 +126,15 @@ async def test_gemini_provider_failure_does_not_expose_key(caplog):
 
     analyzer, error = create_analyzer(
         "gemini",
-        gemini_api_key=secret,
         session=_FailingSession(),
     )
     assert error is None
 
-    result = await analyzer.analyze_image(_png_bytes(), prompt="Describe this image")
+    result = await analyzer.analyze_image(
+        _png_bytes(),
+        prompt="Describe this image",
+        api_key=secret,
+    )
 
     assert result["error"] == AI_REQUEST_ERROR
     assert secret not in str(result)
@@ -127,22 +142,26 @@ async def test_gemini_provider_failure_does_not_expose_key(caplog):
 
 
 async def test_openai_uses_detected_png_mime_type():
-    """The OpenAI data URI describes the actual image format."""
-    completion = AsyncMock(
-        return_value=SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="calm, blue, abstract")
-                )
-            ]
-        )
+    """OpenAI uses HA HTTP and describes the actual image format."""
+    session = _FakeSession(_FakeOpenAIResponse())
+    secret = "super-secret-openai-key"
+    analyzer, error = create_analyzer(
+        "openai",
+        session=session,
     )
-    analyzer = OpenAIAnalyzer(completion)
+    assert error is None
 
-    result = await analyzer.analyze_image(_png_bytes(), prompt="Describe this image")
+    result = await analyzer.analyze_image(
+        _png_bytes(),
+        prompt="Describe this image",
+        api_key=secret,
+    )
 
     assert result["tags"] == ["calm", "blue", "abstract"]
-    data_uri = completion.await_args.kwargs["messages"][0]["content"][1][
-        "image_url"
-    ]["url"]
+    assert session.url == "https://api.openai.com/v1/chat/completions"
+    assert session.headers == {"Authorization": f"Bearer {secret}"}
+    assert session.allow_redirects is False
+    data_uri = session.json["messages"][0]["content"][1]["image_url"]["url"]
     assert data_uri.startswith("data:image/png;base64,")
+    assert secret not in repr(analyzer.__dict__)
+    assert not any(callable(value) for value in analyzer.__dict__.values())
