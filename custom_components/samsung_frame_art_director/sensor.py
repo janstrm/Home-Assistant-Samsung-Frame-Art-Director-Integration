@@ -15,6 +15,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_DUID, DOMAIN
 from .media_source import signed_thumbnail_url
 from .runtime import SamsungFrameConfigEntry
+from .targets import entry_entity_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,13 +37,26 @@ async def async_setup_entry(
         all_items = data.get("items", [])
         
         # 1. Get Filters from HA States
-        filter_state = hass.states.get("text.samsung_frame_slideshow_filter")
+        filter_entity_id = entry_entity_id(
+            hass, entry, "text", "slideshow_filter"
+        )
+        filter_state = (
+            hass.states.get(filter_entity_id) if filter_entity_id else None
+        )
         search_query = filter_state.state.lower() if filter_state and filter_state.state not in ("unknown", "unavailable", "None") else ""
         
-        fav_switch = hass.states.get("switch.samsung_frame_gallery_favorites_only")
+        favorites_entity_id = entry_entity_id(
+            hass, entry, "switch", "favorites_filter"
+        )
+        fav_switch = (
+            hass.states.get(favorites_entity_id) if favorites_entity_id else None
+        )
         fav_only = fav_switch and fav_switch.state == "on"
         
-        page_entity = hass.states.get("number.samsung_frame_gallery_page")
+        page_entity_id = entry_entity_id(hass, entry, "number", "gallery_page")
+        page_entity = (
+            hass.states.get(page_entity_id) if page_entity_id else None
+        )
         try:
             current_page = int(float(page_entity.state)) if page_entity else 1
         except (ValueError, TypeError):
