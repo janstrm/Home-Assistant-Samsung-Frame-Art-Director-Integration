@@ -35,12 +35,13 @@ from .const import (
     MATTE_STYLE_NONE,
     resolve_matte,
 )
-from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+from .const import DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
 from .file_access import (
     UnsafeLocalPathError,
     is_local_media_identifier,
     resolve_upload_source,
 )
+from .database import async_prepare_entry_database
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
 from .targets import (
     async_resolve_action_targets,
@@ -837,12 +838,9 @@ async def async_setup_entry(
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
-        import os as _os
-        db_dir = hass.config.path(DB_DIR)
-        _os.makedirs(db_dir, exist_ok=True)
-        db_stem, db_extension = _os.path.splitext(DB_FILE)
-        entry_db_file = f"{db_stem}_{entry.entry_id}{db_extension}"
-        client.set_db_path(hass.config.path(f"{DB_DIR}/{entry_db_file}"))
+        client.set_db_path(
+            await async_prepare_entry_database(hass, entry.entry_id)
+        )
         await client.async_initialize_database()
     except Exception as err:  # noqa: BLE001
         raise ConfigEntryNotReady(
