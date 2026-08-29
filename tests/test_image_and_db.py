@@ -725,6 +725,30 @@ async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
     assert deleted_ids == ["MY-INTEGRATION"]
 
 
+async def test_cleanup_max_items_counts_only_managed_tv_art(hass, tmp_path):
+    """Manual TV art must not force managed art below its configured limit."""
+    deleted_ids = []
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    for content_id in ("MY-MANAGED-1", "MY-MANAGED-2"):
+        await client.async_track_art(
+            content_id,
+            source_file=f"/media/frame/library/{content_id}.jpg",
+        )
+
+    available_ids = ["MY-MANUAL-1", "MY-MANUAL-2", "MY-MANAGED-1", "MY-MANAGED-2"]
+    fake_samsungtvws = _cleanup_samsungtvws(available_ids, deleted_ids)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=2,
+            preserve_current=False,
+        )
+
+    assert summary["to_delete"] == []
+    assert summary["deleted"] == []
+    assert deleted_ids == []
+
+
 async def test_cleanup_without_provenance_db_deletes_nothing(hass):
     """Cleanup fails closed when no provenance database is configured."""
     deleted_ids = []
