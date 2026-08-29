@@ -730,6 +730,60 @@ async def test_concurrent_uploads_create_only_one_tv_copy(hass, tmp_path):
     assert upload_calls == 1
 
 
+async def test_upload_reuses_content_for_equivalent_source_paths(hass, tmp_path):
+    """Harmless path aliases identify one tracked upload."""
+    upload_calls = 0
+    uploaded_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            return [{"content_id": content_id} for content_id in uploaded_ids]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            content_id = f"MY-NEW-{upload_calls}"
+            uploaded_ids.append(content_id)
+            return content_id
+
+        def select_image(self, _content_id, *, show=True, **_kwargs):
+            assert show is True
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    aliases = (
+        "/media/frame/library/paintings/../sunrise.jpg",
+        "/media/frame/library/sunrise.jpg",
+    )
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        results = [
+            await client.async_upload_image(_jpeg(100, 100), source_file=source)
+            for source in aliases
+        ]
+
+    assert results == ["MY-NEW-1", "MY-NEW-1"]
+    assert upload_calls == 1
+
+
 async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
     """Automatic cleanup only deletes art with integration provenance."""
     deleted_ids = []
