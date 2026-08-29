@@ -138,6 +138,29 @@ async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_ser
     upload_service.async_track_art.assert_not_awaited()
 
 
+async def test_upload_art_rejects_an_untrusted_remote_host(hass, upload_service):
+    """The public service must not contact a URL outside HA's allowlist."""
+    resp = _FakeResponse(b"JPEGDATA")
+    session = _FakeSession(resp)
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=session,
+        ),
+        pytest.raises(ServiceValidationError, match="allowlist_external_urls"),
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "https://untrusted.example/image.jpg"},
+            blocking=True,
+        )
+
+    assert session.requested_url is None
+    upload_service.async_upload_image.assert_not_awaited()
+
+
 async def test_upload_art_rejects_declared_oversized_download(hass, upload_service):
     """The public service rejects a remote image larger than 20 MiB."""
     resp = _FakeResponse(b"", content_length=20 * 1024 * 1024 + 1)
