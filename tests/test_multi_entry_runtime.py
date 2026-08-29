@@ -1,0 +1,103 @@
+"""Regression tests for independent Samsung Frame config entries."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.samsung_frame_art_director import async_setup_entry
+from custom_components.samsung_frame_art_director.const import DOMAIN
+
+
+def _client(host: str) -> MagicMock:
+    client = MagicMock()
+    client.host = host
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock()
+    client.async_connect_and_pair = AsyncMock()
+    client.async_read_local_art = AsyncMock(
+        return_value={
+            "data": b"TRACKEDIMAGE",
+            "path": "/media/frame/library/tracked.png",
+            "content_type": "image/png",
+        }
+    )
+    client.async_upload_image = AsyncMock(return_value=f"MY-{host}")
+    client.async_cleanup_storage = AsyncMock()
+    return client
+
+
+async def test_targeted_upload_uses_only_the_selected_frames_options(hass):
+    """A targeted upload cannot leak calls or options between two Frames."""
+    hass.http = MagicMock()
+    first_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame-a.local", "token": "SAVED"},
+        options={
+            "matte_style": "shadowbox",
+            "matte_color": "polar",
+            "cleanup_max_items": 11,
+        },
+        unique_id="frame-a",
+    )
+    second_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame-b.local", "token": "SAVED"},
+        options={
+            "matte_style": "none",
+            "cleanup_max_items": 22,
+        },
+        unique_id="frame-b",
+    )
+    first_entry.add_to_hass(hass)
+    second_entry.add_to_hass(hass)
+    first_client = _client("frame-a.local")
+    second_client = _client("frame-b.local")
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            side_effect=[first_client, second_client],
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+    ):
+        assert await async_setup_entry(hass, first_entry)
+        assert await async_setup_entry(hass, second_entry)
+
+    entity = er.async_get(hass).async_get_or_create(
+        "media_player",
+        DOMAIN,
+        "frame-a",
+        config_entry=first_entry,
+        suggested_object_id="frame_a",
+    )
+    media_id = f"local-{'a' * 64}"
+
+    await hass.services.async_call(
+        DOMAIN,
+        "upload_art",
+        {"entity_id": entity.entity_id, "path": media_id},
+        blocking=True,
+    )
+
+    first_client.async_upload_image.assert_awaited_once_with(
+        b"TRACKEDIMAGE",
+        matte="shadowbox_polar",
+        source_file="/media/frame/library/tracked.png",
+        tags=None,
+    )
+    first_client.async_cleanup_storage.assert_awaited_once_with(
+        max_items=11,
+        max_age_days=None,
+        preserve_current=True,
+        only_integration_managed=True,
+        dry_run=False,
+    )
+    second_client.async_read_local_art.assert_not_awaited()
+    second_client.async_upload_image.assert_not_awaited()
+    second_client.async_cleanup_storage.assert_not_awaited()
