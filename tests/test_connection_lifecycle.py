@@ -1,0 +1,297 @@
+"""Regression tests for startup authentication and Art client lifecycle."""
+
+import asyncio
+import sys
+import time
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+from custom_components.samsung_frame_art_director.api import (
+    AuthenticationRejectedError,
+    DeviceUnavailableError,
+    SamsungFrameClient,
+)
+
+
+def _fake_module(tv_type):
+    return SimpleNamespace(SamsungTVWS=tv_type)
+
+
+async def test_startup_reuses_saved_token_without_token_file_pairing(hass):
+    """A normal HA restart validates the existing identity without re-pairing."""
+    constructor_calls = []
+    art_clients = []
+    tv_clients = []
+
+    class FakeArt:
+        token = "SAVED"
+
+        def __init__(self):
+            self.close_calls = 0
+            art_clients.append(self)
+
+        def supported(self):
+            return True
+
+        def close(self):
+            self.close_calls += 1
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **kwargs):
+            constructor_calls.append(kwargs)
+            self.close_calls = 0
+            self._art = FakeArt()
+            tv_clients.append(self)
+
+        def art(self):
+            return self._art
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            self.close_calls += 1
+
+    client = SamsungFrameClient(
+        hass,
+        "frame.local",
+        token="SAVED",
+        token_file_path="must-not-be-used.txt",
+        port=8002,
+    )
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is True
+    assert client.duid == "uuid:frame"
+    assert constructor_calls == [
+        {
+            "port": 8002,
+            "token": "SAVED",
+            "name": "Home Assistant Art Director",
+            "timeout": 10,
+        }
+    ]
+    assert "token_file" not in constructor_calls[0]
+    assert len(art_clients) == len(tv_clients) == 1
+    assert art_clients[0].close_calls == 1
+    assert tv_clients[0].close_calls == 1
+
+
+async def test_offline_tv_is_a_transient_setup_failure(hass):
+    """An unreachable TV must not appear connected or trigger reauthentication."""
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            raise OSError("host unreachable")
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+
+
+async def test_rejected_saved_token_is_an_auth_failure(hass):
+    """Only an explicit unauthorized response should start HA reauthentication."""
+
+    class UnauthorizedError(Exception):
+        pass
+
+    class FakeArt:
+        def supported(self):
+            raise UnauthorizedError("rejected")
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(AuthenticationRejectedError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+
+
+async def test_rest_duid_does_not_replace_authenticated_validation(hass):
+    """Public REST identity data alone is not proof that the token works."""
+
+    class ConnectionFailure(Exception):
+        pass
+
+    class FakeArt:
+        def supported(self):
+            raise ConnectionFailure("art channel failed")
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:public-rest-only"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+    assert client.duid is None
+
+
+async def test_timed_out_port_finishes_before_fallback_starts(hass):
+    """A non-cancellable sync worker is drained before trying another port."""
+    events = []
+
+    class FakeArt:
+        def __init__(self, port):
+            self._port = port
+
+        def supported(self):
+            if self._port == 8002:
+                events.append("first-start")
+                time.sleep(0.05)
+                events.append("first-end")
+            return True
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, port, **_kwargs):
+            self._port = port
+            if port == 8001:
+                events.append("fallback-start")
+            self._art = FakeArt(port)
+
+        def art(self):
+            return self._art
+
+        def rest_device_info(self):
+            return {"device": {"duid": f"uuid:{self._port}"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED")
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        patch(
+            "custom_components.samsung_frame_art_director.api.CONNECTION_ATTEMPT_TIMEOUT_SECONDS",
+            0.01,
+        ),
+    ):
+        await client.async_connect_and_pair()
+
+    assert events == ["first-start", "first-end", "fallback-start"]
+    assert client.duid == "uuid:8001"
+
+
+async def test_timed_out_art_call_holds_serialization_until_worker_finishes(hass):
+    """A timed-out Art worker cannot overlap the next Art operation."""
+    events = []
+    call_count = 0
+
+    class FakeArt:
+        def get_brightness(self):
+            nonlocal call_count
+            call_count += 1
+            current = call_count
+            events.append(f"start-{current}")
+            if current == 1:
+                time.sleep(0.05)
+            events.append(f"end-{current}")
+            return current
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED")
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        patch(
+            "custom_components.samsung_frame_art_director.api.ART_OPERATION_TIMEOUT_SECONDS",
+            0.01,
+        ),
+    ):
+        first = asyncio.create_task(client.async_get_brightness())
+        await asyncio.sleep(0)
+        second = asyncio.create_task(client.async_get_brightness())
+        assert await first is None
+        assert await second == 2
+
+    assert events == ["start-1", "end-1", "start-2", "end-2"]
+
+
+def test_shared_close_helper_closes_each_object_once(hass):
+    """Defensive identity de-duplication prevents double-close side effects."""
+
+    class SameClient:
+        token = "SAVED"
+
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED")
+    shared = SameClient()
+
+    client._close_art_connection(shared, shared)
+
+    assert shared.close_calls == 1
