@@ -866,9 +866,15 @@ async def async_setup_entry(
 
     entry.runtime_data = SamsungFrameRuntimeData(client=client)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    await _reload_slideshow_timer(hass, entry)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await _reload_slideshow_timer(hass, entry)
+    except Exception:
+        try:
+            await client.async_disconnect()
+        finally:
+            entry.runtime_data = None
+        raise
 
     # Register update listener to reload entry when options change
     entry.async_on_unload(entry.add_update_listener(async_update_options))
