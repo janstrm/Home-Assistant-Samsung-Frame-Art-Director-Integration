@@ -179,6 +179,101 @@ async def test_unloading_one_frame_keeps_actions_for_the_remaining_runtime(hass)
     first_client.async_purge_database.assert_not_awaited()
     second_client.async_purge_database.assert_awaited_once_with()
 
+    reloaded_client = _client("frame-a.local")
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=reloaded_client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+    ):
+        assert await async_setup_entry(hass, first_entry)
+
+    first_entity = er.async_get(hass).async_get_or_create(
+        "media_player",
+        DOMAIN,
+        "frame-unload-a",
+        config_entry=first_entry,
+        suggested_object_id="reloaded_frame_a",
+    )
+    second_client.async_purge_database.reset_mock()
+    await hass.services.async_call(
+        DOMAIN,
+        "purge_database",
+        {"entity_id": first_entity.entity_id},
+        blocking=True,
+    )
+    reloaded_client.async_purge_database.assert_awaited_once_with()
+    second_client.async_purge_database.assert_not_awaited()
+
+
+async def test_websocket_library_selects_one_frame_by_config_entry_id(hass):
+    """The shared WebSocket command returns only the explicitly selected DB."""
+    first_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame-a.local"},
+        unique_id="frame-websocket-a",
+    )
+    second_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame-b.local"},
+        unique_id="frame-websocket-b",
+    )
+    first_entry.add_to_hass(hass)
+    second_entry.add_to_hass(hass)
+    first_client = _client("frame-a.local")
+    second_client = _client("frame-b.local")
+    first_client.async_get_library_data = AsyncMock(
+        return_value={"items": [{"id": "MY-SHARED-ID", "name": "A"}]}
+    )
+    second_client.async_get_library_data = AsyncMock(
+        return_value={"items": [{"id": "MY-SHARED-ID", "name": "B"}]}
+    )
+    first_entry.runtime_data = SamsungFrameRuntimeData(client=first_client)
+    second_entry.runtime_data = SamsungFrameRuntimeData(client=second_client)
+    hass.http = MagicMock()
+
+    with (
+        patch(
+            "homeassistant.components.websocket_api.async_register_command"
+        ) as register_command,
+        patch(
+            "custom_components.samsung_frame_art_director.media_source.signed_thumbnail_url",
+            return_value="/second-thumbnail",
+        ),
+    ):
+        assert await async_setup(hass, {})
+        websocket_command = register_command.call_args.args[1]
+        connection = MagicMock()
+        await websocket_command(
+            hass,
+            connection,
+            {
+                "id": 1,
+                "type": f"{DOMAIN}/get_library",
+                "config_entry_id": second_entry.entry_id,
+            },
+        )
+
+    first_client.async_get_library_data.assert_not_awaited()
+    second_client.async_get_library_data.assert_awaited_once_with()
+    connection.send_result.assert_called_once_with(
+        1,
+        {
+            "items": [
+                {
+                    "id": "MY-SHARED-ID",
+                    "name": "B",
+                    "thumbnail": "/second-thumbnail",
+                }
+            ]
+        },
+    )
+
 
 async def test_change_gallery_page_uses_renamed_controls_of_targeted_frame(hass):
     """Gallery paging follows stable entry ownership after entity renames."""
