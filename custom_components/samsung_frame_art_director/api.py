@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import tempfile
 
 from .const import DOMAIN
 from .file_access import (
@@ -34,6 +33,9 @@ except Exception:
 
 _LOGGER = logging.getLogger(__name__)
 
+CONNECTION_ATTEMPT_TIMEOUT_SECONDS = 10
+ART_OPERATION_TIMEOUT_SECONDS = 15
+
 
 def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
     """Resolve an opaque local-art ID through the tracked database records."""
@@ -55,8 +57,16 @@ def _mask_secret(value: Optional[str]) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
-class PairingTimeoutError(Exception):
-    """Raised when pairing handshake did not complete in time."""
+class AuthenticationRejectedError(Exception):
+    """Raised when the TV explicitly rejects the persisted identity."""
+
+
+class DeviceUnavailableError(ConnectionError):
+    """Raised when startup validation cannot reach a usable TV endpoint."""
+
+
+class PairingTimeoutError(AuthenticationRejectedError):
+    """Backward-compatible name for the former setup authentication error."""
 
 
 class SamsungFrameClient:
@@ -111,30 +121,35 @@ class SamsungFrameClient:
         here guarantees a stable identity.
         """
         from samsungtvws import SamsungTVWS  # type: ignore
-        p = port or self._port or 8002
+
+        kwargs = {
+            "port": port or self._port or 8002,
+            "name": self._client_name,
+        }
+        if self._token:
+            kwargs["token"] = self._token
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return SamsungTVWS(self._host, **kwargs)
+
+    @staticmethod
+    async def _async_run_blocking_contained(fn, timeout: float):
+        """Run sync I/O without letting a timed-out worker escape its caller.
+
+        ``asyncio.to_thread`` cannot stop an in-flight socket call. Shielding
+        and draining the worker keeps the surrounding Art lock or port attempt
+        active until that call has actually returned, so the next operation
+        cannot overlap it.
+        """
+        worker = asyncio.create_task(asyncio.to_thread(fn))
         try:
-            timeout_args = {"timeout": timeout} if timeout is not None else {}
-            if self._token:
-                return SamsungTVWS(
-                    self._host,
-                    port=p,
-                    token=self._token,
-                    name=self._client_name,
-                    **timeout_args,
-                )  # type: ignore[arg-type]
-            return SamsungTVWS(
-                self._host,
-                port=p,
-                name=self._client_name,
-                **timeout_args,
-            )
-        except TypeError:
-            # Very old library signature: keep at least the name so the TV
-            # still recognizes a stable identity.
+            return await asyncio.wait_for(asyncio.shield(worker), timeout=timeout)
+        except (TimeoutError, asyncio.CancelledError):
             try:
-                return SamsungTVWS(self._host, name=self._client_name)
-            except TypeError:
-                return SamsungTVWS(self._host)
+                await worker
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
     def _capture_token(self, tv) -> None:
         """Capture a token the TV may have (re)issued on this connection and
@@ -165,9 +180,14 @@ class SamsungFrameClient:
                 pass
         self._capture_token(token_source)
 
+        closed_ids: set[int] = set()
         for client in (art, tv):
             if client is None:
                 continue
+            client_id = id(client)
+            if client_id in closed_ids:
+                continue
+            closed_ids.add(client_id)
             closer = getattr(client, "close", None)
             if callable(closer):
                 try:
@@ -222,6 +242,7 @@ class SamsungFrameClient:
 
         def _call():
             tv = self._make_tv()
+            art = None
             try:
                 art = tv.art()
                 fn = getattr(art, fn_name, None)
@@ -229,17 +250,14 @@ class SamsungFrameClient:
                     return None
                 return fn(*args)
             finally:
-                self._capture_token(tv)
-                closer = getattr(tv, "close", None)
-                if callable(closer):
-                    try:
-                        closer()
-                    except Exception:  # noqa: BLE001
-                        pass
+                self._close_art_connection(tv, art)
 
         async with self._art_lock:
             try:
-                return await asyncio.wait_for(asyncio.to_thread(_call), timeout=15)
+                return await self._async_run_blocking_contained(
+                    _call,
+                    ART_OPERATION_TIMEOUT_SECONDS,
+                )
             except Exception as e:  # noqa: BLE001
                 _LOGGER.debug("art %s failed: %r", fn_name, e)
                 return None
@@ -957,108 +975,74 @@ class SamsungFrameClient:
         return self._duid
 
     async def async_connect_and_pair(self) -> None:
-        """Connect and pair using token_file in a background thread, then persist token."""
-        _LOGGER.debug("Client: connect_and_pair start host=%s token_present=%s", self._host, bool(self._token))
-        # Resolve token file path (under /config/pairing_tokens by caller)
-        token_path: Optional[str] = self._token_file_path
-        if not token_path:
-            temp_dir = tempfile.mkdtemp(prefix="ha_samsungtvws_")
-            token_path = os.path.join(temp_dir, "tv-token.txt")
-        else:
-            try:
-                os.makedirs(os.path.dirname(token_path), exist_ok=True)
-            except Exception:
-                pass
+        """Validate the persisted TV identity without opening a pairing flow."""
+        _LOGGER.debug(
+            "Client: startup validation host=%s token_present=%s",
+            self._host,
+            bool(self._token),
+        )
+        self._connected = False
+        self._duid = None
 
-        def _blocking_pair_and_info(port: int) -> dict:
-            from samsungtvws import SamsungTVWS  # type: ignore
-            tv = SamsungTVWS(self._host, port=port, token_file=token_path, name=self._client_name)
+        if not self._token:
+            raise AuthenticationRejectedError(
+                f"No persisted authentication token for {self._host}"
+            )
+
+        def _validate(port: int) -> dict:
+            tv = None
+            art = None
             try:
-                # Trigger auth and wait for acceptance
-                try:
-                    tv.art().supported()
-                except Exception:
-                    pass
-                try:
-                    return tv.rest_device_info()
-                except Exception:
-                    return {}
+                tv = self._make_tv(
+                    port=port,
+                    timeout=CONNECTION_ATTEMPT_TIMEOUT_SECONDS,
+                )
+                art = tv.art()
+                # This opens the authenticated Art websocket. Public REST
+                # identity data alone is deliberately not sufficient.
+                art.supported()
+                info = tv.rest_device_info()
+                device = info.get("device") if isinstance(info, dict) else None
+                if not isinstance(device, dict) or not device:
+                    raise DeviceUnavailableError(
+                        f"Device information unavailable for {self._host}"
+                    )
+                return info
             finally:
-                try:
-                    close_fn = getattr(tv, "close", None)
-                    if callable(close_fn):
-                        close_fn()
-                except Exception:
-                    pass
+                if tv is not None:
+                    self._close_art_connection(tv, art)
 
-        info: dict = {}
-        try:
-            info = await asyncio.wait_for(asyncio.to_thread(_blocking_pair_and_info, 8002), timeout=120)
-        except Exception:
-            info = {}
-        if not info:
+        ports = [self._port] if self._port is not None else [8002, 8001]
+        last_error: Exception | None = None
+        for port in ports:
             try:
-                info = await asyncio.wait_for(asyncio.to_thread(_blocking_pair_and_info, 8001), timeout=60)
-            except Exception:
-                info = {}
-        if not info:
-            _LOGGER.warning("Client: pairing/info failed or timed out for %s", self._host)
-            self._connected = False
+                info = await self._async_run_blocking_contained(
+                    lambda selected_port=port: _validate(selected_port),
+                    CONNECTION_ATTEMPT_TIMEOUT_SECONDS,
+                )
+            except Exception as err:  # noqa: BLE001
+                if type(err).__name__ == "UnauthorizedError":
+                    raise AuthenticationRejectedError(
+                        f"Stored authentication was rejected by {self._host}"
+                    ) from err
+                last_error = err
+                continue
+
+            device = info["device"]
+            self._duid = device.get("duid") or device.get("udn")
+            self._port = port
+            self._connected = True
+            _LOGGER.info(
+                "Client: authenticated host=%s port=%s duid=%s",
+                self._host,
+                port,
+                self._duid,
+            )
             return
 
-        self._connected = True
-        self._duid = info.get("device", {}).get("duid")
-        _LOGGER.debug("Client: device info fetched host=%s has_info=%s", self._host, bool(info))
-
-        token_value: Optional[str] = None
-        if token_path and os.path.exists(token_path):
-            try:
-                token_value = (await asyncio.to_thread(lambda p=token_path: open(p, "r", encoding="utf-8").read())).strip() or None
-            except Exception:
-                token_value = None
-
-        if token_value:
-            self._token = token_value
-            _LOGGER.info("Client: token captured host=%s token=%s", self._host, _mask_secret(self._token))
-
-        duid = None
-        try:
-            duid = info.get("device", {}).get("duid") if isinstance(info, dict) else None
-        except Exception:
-            duid = None
-        if not duid and self._token:
-            def _get_info_with_token() -> dict:
-                from samsungtvws import SamsungTVWS  # type: ignore
-                tv2 = SamsungTVWS(self._host, token=self._token, name=self._client_name)  # type: ignore[arg-type]
-                try:
-                    return tv2.rest_device_info()
-                finally:
-                    try:
-                        close_fn = getattr(tv2, "close", None)
-                        if callable(close_fn):
-                            close_fn()
-                    except Exception:
-                        pass
-
-            try:
-                info2 = await asyncio.wait_for(asyncio.to_thread(_get_info_with_token), timeout=10)
-                duid = info2.get("device", {}).get("duid") if isinstance(info2, dict) else None
-            except Exception:
-                duid = None
-
-        self._duid = duid
-        self._connected = True
-
-        # Cleanup: delete token file now that token is captured
-        try:
-            if token_path and os.path.exists(token_path):
-                os.remove(token_path)
-        except Exception:
-            pass
-
-        if not self._duid and not self._token:
-            raise PairingTimeoutError(f"Pairing timed out for {self._host}")
-        _LOGGER.info("Client: paired host=%s duid=%s", self._host, self._duid)
+        raise DeviceUnavailableError(
+            f"Unable to validate saved authentication for {self._host}"
+        ) from last_error
 
     async def async_disconnect(self) -> None:
         if self._connected:
