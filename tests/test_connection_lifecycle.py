@@ -8,7 +8,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    ServiceValidationError,
+)
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import (
@@ -605,6 +609,52 @@ async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
         assert await async_unload_entry(hass, entry)
 
     client.async_disconnect.assert_awaited_once_with()
+
+
+async def test_action_rejects_an_unknown_target(hass):
+    """An action never reports success for an unresolved Frame entity."""
+    hass.http = MagicMock()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock()
+    client.async_connect_and_pair = AsyncMock()
+    client.async_set_artmode = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+    ):
+        assert await async_setup_entry(hass, entry)
+
+    with pytest.raises(
+        ServiceValidationError,
+        match="not a loaded Samsung Frame Art Director entity",
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_artmode",
+            {
+                "enabled": True,
+                "entity_id": "media_player.unknown_frame",
+            },
+            blocking=True,
+        )
+
+    client.async_set_artmode.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
