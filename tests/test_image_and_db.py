@@ -22,12 +22,17 @@ def _jpeg(width: int, height: int) -> bytes:
     return buf.getvalue()
 
 
-def _cleanup_samsungtvws(available_ids, deleted_ids):
+def _cleanup_samsungtvws(available_ids, deleted_ids, current_ids=()):
     """Return a fake TV boundary that records cleanup deletions."""
+
+    current_ids = iter(current_ids)
 
     class FakeArt:
         def get_current(self):
-            return None
+            content_id = next(current_ids, None)
+            if content_id is None:
+                return None
+            return {"content_id": content_id}
 
         def available(self):
             return [{"content_id": content_id} for content_id in available_ids]
@@ -88,6 +93,55 @@ async def test_tracking_art_migrates_legacy_dimension_columns(hass, tmp_path):
     with sqlite3.connect(db_path) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(art_library)")}
     assert {"width", "height"} <= columns
+
+
+async def test_database_migration_preserves_and_canonicalizes_legacy_sources(
+    hass, tmp_path
+):
+    """Legacy provenance remains usable after an in-place schema upgrade."""
+    db_path = tmp_path / "legacy-source-art.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE art_library (
+                content_id TEXT PRIMARY KEY,
+                date_added TIMESTAMP,
+                last_seen TIMESTAMP,
+                source TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO art_library (content_id, date_added, last_seen, source)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                "MY-LEGACY",
+                "2025-01-01T10:00:00",
+                "2025-02-02T11:00:00",
+                "HTTPS://Render.Local:443/gallery/../sunrise.jpg#preview",
+            ),
+        )
+
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(db_path))
+    await client.async_initialize_database()
+
+    with sqlite3.connect(db_path) as conn:
+        migrated = conn.execute(
+            """
+            SELECT created_at, last_displayed_at, source_file
+            FROM art_library WHERE content_id = ?
+            """,
+            ("MY-LEGACY",),
+        ).fetchone()
+
+    assert migrated == (
+        "2025-01-01T10:00:00",
+        "2025-02-02T11:00:00",
+        "https://render.local/sunrise.jpg",
+    )
 
 
 async def test_preprocess_fit_outputs_target_size(hass):
@@ -949,6 +1003,71 @@ async def test_cleanup_preserving_unknown_current_art_fails_closed(
     assert summary["errors"] == [
         "Current artwork could not be determined; deletion aborted"
     ]
+    assert deleted_ids == []
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_cleanup_aborts_when_current_art_becomes_unknown_before_deletion(
+    hass, tmp_path, dry_run
+):
+    """A partial second TV response must not bypass current-art protection."""
+    deleted_ids = []
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art(
+        "MY-MANAGED",
+        source_file="/media/frame/library/managed.jpg",
+    )
+
+    fake_samsungtvws = _cleanup_samsungtvws(
+        ["MY-MANAGED"],
+        deleted_ids,
+        current_ids=["MY-OTHER", None],
+    )
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            preserve_current=True,
+            dry_run=dry_run,
+        )
+
+    assert summary["to_delete"] == []
+    assert summary["deleted"] == []
+    assert summary["errors"] == [
+        "Current artwork could not be revalidated; deletion aborted"
+    ]
+    assert deleted_ids == []
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_cleanup_revalidates_changed_current_art_in_both_modes(
+    hass, tmp_path, dry_run
+):
+    """Dry-run and destructive planning protect the same latest current art."""
+    deleted_ids = []
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art(
+        "MY-MANAGED",
+        source_file="/media/frame/library/managed.jpg",
+    )
+
+    fake_samsungtvws = _cleanup_samsungtvws(
+        ["MY-MANAGED"],
+        deleted_ids,
+        current_ids=["MY-OTHER", "MY-MANAGED"],
+    )
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            preserve_current=True,
+            dry_run=dry_run,
+        )
+
+    assert summary["to_delete"] == []
+    assert summary["deleted"] == []
+    assert summary["errors"] == []
+    assert summary["skipped_current"] == ["MY-OTHER", "MY-MANAGED"]
     assert deleted_ids == []
 
 
