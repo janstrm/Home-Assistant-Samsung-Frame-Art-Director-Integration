@@ -131,6 +131,47 @@ async def test_process_inbox_uses_home_assistant_shared_session(hass):
     api.async_add_local_art.assert_awaited_once()
 
 
+async def test_process_inbox_binds_provider_and_key_once(hass):
+    """An options reload cannot send one provider's key to another provider."""
+    inbox = Path(hass.config.path("www", "bound-key-inbox"))
+    library = Path(hass.config.path("www", "bound-key-library"))
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "art.png").write_bytes(_png_bytes())
+    entry = SimpleNamespace(
+        options={
+            "inbox_dir": str(inbox),
+            "library_dir": str(library),
+            "ai_provider": "gemini",
+            "gemini_api_key": "gemini-key",
+            "openai_api_key": "openai-key",
+        }
+    )
+    api = SimpleNamespace(async_add_local_art=AsyncMock())
+    curator = ContentCurator(hass, entry, api)
+    analyzer = SimpleNamespace(
+        analyze_image=AsyncMock(return_value={"tags": ["safe"]})
+    )
+
+    def _create_and_reload_options(*args, **kwargs):
+        entry.options["ai_provider"] = "openai"
+        return analyzer, None
+
+    with (
+        patch(
+            "homeassistant.helpers.aiohttp_client.async_get_clientsession",
+            return_value=object(),
+        ),
+        patch(
+            "custom_components.samsung_frame_art_director.curator.create_analyzer",
+            side_effect=_create_and_reload_options,
+        ),
+    ):
+        result = await curator.async_process_inbox()
+
+    assert result["count"] == 1
+    assert analyzer.analyze_image.await_args.kwargs["api_key"] == "gemini-key"
+
+
 async def test_gemini_provider_failure_does_not_expose_key(caplog):
     """Untrusted provider exception text is neither returned nor logged."""
     secret = "never-log-this-key"
