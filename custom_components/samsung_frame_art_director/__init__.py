@@ -699,18 +699,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             client = stored.get(DATA_CLIENT)
             curator = ContentCurator(hass, entry, client)
             result = await curator.async_sync_library()
-            
+
             if result.get("error"):
                 persistent_notification.async_create(
                     hass,
                     f"Library Sync Failed: {result['error']}",
-                    title="Art Director"
+                    title="Art Director",
                 )
             else:
+                duplicates = result["duplicates_removed"]
                 persistent_notification.async_create(
                     hass,
-                    f"Synced {result['count']} untracked images to the database.",
-                    title="Art Director"
+                    f"Library sync complete: {result['added']} added, "
+                    f"{result['stale_removed']} stale removed, "
+                    f"{duplicates} "
+                    f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
+                    title="Art Director",
                 )
             return
 
