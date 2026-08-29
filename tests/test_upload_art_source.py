@@ -1,4 +1,5 @@
 """Tests for upload_art image sourcing: http(s) URL vs local path."""
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call, mock_open, patch
 
 import pytest
@@ -83,6 +84,8 @@ async def upload_service(hass):
     client.async_upload_image = AsyncMock()
     client.async_track_art = AsyncMock()
     client.async_cleanup_storage = AsyncMock()
+    client.async_delete_art = AsyncMock()
+    client.async_read_local_art = AsyncMock()
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -205,7 +208,10 @@ async def test_upload_art_rejects_url_without_filename(hass, upload_service):
 
 async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
     """A bare filename still resolves through the existing local file path."""
-    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+    with (
+        patch("pathlib.Path.is_file", return_value=True),
+        patch("pathlib.Path.open", mock_open(read_data=b"LOCALIMAGE")),
+    ):
         await hass.services.async_call(
             DOMAIN,
             "upload_art",
@@ -222,11 +228,92 @@ async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
     upload_service.async_track_art.assert_not_awaited()
 
 
+async def test_upload_art_accepts_a_tracked_opaque_library_id(hass, upload_service):
+    """The gallery can upload a tracked item without exposing its filesystem path."""
+    media_id = f"local-{'a' * 64}"
+    upload_service.async_read_local_art.return_value = {
+        "data": b"TRACKEDIMAGE",
+        "path": "/media/frame/library/tracked.png",
+        "content_type": "image/png",
+    }
+
+    await hass.services.async_call(
+        DOMAIN,
+        "upload_art",
+        {"path": media_id},
+        blocking=True,
+    )
+
+    upload_service.async_read_local_art.assert_awaited_once_with(media_id)
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"TRACKEDIMAGE",
+        matte="none",
+        source_file="/media/frame/library/tracked.png",
+        tags=None,
+    )
+
+
+async def test_upload_art_reads_a_file_through_the_config_alias(
+    hass,
+    upload_service,
+):
+    """The documented /config path remains compatible after canonicalization."""
+    image_path = Path(hass.config.path("www", "frame-test.png"))
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"CONFIGIMAGE")
+
+    await hass.services.async_call(
+        DOMAIN,
+        "upload_art",
+        {"path": "/config/www/frame-test.png"},
+        blocking=True,
+    )
+
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"CONFIGIMAGE",
+        matte="none",
+        source_file="/config/www/frame-test.png",
+        tags=None,
+    )
+
+
+async def test_upload_art_rejects_config_traversal(hass, upload_service):
+    """A /config alias cannot escape into a similarly named sibling directory."""
+    with pytest.raises(ServiceValidationError, match="outside the allowed"):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": "/config/../config-secret/credentials.png"},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
+
+
+async def test_upload_art_rejects_absolute_prefix_collision(hass, upload_service):
+    """A directory whose name merely starts with the config root is not trusted."""
+    config_root = Path(hass.config.path())
+    outside = config_root.with_name(f"{config_root.name}-secret") / "art.png"
+
+    with pytest.raises(ServiceValidationError, match="outside the allowed"):
+        await hass.services.async_call(
+            DOMAIN,
+            "upload_art",
+            {"path": str(outside)},
+            blocking=True,
+        )
+
+    upload_service.async_upload_image.assert_not_awaited()
+
+
 async def test_upload_art_returns_real_tv_content_id(hass, upload_service):
     """Callers can request the exact content ID as a service response."""
     upload_service.async_upload_image.return_value = "MY-CONTENT-123"
 
-    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+    with (
+        patch("pathlib.Path.is_file", return_value=True),
+        patch("pathlib.Path.open", mock_open(read_data=b"LOCALIMAGE")),
+    ):
         response = await hass.services.async_call(
             DOMAIN,
             "upload_art",
@@ -245,7 +332,10 @@ async def test_upload_art_tracks_tags_on_the_real_content_id(hass, upload_servic
     """Tracking inputs travel with the upload instead of a basename upsert."""
     upload_service.async_upload_image.return_value = "MY-CONTENT-123"
 
-    with patch("builtins.open", mock_open(read_data=b"LOCALIMAGE")):
+    with (
+        patch("pathlib.Path.is_file", return_value=True),
+        patch("pathlib.Path.open", mock_open(read_data=b"LOCALIMAGE")),
+    ):
         await hass.services.async_call(
             DOMAIN,
             "upload_art",
@@ -260,6 +350,19 @@ async def test_upload_art_tracks_tags_on_the_real_content_id(hass, upload_servic
         tags="morning",
     )
     upload_service.async_track_art.assert_not_awaited()
+
+
+async def test_delete_art_reports_a_rejected_identifier(hass, upload_service):
+    """The public action clearly rejects an untracked or path-like identifier."""
+    upload_service.async_delete_art.return_value = False
+
+    with pytest.raises(ServiceValidationError, match="tracked local artwork"):
+        await hass.services.async_call(
+            DOMAIN,
+            "delete_art",
+            {"content_id": "/config/configuration.yaml"},
+            blocking=True,
+        )
 
 
 async def test_power_key_wake_requires_explicit_off_status(hass, upload_service):

@@ -15,7 +15,7 @@ class SamsungFrameThumbnailView(HomeAssistantView):
 
     url = "/api/samsung_frame_art_director/thumbnail/{content_id:.+}"
     name = "api:samsung_frame_art_director:thumbnail"
-    requires_auth = False
+    requires_auth = True
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize view."""
@@ -23,13 +23,6 @@ class SamsungFrameThumbnailView(HomeAssistantView):
 
     async def get(self, request: web.Request, content_id: str) -> web.Response:
         """Handle GET request for thumbnail."""
-        # Find the client (we need ANY client, or better, the DB path)
-        # Since this is a global view, we need to locate the integration instance.
-        # We can iterate loaded entries.
-        
-        # 1. Use content_id as-is (it might be a file path)
-        clean_id = content_id
-
         client = None
 
         # Find loaded config entry
@@ -46,13 +39,10 @@ class SamsungFrameThumbnailView(HomeAssistantView):
         if not client:
              return web.Response(status=HTTPStatus.NOT_FOUND)
 
-        # 3. Ask Client for Image Path
-        # We need a synchronous method to query DB for path? 
-        # Or just use the client to get the bytes.
-        
-        image_data = await client.async_get_thumbnail(clean_id)
-        
-        if not image_data:
+        thumbnail = await client.async_get_thumbnail(content_id)
+
+        if not thumbnail:
             return web.Response(status=HTTPStatus.NOT_FOUND)
 
-        return web.Response(body=image_data, content_type="image/jpeg")
+        image_data, content_type = thumbnail
+        return web.Response(body=image_data, content_type=content_type)

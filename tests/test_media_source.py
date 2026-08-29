@@ -1,6 +1,8 @@
 """Tests for the Media Source provider (browse + resolve)."""
 import types
-from urllib.parse import quote, unquote
+
+import pytest
+from homeassistant.setup import async_setup_component
 
 from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
@@ -13,16 +15,25 @@ class _FakeClient:
         return {
             "items": [
                 {
-                    "id": "/media/frame/library/a.jpg",
+                    "id": "local-aaaaaaaa",
                     "tags": "nature",
                     "is_favorite": True,
-                    "source": "/media/frame/library/a.jpg",
+                    "name": "a.jpg",
+                    "content_type": "image/jpeg",
                 },
                 {
-                    "id": "/media/frame/library/b.png",
+                    "id": "local-bbbbbbbb",
                     "tags": "city",
                     "is_favorite": False,
-                    "source": "/media/frame/library/b.png",
+                    "name": "b.png",
+                    "content_type": "image/png",
+                },
+                {
+                    "id": "local-cccccccc",
+                    "tags": "abstract",
+                    "is_favorite": False,
+                    "name": "c.webp",
+                    "content_type": "image/webp",
                 },
             ]
         }
@@ -35,20 +46,24 @@ async def test_factory_returns_source(hass):
 
 
 async def test_browse_lists_library_items(hass):
+    assert await async_setup_component(hass, "http", {})
     source = ArtLibraryMediaSource(hass)
     source._client = lambda: _FakeClient()
 
     result = await source.async_browse_media(types.SimpleNamespace(identifier=None))
 
     assert result.can_expand is True
-    assert len(result.children) == 2
+    assert len(result.children) == 3
     first = result.children[0]
     assert first.can_play is True
-    # Identifier must be URL-encoded (HA rejects identifiers starting with "/").
-    assert not first.identifier.startswith("/")
-    assert unquote(first.identifier) == "/media/frame/library/a.jpg"
+    assert first.identifier == "local-aaaaaaaa"
     assert first.title.startswith("★")  # favorite marker
     assert first.thumbnail.startswith("/api/samsung_frame_art_director/thumbnail/")
+    assert [child.media_content_type for child in result.children] == [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    ]
 
 
 async def test_browse_without_client_is_empty(hass):
@@ -58,10 +73,21 @@ async def test_browse_without_client_is_empty(hass):
     assert result.children == []
 
 
-async def test_resolve_returns_image_url(hass):
+@pytest.mark.parametrize(
+    ("media_id", "content_type"),
+    [
+        ("local-aaaaaaaa", "image/jpeg"),
+        ("local-bbbbbbbb", "image/png"),
+        ("local-cccccccc", "image/webp"),
+    ],
+)
+async def test_resolve_returns_image_url(hass, media_id, content_type):
+    assert await async_setup_component(hass, "http", {})
     source = ArtLibraryMediaSource(hass)
+    source._client = lambda: _FakeClient()
     media = await source.async_resolve_media(
-        types.SimpleNamespace(identifier=quote("/media/frame/library/a.jpg", safe=""))
+        types.SimpleNamespace(identifier=media_id)
     )
-    assert media.mime_type == "image/jpeg"
-    assert media.url.startswith("/api/samsung_frame_art_director/thumbnail/")
+    assert media.mime_type == content_type
+    assert f"/{media_id}?" in media.url
+    assert "authSig=" in media.url

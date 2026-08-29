@@ -1,17 +1,19 @@
 """Tests for image preprocessing and the local-art DB helpers."""
 import asyncio
 import io
+from pathlib import Path
 import sqlite3
 import sys
 import threading
 import time
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 import pytest
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
+from custom_components.samsung_frame_art_director.file_access import media_identifier
 
 
 def _jpeg(width: int, height: int) -> bytes:
@@ -839,14 +841,107 @@ def test_manifest_requires_pypi_samsungtvws():
 async def test_local_art_crud(hass, tmp_path):
     client = SamsungFrameClient(hass, "1.2.3.4")
     client.set_db_path(str(tmp_path / "art.db"))
+    local_path = Path(hass.config.path("www", "a.jpg"))
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(_jpeg(10, 10))
 
-    await client.async_add_local_art("/x/a.jpg", "tag1,tag2", "desc", 100, 100, 10)
+    await client.async_add_local_art(
+        str(local_path), "tag1,tag2", "desc", 100, 100, local_path.stat().st_size
+    )
 
     paths = await client.async_get_local_art_paths()
-    assert "/x/a.jpg" in paths
+    assert str(local_path) in paths
 
     data = await client.async_get_library_data()
-    assert any(item["id"] == "/x/a.jpg" for item in data["items"])
+    assert data["items"][0]["id"].startswith("local-")
+    assert data["items"][0]["name"] == "a.jpg"
+    assert data["items"][0]["content_type"] == "image/jpeg"
+    assert "source" not in data["items"][0]
+    assert str(local_path.resolve()) not in repr(data)
 
-    assert await client.async_remove_local_art_by_path("/x/a.jpg")
+    assert await client.async_remove_local_art_by_path(str(local_path))
     assert await client.async_get_local_art_paths() == []
+
+
+async def test_delete_art_accepts_only_an_opaque_tracked_identifier(hass, tmp_path):
+    """The delete boundary refuses a raw path even when that file exists."""
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    client.set_db_path(str(tmp_path / "art.db"))
+    local_path = Path(hass.config.path("www", "protected.jpg"))
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(_jpeg(10, 10))
+    await client.async_add_local_art(
+        str(local_path), "test", "protected", 10, 10, local_path.stat().st_size
+    )
+
+    assert await client.async_delete_art(str(local_path)) is False
+    assert local_path.exists()
+    assert (await client.async_get_library_data())["items"]
+
+
+async def test_delete_art_removes_an_opaque_tracked_local_item(hass, tmp_path):
+    """A database-backed media ID deletes its file and library record together."""
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    client.set_db_path(str(tmp_path / "art.db"))
+    local_path = Path(hass.config.path("www", "delete-me.jpg"))
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(_jpeg(10, 10))
+    await client.async_add_local_art(
+        str(local_path), "test", "delete", 10, 10, local_path.stat().st_size
+    )
+    media_id = (await client.async_get_library_data())["items"][0]["id"]
+
+    assert await client.async_delete_art(media_id) is True
+    assert not local_path.exists()
+    assert (await client.async_get_library_data())["items"] == []
+
+
+async def test_delete_art_keeps_database_record_when_disk_delete_fails(
+    hass,
+    tmp_path,
+):
+    """A failed file deletion remains visible so the user can retry it."""
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    client.set_db_path(str(tmp_path / "art.db"))
+    local_path = Path(hass.config.path("www", "busy.jpg"))
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(_jpeg(10, 10))
+    await client.async_add_local_art(
+        str(local_path), "test", "busy", 10, 10, local_path.stat().st_size
+    )
+    media_id = (await client.async_get_library_data())["items"][0]["id"]
+
+    with patch("pathlib.Path.unlink", side_effect=PermissionError("busy")):
+        assert await client.async_delete_art(media_id) is False
+
+    assert (await client.async_get_library_data())["items"][0]["id"] == media_id
+
+
+async def test_delete_art_refuses_a_tracked_out_of_root_file(hass, tmp_path):
+    """Even a database row cannot authorize deletion outside trusted HA roots."""
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    client.set_db_path(str(tmp_path / "art.db"))
+    config_root = Path(hass.config.path())
+    outside = config_root.with_name(f"{config_root.name}-outside") / "keep.jpg"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_bytes(_jpeg(10, 10))
+    await client.async_add_local_art(
+        str(outside), "test", "outside", 10, 10, outside.stat().st_size
+    )
+
+    assert await client.async_delete_art(media_identifier(outside)) is False
+    assert outside.exists()
+    assert str(outside) in await client.async_get_local_art_paths()
+
+
+async def test_folder_rotation_rejects_a_prefix_collision(hass):
+    """A similarly named directory cannot pass the folder rotation boundary."""
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    config_root = Path(hass.config.path())
+    outside = config_root.with_name(f"{config_root.name}-outside-rotation")
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "art.jpg").write_bytes(_jpeg(10, 10))
+    client.async_upload_image = AsyncMock()
+
+    assert await client.async_rotate_from_folder(str(outside)) is False
+    client.async_upload_image.assert_not_awaited()

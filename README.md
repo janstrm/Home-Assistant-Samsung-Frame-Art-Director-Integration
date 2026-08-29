@@ -127,8 +127,9 @@ data:
 ```
 
 #### upload_art
-Upload and immediately display an image from your HA filesystem or a trusted
-HTTP(S) URL. Remote downloads have a 30-second timeout and a 20 MiB size limit.
+Upload and immediately display an image from your HA filesystem, an opaque
+`local-…` gallery ID, or a trusted HTTP(S) URL. Remote downloads have a
+30-second timeout and a 20 MiB size limit.
 
 Local file:
 ```yaml
@@ -137,6 +138,15 @@ target:
   entity_id: media_player.samsung_frame
 data:
   path: /media/frame/library/example.jpg
+```
+
+Tracked gallery item (the dashboard uses this form so it never exposes a path):
+```yaml
+service: samsung_frame_art_director.upload_art
+target:
+  entity_id: media_player.samsung_frame
+data:
+  path: "local-<opaque-library-id>"
 ```
 
 Remote file:
@@ -215,16 +225,22 @@ Toggle the favorite status of an artwork in the library database.
 ```yaml
 service: samsung_frame_art_director.toggle_favorite
 data:
-  content_id: "MY-C0002_xxxxxxxx"
+  content_id: "local-<opaque-library-id>"
 ```
 
 #### delete_art
-Delete an artwork from the library database.
+Permanently delete a tracked local artwork file and its library records. Use
+the opaque `local-…` ID exposed by `sensor.samsung_frame_art_library`; raw file
+paths and untracked files are rejected.
 ```yaml
 service: samsung_frame_art_director.delete_art
 data:
-  content_id: "MY-C0002_xxxxxxxx"
+  content_id: "local-<opaque-library-id>"
 ```
+
+Gallery thumbnails use short-lived Home Assistant signed URLs. Filesystem paths
+are never placed in gallery attributes, thumbnail URLs, or Media Source
+identifiers.
 
 #### cleanup_storage
 Remove non-favorite artworks from the **TV's internal storage** to free up space.

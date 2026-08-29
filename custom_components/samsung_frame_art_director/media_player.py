@@ -32,6 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         hass,
         _LOGGER,
         name="samsung_frame_art_mode",
+        config_entry=entry,
         update_method=async_update_data,
         update_interval=dt_util.dt.timedelta(seconds=30),
     )
@@ -125,13 +126,13 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         from urllib.parse import unquote
 
-        path = unquote(sourced.identifier)
+        media_id = unquote(sourced.identifier)
+        artwork = await self._client.async_read_local_art(media_id)
+        if not artwork:
+            raise HomeAssistantError("Artwork is not in the tracked local library")
 
-        def _read() -> bytes:
-            with open(path, "rb") as f:
-                return f.read()
-
-        image_bytes = await self.hass.async_add_executor_job(_read)
         await self._client.async_upload_image(
-            image_bytes, matte=resolve_matte(self._entry.options), source_file=path
+            artwork["data"],
+            matte=resolve_matte(self._entry.options),
+            source_file=artwork["path"],
         )

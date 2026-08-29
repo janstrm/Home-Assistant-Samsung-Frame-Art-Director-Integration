@@ -269,9 +269,9 @@ views:
                     {% if item.id %}
                       {% set card_config = {
                           "type": "picture",
-                          "image": "/api/samsung_frame_art_director/thumbnail/" ~ (item.id | urlencode),
+                          "image": item.thumbnail,
                           "card_mod": {
-                            "style": "ha-card { border: " ~ ("4px solid #ff4444" if item.is_favorite else "none") ~ "; border-radius: 8px; transition: all 0.2s ease; cursor: pointer; position: relative; } " ~ ("ha-card::after { content: '❤'; position: absolute; top: 2px; right: 8px; font-size: 28px; color: #ff4444; filter: drop-shadow(0 0 2px black); }" if item.is_favorite else "")
+                            "style": "ha-card { border: " ~ ("4px solid #ff4444" if item.is_favorite else "none") ~ "; border-radius: 8px; transition: border-color 0.2s ease; cursor: pointer; position: relative; } " ~ ("ha-card::after { content: '❤'; position: absolute; top: 2px; right: 8px; font-size: 28px; color: #ff4444; filter: drop-shadow(0 0 2px black); }" if item.is_favorite else "")
                           },
                           "tap_action": {
                             "action": "fire-dom-event",
@@ -285,7 +285,7 @@ views:
                                   "cards": [
                                     {
                                       "type": "picture",
-                                      "image": "/api/samsung_frame_art_director/thumbnail/" ~ (item.id | urlencode),
+                                      "image": item.thumbnail,
                                       "card_mod": {
                                         "style": "ha-card { border-radius: 12px; }"
                                       }
@@ -305,7 +305,7 @@ views:
                                             "action": "call-service",
                                             "service": "samsung_frame_art_director.upload_art",
                                             "target": { "entity_id": "media_player.samsung_frame" },
-                                            "data": { "path": item.source }
+                                            "data": { "path": item.id }
                                           }
                                         },
                                         {

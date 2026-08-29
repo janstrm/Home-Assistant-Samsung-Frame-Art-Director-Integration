@@ -9,6 +9,8 @@ This module handles:
 import os
 import shutil
 import logging
+from pathlib import Path
+
 from PIL import Image
 
 from .ai import create_analyzer
@@ -24,6 +26,7 @@ from .const import (
     DEFAULT_INBOX_DIR,
     DEFAULT_LIBRARY_DIR,
 )
+from .file_access import UnsafeLocalPathError, ensure_allowed_local_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,17 +60,25 @@ class ContentCurator:
 
         # Scan inbox (Moved to executor)
         def _list_files():
-            if not os.path.exists(self._inbox_dir):
-                os.makedirs(self._inbox_dir, exist_ok=True)
-            if not os.path.exists(self._library_dir):
-                os.makedirs(self._library_dir, exist_ok=True)
-            return [
-                f for f in os.listdir(self._inbox_dir) 
-                if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))
-            ]
+            inbox_dir = ensure_allowed_local_path(self.hass, self._inbox_dir)
+            library_dir = ensure_allowed_local_path(self.hass, self._library_dir)
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            library_dir.mkdir(parents=True, exist_ok=True)
+            files: list[Path] = []
+            for entry in inbox_dir.iterdir():
+                if entry.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                    continue
+                try:
+                    candidate = ensure_allowed_local_path(self.hass, entry)
+                except UnsafeLocalPathError:
+                    _LOGGER.warning("Process Inbox: Skipping out-of-root image")
+                    continue
+                if candidate.is_file():
+                    files.append(candidate)
+            return library_dir, files
 
         try:
-            files = await self.hass.async_add_executor_job(_list_files)
+            library_dir, files = await self.hass.async_add_executor_job(_list_files)
         except Exception as e:
             _LOGGER.error("Process Inbox: Failed to scan inbox folder '%s': %s", self._inbox_dir, e)
             return {"count": 0, "error": f"Inbox scan failed: {e}"}
@@ -81,14 +92,15 @@ class ContentCurator:
         processed_count = 0
         skipped_count = 0
         
-        for filename in files:
-            source_path = os.path.join(self._inbox_dir, filename)
+        for source_path in files:
+            filename = source_path.name
             
             # 1. Analyze (Atomic: Stop here if fails)
             try:
                 def _read_file():
-                    with open(source_path, "rb") as f:
-                        return f.read()
+                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
+                    with trusted_source.open("rb") as file_handle:
+                        return file_handle.read()
                 
                 data = await self.hass.async_add_executor_job(_read_file)
                 result = await analyzer.analyze_image(data, prompt="Describe this image")
@@ -116,7 +128,8 @@ class ContentCurator:
 
                 # 2. Probe Metadata (Executor)
                 def _probe():
-                    with Image.open(source_path) as img:
+                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
+                    with Image.open(trusted_source) as img:
                         w, h = img.size
                     return w, h, len(data)
 
@@ -124,17 +137,23 @@ class ContentCurator:
 
                 # 3. Move to Library (Executor)
                 def _move():
+                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
                     # Ensure unique filename in library
                     dest_filename = filename
                     counter = 1
-                    while os.path.exists(os.path.join(self._library_dir, dest_filename)):
+                    dest_path = ensure_allowed_local_path(
+                        self.hass, library_dir / dest_filename
+                    )
+                    while dest_path.exists():
                         name, ext = os.path.splitext(filename)
                         dest_filename = f"{name}_{counter}{ext}"
                         counter += 1
-                    
-                    dest_path = os.path.join(self._library_dir, dest_filename)
-                    shutil.move(source_path, dest_path)
-                    return dest_path
+                        dest_path = ensure_allowed_local_path(
+                            self.hass, library_dir / dest_filename
+                        )
+
+                    shutil.move(str(trusted_source), str(dest_path))
+                    return str(dest_path)
 
                 # CRITICAL: We move the file ONLY after AI analysis is successful
                 dest_path = await self.hass.async_add_executor_job(_move)
@@ -185,7 +204,16 @@ class ContentCurator:
 
         def _check_stale():
             """Return list of DB paths whose files no longer exist on disk."""
-            return [p for p in db_paths if not os.path.isfile(p)]
+            stale = []
+            for raw_path in db_paths:
+                try:
+                    path = ensure_allowed_local_path(self.hass, raw_path)
+                except UnsafeLocalPathError:
+                    stale.append(raw_path)
+                    continue
+                if not path.is_file():
+                    stale.append(raw_path)
+            return stale
 
         stale_paths = await self.hass.async_add_executor_job(_check_stale)
 
@@ -204,16 +232,35 @@ class ContentCurator:
         analyzer, analyzer_err = self._build_analyzer()
 
         def _get_disk_files():
-            if not os.path.exists(self._library_dir):
+            library_dir = ensure_allowed_local_path(self.hass, self._library_dir)
+            if not library_dir.is_dir():
                 return []
-            return [
-                os.path.join(self._library_dir, f)
-                for f in os.listdir(self._library_dir)
-                if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))
-                and os.path.join(self._library_dir, f) not in db_paths
-            ]
+            tracked_paths = set()
+            for raw_path in db_paths:
+                try:
+                    tracked_paths.add(
+                        str(ensure_allowed_local_path(self.hass, raw_path))
+                    )
+                except UnsafeLocalPathError:
+                    continue
+            missing = []
+            for entry in library_dir.iterdir():
+                if entry.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                    continue
+                try:
+                    candidate = ensure_allowed_local_path(self.hass, entry)
+                except UnsafeLocalPathError:
+                    _LOGGER.warning("Sync Library: Skipping out-of-root image")
+                    continue
+                if candidate.is_file() and str(candidate) not in tracked_paths:
+                    missing.append(candidate)
+            return missing
 
-        missing_files = await self.hass.async_add_executor_job(_get_disk_files)
+        try:
+            missing_files = await self.hass.async_add_executor_job(_get_disk_files)
+        except UnsafeLocalPathError as err:
+            _LOGGER.error("Sync Library: Rejected library directory: %s", err)
+            missing_files = []
         added_count = 0
 
         if missing_files and analyzer_err:
@@ -228,9 +275,10 @@ class ContentCurator:
             for path in missing_files:
                 try:
                     def _read_and_probe():
-                        with open(path, "rb") as f:
-                            data = f.read()
-                        with Image.open(path) as img:
+                        trusted_path = ensure_allowed_local_path(self.hass, path)
+                        with trusted_path.open("rb") as file_handle:
+                            data = file_handle.read()
+                        with Image.open(trusted_path) as img:
                             w, h = img.size
                         return data, w, h, len(data)
 
@@ -251,7 +299,7 @@ class ContentCurator:
                     description = result.get("description", "")
 
                     await self.api.async_add_local_art(
-                        file_path=path,
+                        file_path=str(path),
                         tags=tags,
                         description=description,
                         width=width,

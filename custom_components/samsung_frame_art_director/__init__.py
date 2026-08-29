@@ -38,6 +38,11 @@ from .const import (
     resolve_matte,
 )
 from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+from .file_access import (
+    UnsafeLocalPathError,
+    is_local_media_identifier,
+    resolve_upload_source,
+)
 
 
 # This integration is configured via the UI only (config entries), not YAML.
@@ -175,24 +180,13 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
             return bytes(image_bytes)
 
     def _read() -> bytes:
-        import os
-        # Accept absolute /media/... or /config/...; else assume under /media/frame/library/
-        norm = os.path.expanduser(path)
-        if not norm.startswith("/media/") and not norm.startswith("/config/"):
-            norm = "/media/frame/library/" + norm.lstrip("/")
-
-        # Security: Prevent path traversal by resolving the absolute path
-        # and ensuring it's within the allowed directories
-        abs_norm = os.path.abspath(norm)
-        allowed_media = os.path.abspath("/media")
-        allowed_config = os.path.abspath(hass.config.path())
-        if not abs_norm.startswith(allowed_media) and not abs_norm.startswith(allowed_config):
-            raise ValueError(f"Path traversal detected or unallowed path: {abs_norm}")
-
-        _LOGGER.debug("upload_art: resolved path=%s", abs_norm)
-        # Map /media to real FS under HA config; hass.config.path maps /config
-        # Supervisor mounts /media; opening /media/... directly should work. Keep as-is.
-        with open(abs_norm, "rb") as f:
+        try:
+            resolved = resolve_upload_source(hass, path)
+        except UnsafeLocalPathError as err:
+            raise ServiceValidationError(str(err)) from err
+        if not resolved.is_file():
+            raise ServiceValidationError("Local artwork file does not exist")
+        with resolved.open("rb") as f:
             return f.read()
 
     return await hass.async_add_executor_job(_read)
@@ -428,21 +422,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not path:
             return
         _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
-        # Preserve the established validation that a source has a usable name.
-        _remote_filename(path)
-        # Read the image (http(s) URL fetched via the shared aiohttp client; a
-        # local path is sandboxed + read off-loop in an executor).
-        image_bytes = await _async_read_image_bytes(hass, path)
-        found = False
+        clients = [client async for client in _resolve_clients(call)]
+        if not clients:
+            _LOGGER.debug("upload_art: no target client resolved; nothing executed")
+            return None
+
+        if is_local_media_identifier(path):
+            artwork = None
+            for client in clients:
+                if artwork := await client.async_read_local_art(path):
+                    break
+            if not artwork:
+                raise ServiceValidationError(
+                    "Artwork is not in the tracked local library"
+                )
+            image_bytes = artwork["data"]
+            source_file = artwork["path"]
+        else:
+            # Preserve the established validation that a source has a usable name.
+            _remote_filename(path)
+            # HTTP(S) is streamed with limits; a local path is sandboxed and
+            # read off-loop. Existing path/URL calls remain compatible.
+            image_bytes = await _async_read_image_bytes(hass, path)
+            source_file = path
+
         content_ids: list[str] = []
-        async for client in _resolve_clients(call):
-            found = True
+        for client in clients:
             _LOGGER.debug("upload_art: invoking client on host=%s", getattr(client, "host", "?"))
             try:
                 content_id = await client.async_upload_image(
                     image_bytes,
                     matte=matte,
-                    source_file=path,
+                    source_file=source_file,
                     tags=tags,
                 )
                 if content_id:
@@ -460,8 +471,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
-        if not found:
-            _LOGGER.debug("upload_art: no target client resolved; nothing executed")
         if call.return_response:
             return {
                 "content_id": content_ids[0] if len(content_ids) == 1 else None,
@@ -687,6 +696,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         f"Deleted 1 item ({content_id}) from library.",
                         title="Art Director"
                     )
+                else:
+                    raise ServiceValidationError(
+                        "Artwork is not a tracked local artwork or could not be deleted"
+                    )
                 
         elif call.service == "rotate_favorites":
             matte = resolve_matte(entry.options)
@@ -742,6 +755,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
              return
         client = stored.get(DATA_CLIENT)
         data = await client.async_get_library_data()
+        from .media_source import signed_thumbnail_url
+
+        for item in data.get("items", []):
+            item["thumbnail"] = signed_thumbnail_url(hass, item["id"])
         connection.send_result(msg["id"], data)
         
     try:
