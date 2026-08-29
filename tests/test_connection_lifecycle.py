@@ -520,6 +520,40 @@ async def test_cleanup_revalidates_current_art_before_deleting(hass, tmp_path):
     assert "MY-DELETE" in summary["skipped_current"]
 
 
+async def test_setup_stops_before_tv_connection_when_database_init_fails(hass):
+    """A broken library database is a visible, retryable setup failure."""
+    hass.http = MagicMock()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock(
+        side_effect=OSError("database is read-only")
+    )
+    client.async_connect_and_pair = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+        pytest.raises(ConfigEntryNotReady, match="database is read-only"),
+    ):
+        await async_setup_entry(hass, entry)
+
+    client.async_connect_and_pair.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     ("client_error", "setup_error"),
     [
