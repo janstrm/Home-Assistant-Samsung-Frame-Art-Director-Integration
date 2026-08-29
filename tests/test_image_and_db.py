@@ -144,6 +144,39 @@ async def test_database_migration_preserves_and_canonicalizes_legacy_sources(
     )
 
 
+async def test_database_migration_canonicalizes_existing_source_file(hass, tmp_path):
+    """A current-schema source alias is normalized during the DB upgrade."""
+    db_path = tmp_path / "aliased-source-art.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE art_library (
+                content_id TEXT PRIMARY KEY,
+                source_file TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO art_library (content_id, source_file) VALUES (?, ?)",
+            (
+                "MY-ALIASED",
+                "HTTPS://Render.Local:443/gallery/../sunrise.jpg#preview",
+            ),
+        )
+
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(db_path))
+    await client.async_initialize_database()
+
+    with sqlite3.connect(db_path) as conn:
+        source_file = conn.execute(
+            "SELECT source_file FROM art_library WHERE content_id = ?",
+            ("MY-ALIASED",),
+        ).fetchone()[0]
+
+    assert source_file == "https://render.local/sunrise.jpg"
+
+
 async def test_preprocess_fit_outputs_target_size(hass):
     client = SamsungFrameClient(hass, "1.2.3.4")
     client.set_resize_mode("fit")

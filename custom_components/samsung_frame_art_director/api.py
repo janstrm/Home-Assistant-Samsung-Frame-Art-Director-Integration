@@ -36,6 +36,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CONNECTION_ATTEMPT_TIMEOUT_SECONDS = 10
 ART_OPERATION_TIMEOUT_SECONDS = 15
+ART_LIBRARY_SCHEMA_VERSION = 1
 
 
 def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
@@ -448,6 +449,50 @@ class SamsungFrameClient:
                     if "height" not in existing_cols:
                         _LOGGER.info("DB Sync: adding 'height' column to art_library")
                         conn.execute("ALTER TABLE art_library ADD COLUMN height INTEGER")
+
+                    # Preserve provenance and timestamps from the oldest schema.
+                    # COALESCE keeps any newer value that was already populated.
+                    if "date_added" in existing_cols:
+                        conn.execute(
+                            "UPDATE art_library SET created_at = "
+                            "COALESCE(created_at, date_added)"
+                        )
+                    if "last_seen" in existing_cols:
+                        conn.execute(
+                            "UPDATE art_library SET last_displayed_at = "
+                            "COALESCE(last_displayed_at, last_seen)"
+                        )
+                    if "source" in existing_cols:
+                        conn.execute(
+                            "UPDATE art_library SET source_file = "
+                            "COALESCE(NULLIF(TRIM(source_file), ''), "
+                            "NULLIF(TRIM(source), ''))"
+                        )
+
+                    # Existing source identities predate alias normalization.
+                    # Run this data migration once; future writes are normalized
+                    # by async_track_art/async_upload_image before persistence.
+                    schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
+                    if schema_version < ART_LIBRARY_SCHEMA_VERSION:
+                        source_rows = conn.execute(
+                            "SELECT content_id, source_file FROM art_library "
+                            "WHERE source_file IS NOT NULL "
+                            "AND TRIM(source_file) != ''"
+                        ).fetchall()
+                        for content_id, source_file in source_rows:
+                            canonical_source = _canonical_source_identity(
+                                self.hass,
+                                source_file,
+                            )
+                            if canonical_source != source_file:
+                                conn.execute(
+                                    "UPDATE art_library SET source_file = ? "
+                                    "WHERE content_id = ?",
+                                    (canonical_source, content_id),
+                                )
+                        conn.execute(
+                            f"PRAGMA user_version = {ART_LIBRARY_SCHEMA_VERSION}"
+                        )
 
                     # Migration: local_art
                     local_cols = [row[1] for row in conn.execute("PRAGMA table_info(local_art)")]
@@ -1908,7 +1953,7 @@ class SamsungFrameClient:
             "dry_run": bool(dry_run),
         }
 
-        if dry_run or not to_delete:
+        if not to_delete:
             _LOGGER.info("Cleanup(dry_run=%s): would delete %s ids on %s (sample=%s)", dry_run, len(to_delete), self._host, to_delete[:10])
             return summary
 
@@ -1942,6 +1987,13 @@ class SamsungFrameClient:
                     )
                     summary["to_delete"] = []
                     return summary
+                if not latest_current:
+                    summary["errors"].append(
+                        "Current artwork could not be revalidated; deletion aborted"
+                    )
+                    summary["to_delete"] = []
+                    return summary
+                summary["current"] = latest_current
                 if latest_current in to_delete:
                     to_delete = [
                         content_id
@@ -1953,6 +2005,15 @@ class SamsungFrameClient:
                         summary["skipped_current"].append(latest_current)
                 if not to_delete:
                     return summary
+
+            if dry_run:
+                _LOGGER.info(
+                    "Cleanup(dry_run=True): would delete %s ids on %s (sample=%s)",
+                    len(to_delete),
+                    self._host,
+                    to_delete[:10],
+                )
+                return summary
 
             try:
                 from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
