@@ -196,41 +196,52 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
         current_url = path
         redirect_statuses = {301, 302, 303, 307, 308}
 
-        for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
-            async with session.get(
-                current_url,
-                timeout=timeout,
-                allow_redirects=False,
-            ) as resp:
-                if resp.status in redirect_statuses:
-                    location = resp.headers.get("Location")
-                    if not location:
-                        raise ServiceValidationError(
-                            "Remote image redirect is missing a destination"
-                        )
-                    if redirect_count >= MAX_REMOTE_REDIRECTS:
-                        raise ServiceValidationError(
-                            "Remote image exceeded the redirect limit"
-                        )
-                    current_url = urljoin(current_url, location)
-                    _validate_remote_image_url(hass, current_url)
-                    continue
+        try:
+            async with asyncio.timeout(30):
+                for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
+                    async with session.get(
+                        current_url,
+                        timeout=timeout,
+                        allow_redirects=False,
+                    ) as resp:
+                        if resp.status in redirect_statuses:
+                            location = resp.headers.get("Location")
+                            if not location:
+                                raise ServiceValidationError(
+                                    "Remote image redirect is missing a destination"
+                                )
+                            if redirect_count >= MAX_REMOTE_REDIRECTS:
+                                raise ServiceValidationError(
+                                    "Remote image exceeded the redirect limit"
+                                )
+                            current_url = urljoin(current_url, location)
+                            _validate_remote_image_url(hass, current_url)
+                            continue
 
-                _remote_filename(current_url)
-                resp.raise_for_status()
-                if (
-                    resp.content_length is not None
-                    and resp.content_length > MAX_REMOTE_IMAGE_BYTES
-                ):
-                    raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
-                image_bytes = bytearray()
-                async for chunk in resp.content.iter_chunked(64 * 1024):
-                    if len(image_bytes) + len(chunk) > MAX_REMOTE_IMAGE_BYTES:
-                        raise ServiceValidationError(
-                            "Remote image exceeds the 20 MiB limit"
-                        )
-                    image_bytes.extend(chunk)
-                return bytes(image_bytes)
+                        _remote_filename(current_url)
+                        resp.raise_for_status()
+                        if (
+                            resp.content_length is not None
+                            and resp.content_length > MAX_REMOTE_IMAGE_BYTES
+                        ):
+                            raise ServiceValidationError(
+                                "Remote image exceeds the 20 MiB limit"
+                            )
+                        image_bytes = bytearray()
+                        async for chunk in resp.content.iter_chunked(64 * 1024):
+                            if (
+                                len(image_bytes) + len(chunk)
+                                > MAX_REMOTE_IMAGE_BYTES
+                            ):
+                                raise ServiceValidationError(
+                                    "Remote image exceeds the 20 MiB limit"
+                                )
+                            image_bytes.extend(chunk)
+                        return bytes(image_bytes)
+        except TimeoutError as err:
+            raise ServiceValidationError(
+                "Remote image download timed out after 30 seconds"
+            ) from err
 
     if parsed_scheme and "://" in path:
         raise ServiceValidationError(

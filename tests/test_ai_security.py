@@ -5,11 +5,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from PIL import Image
 
 from custom_components.samsung_frame_art_director.ai import (
     AI_REQUEST_ERROR,
     create_analyzer,
+    detect_image_mime,
 )
 from custom_components.samsung_frame_art_director.curator import ContentCurator
 
@@ -58,6 +60,19 @@ def _png_bytes() -> bytes:
     buffer = BytesIO()
     Image.new("RGB", (2, 2), (10, 20, 30)).save(buffer, "PNG")
     return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("image_bytes", "expected"),
+    [
+        (b"\xff\xd8\xffjpeg", "image/jpeg"),
+        (b"\x89PNG\r\n\x1a\npng", "image/png"),
+        (b"RIFF\x04\x00\x00\x00WEBP", "image/webp"),
+    ],
+)
+def test_detect_image_mime_supports_all_provider_formats(image_bytes, expected):
+    """JPEG, PNG and WebP signatures map to their actual MIME types."""
+    assert detect_image_mime(image_bytes) == expected
 
 
 async def test_gemini_uses_injected_session_without_persisting_key():

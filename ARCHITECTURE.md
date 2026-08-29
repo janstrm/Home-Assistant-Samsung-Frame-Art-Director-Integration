@@ -429,20 +429,20 @@ and keep the debug logging — it is the only diagnostic tool users have.
 
 `ai.py` defines:
 
-- `ImageAnalyzer` (ABC) — `analyze_image(bytes, prompt) -> dict` returning
+- `ImageAnalyzer` (ABC) — `analyze_image(bytes, prompt, api_key=...) -> dict`
+  returning
   `{tags, description, provider, model, duration}` or `{error}`.
 - `GeminiAnalyzer` — Google Gemini via REST over Home Assistant's shared aiohttp
   session, default model `gemini-2.5-flash`. The API key travels in the
   `x-goog-api-key` header, never in the request URL or analyzer state.
   Prompts for ~15 keywords including weather/lighting/mood.
-- `OpenAIAnalyzer` — GPT-4o vision via the `openai` SDK. **Optional dependency:**
-  `openai` is *not* in `manifest.json` requirements, so selecting OpenAI requires
-  the package to be installed; the analyzer degrades gracefully (returns an
-  error dict) if it's missing.
-- `create_analyzer(provider, gemini_api_key, openai_api_key, session=...)` — the
-  **factory** and the only place that maps the `ai_provider` option to a concrete
-  class. Returns `(analyzer, error)` and closes credentials over request
-  callbacks instead of storing raw keys on analyzers.
+- `OpenAIAnalyzer` — GPT-4o vision via REST over the same shared aiohttp session.
+- `create_analyzer(provider, model, session=...)` — the **factory** and the only
+  place that maps the `ai_provider` option to a concrete class. Returns
+  `(analyzer, error)`. The curator supplies the selected credential only to the
+  individual `analyze_image` call; analyzer objects never retain it. Both
+  providers disable redirects and use fixed HTTPS endpoints with 30-second
+  timeouts.
 
 Before either provider is called, `curator.py` reads at most 20 MiB off-loop,
 detects JPEG/PNG/WebP from the byte signature, verifies the image with Pillow,
@@ -500,9 +500,6 @@ the [README](README.md#-services).
 - **`art_library` schema is two-place** — `CREATE TABLE` *and* the `ALTER`
   migrations must stay in sync (see [§5](#5-data-model-sqlite)). Adding a column
   in only one place silently breaks either fresh installs or upgrades.
-- **`OpenAIAnalyzer` needs a manual dependency.** `openai` isn't declared in
-  `manifest.json`. This is intentional (don't force the dep on Gemini users) but
-  means OpenAI silently errors until the package is installed.
 - **`async_rotate_art_now()` legacy modes.** Its `library` and `aware` modes are
   unimplemented no-ops; the live rotation path is `async_rotate_art()` /
   `async_rotate_from_folder()`. Don't confuse the two.

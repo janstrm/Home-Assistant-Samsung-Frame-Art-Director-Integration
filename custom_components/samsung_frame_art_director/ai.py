@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 import base64
 import logging
 import time
-from typing import Any, Callable
+from typing import Any
 
 from aiohttp import ClientTimeout
 
@@ -28,27 +28,51 @@ def detect_image_mime(image_bytes: bytes) -> str:
     raise ValueError("Unsupported or invalid image format")
 
 
+def _analysis_result(
+    text: str,
+    *,
+    provider: str,
+    model: str,
+    start_time: float,
+) -> dict[str, Any]:
+    """Build the common successful provider result."""
+    tags = [
+        tag.strip().lower()
+        for tag in text.replace("\n", ",").split(",")
+        if tag.strip()
+    ]
+    return {
+        "tags": tags[:15],
+        "description": text,
+        "provider": provider,
+        "model": model,
+        "duration": round(time.monotonic() - start_time, 3),
+    }
+
+
 class ImageAnalyzer(ABC):
     """Abstract base class for AI image analyzers."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, session: Any, model_name: str) -> None:
+        self._session = session
         self.model_name = model_name
 
     @abstractmethod
-    async def analyze_image(self, image_bytes: bytes, prompt: str) -> dict:
-        """Analyze image bytes and return tags and metadata."""
+    async def analyze_image(
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        api_key: str,
+    ) -> dict:
+        """Analyze image bytes with a credential supplied only for this call."""
 
 
 class GeminiAnalyzer(ImageAnalyzer):
-    """Google Gemini REST analyzer using an injected HTTP request boundary."""
+    """Google Gemini REST analyzer using Home Assistant's HTTP session."""
 
-    def __init__(
-        self,
-        post_request: Callable[..., Any],
-        model: str = "gemini-2.5-flash",
-    ) -> None:
-        super().__init__(model)
-        self._post_request = post_request
+    def __init__(self, session: Any, model: str = "gemini-2.5-flash") -> None:
+        super().__init__(session, model)
         self.url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent"
@@ -58,6 +82,8 @@ class GeminiAnalyzer(ImageAnalyzer):
         self,
         image_data: bytes,
         prompt: str = "Describe this art",
+        *,
+        api_key: str,
     ) -> dict[str, Any]:
         """Analyze an image using the Gemini Vision REST API."""
         start_time = time.monotonic()
@@ -84,10 +110,12 @@ class GeminiAnalyzer(ImageAnalyzer):
         }
 
         try:
-            async with self._post_request(
+            async with self._session.post(
                 self.url,
                 json=payload,
+                headers={"x-goog-api-key": api_key},
                 timeout=ClientTimeout(total=30),
+                allow_redirects=False,
             ) as response:
                 if response.status != 200:
                     _LOGGER.warning(
@@ -98,16 +126,16 @@ class GeminiAnalyzer(ImageAnalyzer):
                         "error": f"{AI_REQUEST_ERROR} (HTTP {response.status})",
                         "provider": "Google Gemini (REST)",
                     }
-
                 data = await response.json()
-                try:
-                    text = data["candidates"][0]["content"]["parts"][0]["text"]
-                except (KeyError, IndexError, TypeError):
-                    _LOGGER.warning("Gemini returned a malformed response")
-                    return {
-                        "error": "AI provider returned a malformed response",
-                        "provider": "Google Gemini (REST)",
-                    }
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                if not isinstance(text, str):
+                    raise TypeError("Provider response text is not a string")
+        except (KeyError, IndexError, TypeError):
+            _LOGGER.warning("Gemini returned a malformed response")
+            return {
+                "error": "AI provider returned a malformed response",
+                "provider": "Google Gemini (REST)",
+            }
         except Exception:  # noqa: BLE001 - provider exceptions are untrusted
             _LOGGER.error("Gemini request failed")
             return {
@@ -115,114 +143,101 @@ class GeminiAnalyzer(ImageAnalyzer):
                 "provider": "Google Gemini (REST)",
             }
 
-        tags = [tag.strip().lower() for tag in text.split(",") if tag.strip()]
-        return {
-            "tags": tags[:15],
-            "description": text,
-            "provider": "Google Gemini (REST)",
-            "model": self.model_name,
-            "duration": time.monotonic() - start_time,
-        }
+        return _analysis_result(
+            text,
+            provider="Google Gemini (REST)",
+            model=self.model_name,
+            start_time=start_time,
+        )
 
 
 class OpenAIAnalyzer(ImageAnalyzer):
-    """OpenAI vision analyzer using an injected SDK request boundary."""
+    """OpenAI REST analyzer using Home Assistant's HTTP session."""
 
-    def __init__(
+    def __init__(self, session: Any, model_name: str = "gpt-4o") -> None:
+        super().__init__(session, model_name)
+        self.url = "https://api.openai.com/v1/chat/completions"
+
+    async def analyze_image(
         self,
-        create_completion: Callable[..., Any],
-        model_name: str = "gpt-4o",
-    ) -> None:
-        super().__init__(model_name)
-        self._create_completion = create_completion
-
-    async def analyze_image(self, image_bytes: bytes, prompt: str) -> dict:
-        """Analyze an image using OpenAI's chat completions API."""
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        api_key: str,
+    ) -> dict:
+        """Analyze an image using OpenAI's REST API."""
         start_time = time.monotonic()
         mime_type = detect_image_mime(image_bytes)
         image_data = base64.b64encode(image_bytes).decode("ascii")
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{image_data}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 300,
+        }
 
         try:
-            response = await self._create_completion(
-                model=self.model_name,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{image_data}"
-                                },
-                            },
-                        ],
+            async with self._session.post(
+                self.url,
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=ClientTimeout(total=30),
+                allow_redirects=False,
+            ) as response:
+                if response.status != 200:
+                    _LOGGER.warning(
+                        "OpenAI request returned HTTP %s",
+                        response.status,
+                    )
+                    return {
+                        "error": f"{AI_REQUEST_ERROR} (HTTP {response.status})",
+                        "provider": "OpenAI",
                     }
-                ],
-                max_tokens=300,
-            )
-            text = response.choices[0].message.content
+                data = await response.json()
+                text = data["choices"][0]["message"]["content"]
+                if not isinstance(text, str):
+                    raise TypeError("Provider response text is not a string")
+        except (KeyError, IndexError, TypeError):
+            _LOGGER.warning("OpenAI returned a malformed response")
+            return {
+                "error": "AI provider returned a malformed response",
+                "provider": "OpenAI",
+            }
         except Exception:  # noqa: BLE001 - provider exceptions are untrusted
             _LOGGER.error("OpenAI request failed")
             return {"error": AI_REQUEST_ERROR, "provider": "OpenAI"}
 
-        tags = [
-            tag.strip().lower()
-            for tag in text.replace("\n", ",").split(",")
-            if tag.strip()
-        ]
-        return {
-            "tags": tags[:15],
-            "description": text,
-            "provider": "OpenAI",
-            "model": self.model_name,
-            "duration": round(time.monotonic() - start_time, 3),
-        }
+        return _analysis_result(
+            text,
+            provider="OpenAI",
+            model=self.model_name,
+            start_time=start_time,
+        )
 
 
 def create_analyzer(
     provider: str,
-    gemini_api_key: str = "",
-    openai_api_key: str = "",
     model: str = "",
     *,
     session: Any | None = None,
 ) -> tuple[ImageAnalyzer | None, str | None]:
-    """Build the configured analyzer without persisting raw API keys on it."""
+    """Build the configured analyzer without accepting or storing API keys."""
     provider = (provider or "gemini").lower()
     model = (model or "").strip()
-
-    if provider == "openai":
-        if not openai_api_key:
-            return None, (
-                "OpenAI selected but no OpenAI API key configured. "
-                "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
-            )
-        try:
-            from openai import AsyncOpenAI
-        except ImportError:
-            return None, "OpenAI selected but the openai package is not installed."
-
-        client = AsyncOpenAI(api_key=openai_api_key)
-
-        async def _create_completion(**kwargs):
-            return await client.chat.completions.create(**kwargs)
-
-        return OpenAIAnalyzer(_create_completion, model or "gpt-4o"), None
-
-    if not gemini_api_key:
-        return None, (
-            "No Gemini API key configured. "
-            "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
-        )
     if session is None:
-        return None, "Gemini HTTP session is unavailable."
-
-    def _post_request(url: str, **kwargs):
-        return session.post(
-            url,
-            headers={"x-goog-api-key": gemini_api_key},
-            **kwargs,
-        )
-
-    return GeminiAnalyzer(_post_request, model or "gemini-2.5-flash"), None
+        return None, "AI HTTP session is unavailable."
+    if provider == "openai":
+        return OpenAIAnalyzer(session, model or "gpt-4o"), None
+    return GeminiAnalyzer(session, model or "gemini-2.5-flash"), None

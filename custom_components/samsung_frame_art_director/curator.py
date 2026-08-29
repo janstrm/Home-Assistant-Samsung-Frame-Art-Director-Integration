@@ -9,6 +9,7 @@ This module handles:
 import os
 import shutil
 import logging
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from .ai import create_analyzer, detect_image_mime
 from .api import SamsungFrameClient
 from .const import (
     AI_PROVIDER_GEMINI,
+    AI_PROVIDER_OPENAI,
     CONF_AI_PROVIDER,
     CONF_AI_MODEL,
     CONF_GEMINI_API_KEY,
@@ -40,7 +42,17 @@ class UnsafeAIImageError(ValueError):
     """Raised when an image is unsafe to submit to an AI provider."""
 
 
-def _read_and_validate_ai_image(hass, path: Path) -> tuple[bytes, int, int, int]:
+@dataclass(frozen=True, slots=True)
+class ValidatedAIImage:
+    """Validated image payload and metadata passed through the curator."""
+
+    data: bytes
+    width: int
+    height: int
+    file_size: int
+
+
+def _read_and_validate_ai_image(hass, path: Path) -> ValidatedAIImage:
     """Read and validate an AI input while running in HA's executor."""
     trusted_path = ensure_allowed_local_path(hass, path)
     if trusted_path.stat().st_size > MAX_AI_IMAGE_BYTES:
@@ -64,7 +76,7 @@ def _read_and_validate_ai_image(hass, path: Path) -> tuple[bytes, int, int, int]
             raise UnsafeAIImageError("Image dimensions exceed the AI input limit")
         image.verify()
 
-    return data, width, height, len(data)
+    return ValidatedAIImage(data, width, height, len(data))
 
 class ContentCurator:
     def __init__(self, hass, entry, api: SamsungFrameClient):
@@ -74,6 +86,13 @@ class ContentCurator:
         self._inbox_dir = entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR
         self._library_dir = entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR
 
+    def _configured_provider_and_key(self) -> tuple[str, str]:
+        """Return the selected provider and its credential for one request."""
+        provider = self.entry.options.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)
+        if provider.lower() == AI_PROVIDER_OPENAI:
+            return provider, self.entry.options.get(CONF_OPENAI_API_KEY, "")
+        return provider, self.entry.options.get(CONF_GEMINI_API_KEY, "")
+
     def _build_analyzer(self):
         """Build the AI analyzer for the configured provider.
 
@@ -81,11 +100,17 @@ class ContentCurator:
         """
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        provider = self.entry.options.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)
+        provider, api_key = self._configured_provider_and_key()
+        if not api_key:
+            provider_name = (
+                "OpenAI" if provider.lower() == AI_PROVIDER_OPENAI else "Gemini"
+            )
+            return None, (
+                f"No {provider_name} API key configured. "
+                "Add it in Settings > Devices > Samsung Frame Art Director > Configure."
+            )
         return create_analyzer(
             provider,
-            gemini_api_key=self.entry.options.get(CONF_GEMINI_API_KEY, ""),
-            openai_api_key=self.entry.options.get(CONF_OPENAI_API_KEY, ""),
             model=self.entry.options.get(CONF_AI_MODEL, ""),
             session=async_get_clientsession(self.hass),
         )
@@ -136,14 +161,17 @@ class ContentCurator:
             
             # 1. Analyze (Atomic: Stop here if fails)
             try:
-                data, width, height, file_size = (
-                    await self.hass.async_add_executor_job(
-                        _read_and_validate_ai_image,
-                        self.hass,
-                        source_path,
-                    )
+                image = await self.hass.async_add_executor_job(
+                    _read_and_validate_ai_image,
+                    self.hass,
+                    source_path,
                 )
-                result = await analyzer.analyze_image(data, prompt="Describe this image")
+                _, api_key = self._configured_provider_and_key()
+                result = await analyzer.analyze_image(
+                    image.data,
+                    prompt="Describe this image",
+                    api_key=api_key,
+                )
                 
                 if "error" in result:
                     error_str = str(result['error'])
@@ -200,9 +228,9 @@ class ContentCurator:
                     file_path=dest_path,
                     tags=tags,
                     description=description,
-                    width=width,
-                    height=height,
-                    file_size=file_size
+                    width=image.width,
+                    height=image.height,
+                    file_size=image.file_size
                 )
                 processed_count += 1
                 
@@ -305,15 +333,18 @@ class ContentCurator:
 
             for path in missing_files:
                 try:
-                    data, width, height, size = (
-                        await self.hass.async_add_executor_job(
-                            _read_and_validate_ai_image,
-                            self.hass,
-                            path,
-                        )
+                    image = await self.hass.async_add_executor_job(
+                        _read_and_validate_ai_image,
+                        self.hass,
+                        path,
                     )
                     
-                    result = await analyzer.analyze_image(data, prompt="Describe this image")
+                    _, api_key = self._configured_provider_and_key()
+                    result = await analyzer.analyze_image(
+                        image.data,
+                        prompt="Describe this image",
+                        api_key=api_key,
+                    )
                     if "error" in result:
                         error_str = str(result['error'])
                         if "429" in error_str:
@@ -331,9 +362,9 @@ class ContentCurator:
                         file_path=str(path),
                         tags=tags,
                         description=description,
-                        width=width,
-                        height=height,
-                        file_size=size
+                        width=image.width,
+                        height=image.height,
+                        file_size=image.file_size
                     )
                     added_count += 1
                     _LOGGER.info("Sync Library: Added '%s' -> Tags: %s", os.path.basename(path), tags)
