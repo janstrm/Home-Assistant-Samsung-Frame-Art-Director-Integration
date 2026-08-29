@@ -46,10 +46,15 @@ async def test_media_player_rejects_a_path_bearing_media_identifier(hass, tmp_pa
     client.async_upload_image.assert_not_awaited()
 
 
-async def test_media_player_uploads_a_tracked_opaque_library_item(hass, tmp_path):
+@pytest.mark.parametrize("extension", ["jpg", "png", "webp"])
+async def test_media_player_uploads_a_tracked_opaque_library_item(
+    hass,
+    tmp_path,
+    extension,
+):
     """The Media panel still uploads a database-backed local artwork."""
     image_bytes = b"tracked-image"
-    image_path = Path(hass.config.path("www", "play.png"))
+    image_path = Path(hass.config.path("www", f"play.{extension}"))
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(image_bytes)
     client = SamsungFrameClient(hass, "frame.local")

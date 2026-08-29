@@ -85,6 +85,7 @@ async def upload_service(hass):
     client.async_track_art = AsyncMock()
     client.async_cleanup_storage = AsyncMock()
     client.async_delete_art = AsyncMock()
+    client.async_read_local_art = AsyncMock()
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -225,6 +226,31 @@ async def test_upload_art_keeps_local_filename_behavior(hass, upload_service):
         tags=None,
     )
     upload_service.async_track_art.assert_not_awaited()
+
+
+async def test_upload_art_accepts_a_tracked_opaque_library_id(hass, upload_service):
+    """The gallery can upload a tracked item without exposing its filesystem path."""
+    media_id = f"local-{'a' * 64}"
+    upload_service.async_read_local_art.return_value = {
+        "data": b"TRACKEDIMAGE",
+        "path": "/media/frame/library/tracked.png",
+        "content_type": "image/png",
+    }
+
+    await hass.services.async_call(
+        DOMAIN,
+        "upload_art",
+        {"path": media_id},
+        blocking=True,
+    )
+
+    upload_service.async_read_local_art.assert_awaited_once_with(media_id)
+    upload_service.async_upload_image.assert_awaited_once_with(
+        b"TRACKEDIMAGE",
+        matte="none",
+        source_file="/media/frame/library/tracked.png",
+        tags=None,
+    )
 
 
 async def test_upload_art_reads_a_file_through_the_config_alias(

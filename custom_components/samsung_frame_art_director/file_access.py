@@ -6,7 +6,7 @@ import hashlib
 import mimetypes
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -21,10 +21,7 @@ def _canonical(path: str | os.PathLike[str]) -> Path:
     return Path(path).expanduser().resolve(strict=False)
 
 
-def allowed_local_roots(
-    hass: HomeAssistant,
-    extra_roots: Iterable[str | os.PathLike[str]] = (),
-) -> tuple[Path, ...]:
+def allowed_local_roots(hass: HomeAssistant) -> tuple[Path, ...]:
     """Return the canonical roots from which artwork may be read or deleted."""
     roots = {
         _canonical(hass.config.path()),
@@ -33,19 +30,16 @@ def allowed_local_roots(
 
     media_dirs = getattr(hass.config, "media_dirs", {}) or {}
     roots.update(_canonical(path) for path in media_dirs.values())
-    roots.update(_canonical(path) for path in extra_roots)
     return tuple(roots)
 
 
 def ensure_allowed_local_path(
     hass: HomeAssistant,
     path: str | os.PathLike[str],
-    *,
-    extra_roots: Iterable[str | os.PathLike[str]] = (),
 ) -> Path:
     """Resolve a path and reject traversal, prefix collisions, and symlink escapes."""
     candidate = _canonical(path)
-    if not any(candidate.is_relative_to(root) for root in allowed_local_roots(hass, extra_roots)):
+    if not any(candidate.is_relative_to(root) for root in allowed_local_roots(hass)):
         raise UnsafeLocalPathError("Artwork path is outside the allowed local directories")
     return candidate
 
@@ -70,6 +64,17 @@ def media_identifier(path: str | os.PathLike[str]) -> str:
     """Create a stable opaque identifier without exposing the filesystem path."""
     normalized = os.path.normcase(str(_canonical(path))).encode("utf-8")
     return f"local-{hashlib.sha256(normalized).hexdigest()}"
+
+
+def is_local_media_identifier(value: str) -> bool:
+    """Return whether a string has the exact opaque local-art ID format."""
+    prefix = "local-"
+    digest = value.removeprefix(prefix)
+    return (
+        value.startswith(prefix)
+        and len(digest) == hashlib.sha256().digest_size * 2
+        and all(character in "0123456789abcdef" for character in digest)
+    )
 
 
 def image_content_type(path: str | os.PathLike[str]) -> str:

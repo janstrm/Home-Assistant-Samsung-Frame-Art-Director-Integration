@@ -7,12 +7,13 @@ import sys
 import threading
 import time
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 import pytest
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
+from custom_components.samsung_frame_art_director.file_access import media_identifier
 
 
 def _jpeg(width: int, height: int) -> bytes:
@@ -853,7 +854,10 @@ async def test_local_art_crud(hass, tmp_path):
 
     data = await client.async_get_library_data()
     assert data["items"][0]["id"].startswith("local-")
-    assert data["items"][0]["source"] == str(local_path.resolve())
+    assert data["items"][0]["name"] == "a.jpg"
+    assert data["items"][0]["content_type"] == "image/jpeg"
+    assert "source" not in data["items"][0]
+    assert str(local_path.resolve()) not in repr(data)
 
     assert await client.async_remove_local_art_by_path(str(local_path))
     assert await client.async_get_local_art_paths() == []
@@ -911,3 +915,33 @@ async def test_delete_art_keeps_database_record_when_disk_delete_fails(
         assert await client.async_delete_art(media_id) is False
 
     assert (await client.async_get_library_data())["items"][0]["id"] == media_id
+
+
+async def test_delete_art_refuses_a_tracked_out_of_root_file(hass, tmp_path):
+    """Even a database row cannot authorize deletion outside trusted HA roots."""
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    client.set_db_path(str(tmp_path / "art.db"))
+    config_root = Path(hass.config.path())
+    outside = config_root.with_name(f"{config_root.name}-outside") / "keep.jpg"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_bytes(_jpeg(10, 10))
+    await client.async_add_local_art(
+        str(outside), "test", "outside", 10, 10, outside.stat().st_size
+    )
+
+    assert await client.async_delete_art(media_identifier(outside)) is False
+    assert outside.exists()
+    assert str(outside) in await client.async_get_local_art_paths()
+
+
+async def test_folder_rotation_rejects_a_prefix_collision(hass):
+    """A similarly named directory cannot pass the folder rotation boundary."""
+    client = SamsungFrameClient(hass, "1.2.3.4")
+    config_root = Path(hass.config.path())
+    outside = config_root.with_name(f"{config_root.name}-outside-rotation")
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "art.jpg").write_bytes(_jpeg(10, 10))
+    client.async_upload_image = AsyncMock()
+
+    assert await client.async_rotate_from_folder(str(outside)) is False
+    client.async_upload_image.assert_not_awaited()

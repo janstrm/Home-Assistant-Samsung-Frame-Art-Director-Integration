@@ -10,6 +10,7 @@ from custom_components.samsung_frame_art_director.api import SamsungFrameClient
 from custom_components.samsung_frame_art_director.const import DATA_CLIENT, DOMAIN
 from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
+    signed_thumbnail_url,
 )
 from custom_components.samsung_frame_art_director.views import (
     SamsungFrameThumbnailView,
@@ -32,15 +33,25 @@ async def test_thumbnail_requires_home_assistant_authentication(
     assert response.status == 401
 
 
+@pytest.mark.parametrize(
+    ("extension", "content_type"),
+    [
+        ("jpg", "image/jpeg"),
+        ("png", "image/png"),
+        ("webp", "image/webp"),
+    ],
+)
 async def test_signed_thumbnail_uses_an_opaque_library_identifier(
     hass,
     hass_client_no_auth,
     tmp_path,
+    extension,
+    content_type,
 ):
-    """A signed tracked PNG works without putting its filesystem path in the URL."""
+    """Signed tracked image types work without putting their path in the URL."""
     assert await async_setup_component(hass, "http", {})
-    image_bytes = b"\x89PNG\r\n\x1a\ntracked-image"
-    image_path = Path(hass.config.path("www", "tracked-art.png"))
+    image_bytes = b"tracked-image"
+    image_path = Path(hass.config.path("www", f"tracked-art.{extension}"))
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(image_bytes)
 
@@ -75,8 +86,36 @@ async def test_signed_thumbnail_uses_an_opaque_library_identifier(
     response = await client.get(item.thumbnail)
 
     assert response.status == 200
-    assert response.content_type == "image/png"
+    assert response.content_type == content_type
     assert await response.read() == image_bytes
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        f"local-{'0' * 64}",
+        "/config/secrets.yaml",
+    ],
+)
+async def test_signed_unknown_and_path_like_identifiers_return_not_found(
+    hass,
+    hass_client_no_auth,
+    tmp_path,
+    identifier,
+):
+    """Authentication never turns an unknown or path-like identifier into a read."""
+    assert await async_setup_component(hass, "http", {})
+    frame_client = SamsungFrameClient(hass, "frame.local")
+    frame_client.set_db_path(str(tmp_path / "frame-art.db"))
+    entry = MockConfigEntry(domain=DOMAIN, data={"host": "frame.local"})
+    entry.add_to_hass(hass)
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: frame_client}
+    hass.http.register_view(SamsungFrameThumbnailView(hass))
+    client = await hass_client_no_auth()
+
+    response = await client.get(signed_thumbnail_url(hass, identifier))
+
+    assert response.status == 404
 
 
 async def test_library_hides_a_tracked_symlink_that_escapes_allowed_roots(

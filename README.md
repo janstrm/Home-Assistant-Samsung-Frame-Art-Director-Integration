@@ -127,8 +127,9 @@ data:
 ```
 
 #### upload_art
-Upload and immediately display an image from your HA filesystem or a trusted
-HTTP(S) URL. Remote downloads have a 30-second timeout and a 20 MiB size limit.
+Upload and immediately display an image from your HA filesystem, an opaque
+`local-…` gallery ID, or a trusted HTTP(S) URL. Remote downloads have a
+30-second timeout and a 20 MiB size limit.
 
 Local file:
 ```yaml
@@ -137,6 +138,15 @@ target:
   entity_id: media_player.samsung_frame
 data:
   path: /media/frame/library/example.jpg
+```
+
+Tracked gallery item (the dashboard uses this form so it never exposes a path):
+```yaml
+service: samsung_frame_art_director.upload_art
+target:
+  entity_id: media_player.samsung_frame
+data:
+  path: "local-<opaque-library-id>"
 ```
 
 Remote file:
@@ -229,7 +239,8 @@ data:
 ```
 
 Gallery thumbnails use short-lived Home Assistant signed URLs. Filesystem paths
-are never placed in thumbnail or Media Source identifiers.
+are never placed in gallery attributes, thumbnail URLs, or Media Source
+identifiers.
 
 #### cleanup_storage
 Remove non-favorite artworks from the **TV's internal storage** to free up space.

@@ -91,6 +91,7 @@ custom_components/samsung_frame_art_director/
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
 ├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
 ├── const.py           # Constants, option keys, defaults
+├── file_access.py     # Canonical local-path boundary, opaque IDs, image MIME types
 ├── views.py           # HTTP view serving local thumbnails to the dashboard
 ├── media_source.py    # Media Source provider (browse library in the Media panel)
 ├── sensor.py          # Gallery library sensor (+ gallery page number)

@@ -16,6 +16,7 @@ from .file_access import (
     UnsafeLocalPathError,
     ensure_allowed_local_path,
     image_content_type,
+    is_local_media_identifier,
     media_identifier,
 )
 from typing import Optional, TYPE_CHECKING
@@ -32,6 +33,17 @@ except Exception:
     pass
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _local_art_path_for_media_id(conn, media_id: str) -> str | None:
+    """Resolve an opaque local-art ID through the tracked database records."""
+    if not is_local_media_identifier(media_id):
+        return None
+    rows = conn.execute("SELECT file_path FROM local_art").fetchall()
+    return next(
+        (file_path for (file_path,) in rows if media_identifier(file_path) == media_id),
+        None,
+    )
 
 
 def _mask_secret(value: Optional[str]) -> str:
@@ -458,17 +470,17 @@ class SamsungFrameClient:
                      return bool(new_val)
                  
                  # Local artwork is addressed only through its opaque media ID.
-                 if content_id.startswith("local-"):
-                     rows_local = conn.execute(
-                         "SELECT file_path, is_favorite FROM local_art"
-                     ).fetchall()
-                     for file_path, is_favorite in rows_local:
-                         if media_identifier(file_path) != content_id:
-                             continue
+                 if tracked_path := _local_art_path_for_media_id(conn, content_id):
+                     favorite_row = conn.execute(
+                         "SELECT is_favorite FROM local_art WHERE file_path=?",
+                         (tracked_path,),
+                     ).fetchone()
+                     if favorite_row:
+                         is_favorite = favorite_row[0]
                          new_val = 1 if not is_favorite else 0
                          conn.execute(
                              "UPDATE local_art SET is_favorite=? WHERE file_path=?",
-                             (new_val, file_path),
+                             (new_val, tracked_path),
                          )
                          conn.commit()
                          return bool(new_val)
@@ -499,15 +511,8 @@ class SamsungFrameClient:
             try:
                 with sqlite3.connect(self._db_path) as conn:
                     rows = conn.execute("SELECT file_path FROM local_art").fetchall()
-                    if media_id.startswith("local-"):
-                        tracked_path = next(
-                            (
-                                row[0]
-                                for row in rows
-                                if media_identifier(row[0]) == media_id
-                            ),
-                            None,
-                        )
+                    if is_local_media_identifier(media_id):
+                        tracked_path = _local_art_path_for_media_id(conn, media_id)
                     else:
                         source_row = conn.execute(
                             "SELECT source_file FROM art_library WHERE content_id=?",
@@ -549,7 +554,7 @@ class SamsungFrameClient:
 
     async def async_read_local_art(self, media_id: str) -> dict | None:
         """Read one tracked local artwork by its opaque media identifier."""
-        if not self._db_path or not media_id.startswith("local-"):
+        if not self._db_path or not is_local_media_identifier(media_id):
             return None
         await self._ensure_db()
 
@@ -558,11 +563,8 @@ class SamsungFrameClient:
 
             try:
                 with sqlite3.connect(self._db_path) as conn:
-                    rows = conn.execute("SELECT file_path FROM local_art").fetchall()
-
-                for (tracked_path,) in rows:
-                    if media_identifier(tracked_path) != media_id:
-                        continue
+                    tracked_path = _local_art_path_for_media_id(conn, media_id)
+                if tracked_path:
                     path = ensure_allowed_local_path(self.hass, tracked_path)
                     if not path.is_file():
                         return None
@@ -620,10 +622,8 @@ class SamsungFrameClient:
                             "tags": r[1] or "",
                             "is_favorite": bool(r[2]) if has_fav else False,
                             "type": "local",
-                            # Authenticated dashboard actions still need the
-                            # canonical source path for upload/dedup. It is not
-                            # used as a URL or Media Source identifier.
-                            "source": str(path),
+                            "name": path.name,
+                            "content_type": image_content_type(path),
                         })
             except Exception as e:
                 _LOGGER.error("Library fetch failed: %s", e)
@@ -753,16 +753,12 @@ class SamsungFrameClient:
                     return True
                 
                 elif winner['type'] == 'local':
-                    # Upload first
-                    path = winner['path']
-                    try:
-                        def _read():
-                            with open(path, "rb") as f:
-                                return f.read()
-                        img_data = await asyncio.to_thread(_read)
-                    except FileNotFoundError:
+                    artwork = await self.async_read_local_art(
+                        media_identifier(winner["path"])
+                    )
+                    if not artwork:
                         _LOGGER.warning(
-                            "Rotate: Local file missing (stale DB entry), skipping: %s", path
+                            "Rotate: local item is stale or outside the trusted roots"
                         )
                         filtered.remove(winner)
                         if not filtered:
@@ -770,8 +766,11 @@ class SamsungFrameClient:
                             return False
                         continue
 
-                    _LOGGER.debug("Rotate: uploading local item: %s", path)
-                    await self.async_upload_image(img_data, matte=matte, source_file=path)
+                    await self.async_upload_image(
+                        artwork["data"],
+                        matte=matte,
+                        source_file=artwork["path"],
+                    )
                     
                     # Note: async_upload_image does not return ID easily in all paths, 
                     # but it DOES select the image after upload.
@@ -880,33 +879,32 @@ class SamsungFrameClient:
             return False
 
         def _pick_and_read():
-            import os
             import random
-            path = os.path.expanduser(source_dir)
-            if not os.path.isdir(path):
-                # Try relative to /media if not absolute/found
-                if not path.startswith("/") and os.path.isdir("/media/frame/library"): # simple fallback check
-                     alt = os.path.join("/media/frame/library", path)
-                     if os.path.isdir(alt): path = alt
-            
-            path = os.path.abspath(path)
-            allowed_media = os.path.abspath("/media")
-            allowed_config = os.path.abspath(self.hass.config.path())
-            if not path.startswith(allowed_media) and not path.startswith(allowed_config):
-                _LOGGER.error("Rotate(folder): Path traversal detected or unallowed path: %s", path)
+
+            requested = os.path.expanduser(source_dir)
+            if not os.path.isabs(requested):
+                requested = os.path.join("/media/frame/library", requested)
+            try:
+                path = ensure_allowed_local_path(self.hass, requested)
+            except UnsafeLocalPathError:
+                _LOGGER.error("Rotate(folder): source is outside the trusted roots")
                 return None, None
 
-            if not os.path.exists(path):
+            if not path.is_dir():
                 _LOGGER.warning("Rotate(folder): path %s does not exist", path)
                 return None, None
 
             exts = {".jpg", ".jpeg", ".png", ".webp"}
             files = []
             try:
-                with os.scandir(path) as it:
+                with os.scandir(str(path)) as it:
                     for entry in it:
-                        if entry.is_file() and os.path.splitext(entry.name)[1].lower() in exts:
-                            files.append(entry.path)
+                        if not entry.is_file() or os.path.splitext(entry.name)[1].lower() not in exts:
+                            continue
+                        try:
+                            files.append(ensure_allowed_local_path(self.hass, entry.path))
+                        except UnsafeLocalPathError:
+                            _LOGGER.warning("Rotate(folder): skipping out-of-root file")
             except Exception as e:
                 _LOGGER.warning("Rotate(folder): error scanning %s: %s", path, e)
                 return None, None
@@ -915,12 +913,12 @@ class SamsungFrameClient:
                  _LOGGER.warning("Rotate(folder): no images in %s", path)
                  return None, None
             
-            f = random.choice(files)
+            file_path = random.choice(files)
             try:
-                with open(f, "rb") as fh:
-                    return f, fh.read()
+                with file_path.open("rb") as file_handle:
+                    return str(file_path), file_handle.read()
             except Exception as e:
-                _LOGGER.warning("Rotate(folder): read error %s: %s", f, e)
+                _LOGGER.warning("Rotate(folder): read error %s: %s", file_path, e)
                 return None, None
 
         file_path, image_bytes = await asyncio.to_thread(_pick_and_read)
@@ -1139,11 +1137,25 @@ class SamsungFrameClient:
                         try:
                             import sqlite3
                             with sqlite3.connect(self._db_path) as conn:
-                                row = conn.execute("SELECT source_file FROM art_library WHERE content_id = ?", (results["content_id"],)).fetchone()
-                                if row and row[0] and os.path.isfile(row[0]):
+                                row = conn.execute(
+                                    """
+                                    SELECT art_library.source_file
+                                    FROM art_library
+                                    JOIN local_art
+                                      ON local_art.file_path = art_library.source_file
+                                    WHERE art_library.content_id = ?
+                                    """,
+                                    (results["content_id"],),
+                                ).fetchone()
+                                local_path = (
+                                    ensure_allowed_local_path(self.hass, row[0])
+                                    if row and row[0]
+                                    else None
+                                )
+                                if local_path and local_path.is_file():
                                     _LOGGER.debug("Art Preview: using local file lookup for %s", results["content_id"])
-                                    with open(row[0], "rb") as f:
-                                        results["image"] = f.read()
+                                    with local_path.open("rb") as file_handle:
+                                        results["image"] = file_handle.read()
                                     if results["image"]:
                                         return
                         except Exception as e:

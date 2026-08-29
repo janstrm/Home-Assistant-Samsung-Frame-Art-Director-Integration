@@ -94,7 +94,7 @@ async def async_setup_entry(
                 "is_favorite": bool(item.get("is_favorite")),
                 "category": item.get("category", "Gallery"),
                 "tags": item.get("tags"),
-                "source": item.get("source"),
+                "name": item.get("name"),
                 "thumbnail": signed_thumbnail_url(hass, item["id"]),
             })
 

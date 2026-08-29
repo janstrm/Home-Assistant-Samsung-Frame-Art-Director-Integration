@@ -8,7 +8,6 @@ Each library image is exposed as a playable item; "playing" it on the
 from __future__ import annotations
 
 from datetime import timedelta
-import os
 from urllib.parse import quote
 
 from homeassistant.components.http.auth import async_sign_path
@@ -27,7 +26,7 @@ from .const import DATA_CLIENT, DOMAIN
 _MEDIA_CLASS_DIRECTORY = "directory"
 _MEDIA_CLASS_IMAGE = "image"
 _MEDIA_TYPE_IMAGE = "image"
-_MIME = "image/jpeg"
+_FALLBACK_MIME = "application/octet-stream"
 
 
 async def async_get_media_source(hass: HomeAssistant) -> "ArtLibraryMediaSource":
@@ -64,7 +63,18 @@ class ArtLibraryMediaSource(MediaSource):
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve an item to a viewable image URL (for the Media panel preview)."""
-        return PlayMedia(signed_thumbnail_url(self.hass, item.identifier), _MIME)
+        content_type = _FALLBACK_MIME
+        if client := self._client():
+            data = await client.async_get_library_data()
+            content_type = next(
+                (
+                    entry.get("content_type", _FALLBACK_MIME)
+                    for entry in data.get("items", [])
+                    if entry.get("id") == item.identifier
+                ),
+                _FALLBACK_MIME,
+            )
+        return PlayMedia(signed_thumbnail_url(self.hass, item.identifier), content_type)
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Return the (single-level) list of library images."""
@@ -82,8 +92,8 @@ class ArtLibraryMediaSource(MediaSource):
                         domain=DOMAIN,
                         identifier=media_id,
                         media_class=_MEDIA_CLASS_IMAGE,
-                        media_content_type=_MEDIA_TYPE_IMAGE,
-                        title=f"{star}{os.path.basename(entry.get('source') or media_id)}",
+                        media_content_type=entry.get("content_type", _MEDIA_TYPE_IMAGE),
+                        title=f"{star}{entry.get('name') or media_id}",
                         can_play=True,
                         can_expand=False,
                         thumbnail=signed_thumbnail_url(self.hass, media_id),

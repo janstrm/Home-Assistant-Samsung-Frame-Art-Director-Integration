@@ -305,7 +305,7 @@ views:
                                             "action": "call-service",
                                             "service": "samsung_frame_art_director.upload_art",
                                             "target": { "entity_id": "media_player.samsung_frame" },
-                                            "data": { "path": item.source }
+                                            "data": { "path": item.id }
                                           }
                                         },
                                         {
