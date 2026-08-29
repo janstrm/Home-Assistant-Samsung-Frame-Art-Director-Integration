@@ -15,14 +15,19 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_DUID, DATA_CLIENT, DOMAIN, resolve_matte
+from .const import CONF_DUID, DOMAIN, resolve_matte
+from .runtime import SamsungFrameConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: SamsungFrameConfigEntry,
+    async_add_entities,
+) -> None:
     """Set up the Samsung Frame media player from a config entry."""
-    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    client = entry.runtime_data.client
 
     async def async_update_data():
         """Fetch art-mode status + current artwork over a single connection."""
@@ -36,6 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         update_method=async_update_data,
         update_interval=dt_util.dt.timedelta(seconds=30),
     )
+    entry.runtime_data.coordinator = coordinator
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -64,7 +70,7 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         super().__init__(coordinator)
         self.hass = hass
         self._entry = entry
-        self._client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+        self._client = entry.runtime_data.client
         self._attr_unique_id = entry.data.get("duid") or entry.entry_id
         # Use duid for device identifiers to ensure all platforms group together
         device_id = entry.data.get(CONF_DUID) or entry.entry_id
