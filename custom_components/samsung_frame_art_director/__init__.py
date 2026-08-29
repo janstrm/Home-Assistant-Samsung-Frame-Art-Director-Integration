@@ -164,6 +164,12 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
         from aiohttp import ClientTimeout
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+        if not hass.config.is_allowed_external_url(path):
+            raise ServiceValidationError(
+                "Remote image URL is not trusted; add it to Home Assistant's "
+                "allowlist_external_urls"
+            )
+
         session = async_get_clientsession(hass)
         async with session.get(path, timeout=ClientTimeout(total=30)) as resp:
             resp.raise_for_status()

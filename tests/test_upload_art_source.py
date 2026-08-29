@@ -113,6 +113,7 @@ async def upload_service(hass):
 
 async def test_upload_art_accepts_case_insensitive_https_scheme(hass, upload_service):
     """The public service accepts URL schemes regardless of letter case."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
     resp = _FakeResponse(b"JPEGDATA")
     session = _FakeSession(resp)
     with patch(
@@ -163,6 +164,7 @@ async def test_upload_art_rejects_an_untrusted_remote_host(hass, upload_service)
 
 async def test_upload_art_rejects_declared_oversized_download(hass, upload_service):
     """The public service rejects a remote image larger than 20 MiB."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
     resp = _FakeResponse(b"", content_length=20 * 1024 * 1024 + 1)
     session = _FakeSession(resp)
 
@@ -185,6 +187,7 @@ async def test_upload_art_rejects_declared_oversized_download(hass, upload_servi
 
 async def test_upload_art_rejects_streamed_oversized_download(hass, upload_service):
     """The size limit also applies when the server omits Content-Length."""
+    hass.config.allowlist_external_urls.add("https://render.local/")
     one_mib = b"x" * (1024 * 1024)
     resp = _FakeResponse(b"", content_length=None, chunks=[one_mib] * 21)
     session = _FakeSession(resp)
