@@ -58,6 +58,38 @@ async def test_preprocess_crop_outputs_target_size(hass):
         assert im.size == (3840, 2160)
 
 
+async def test_tracking_art_migrates_legacy_dimension_columns(hass, tmp_path):
+    """Using an older library upgrades columns required by the current schema."""
+    db_path = tmp_path / "legacy-art.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE art_library (
+                content_id TEXT PRIMARY KEY,
+                created_at TIMESTAMP,
+                last_displayed_at TIMESTAMP,
+                on_tv INTEGER DEFAULT 0,
+                is_favorite INTEGER DEFAULT 0,
+                tags TEXT,
+                category TEXT,
+                source_file TEXT,
+                deleted_at TIMESTAMP
+            )
+            """
+        )
+
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(db_path))
+    await client.async_track_art(
+        "MY-MIGRATED",
+        source_file="/media/frame/library/migrated.jpg",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(art_library)")}
+    assert {"width", "height"} <= columns
+
+
 async def test_preprocess_fit_outputs_target_size(hass):
     client = SamsungFrameClient(hass, "1.2.3.4")
     client.set_resize_mode("fit")
