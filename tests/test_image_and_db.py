@@ -1,6 +1,7 @@
 """Tests for image preprocessing and the local-art DB helpers."""
 import asyncio
 import io
+import sqlite3
 import sys
 import time
 from types import SimpleNamespace
@@ -296,6 +297,69 @@ async def test_upload_does_not_reuse_source_missing_from_target_tv(hass, tmp_pat
     assert content_id == "MY-NEW"
     assert upload_calls == 1
     assert selected_ids == ["MY-NEW"]
+
+
+async def test_upload_checks_all_source_ids_for_the_target_tv(hass, tmp_path):
+    """A target-TV match is reused even when another TV's mapping is newer."""
+    upload_calls = 0
+    selected_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def available(self):
+            return [{"content_id": "MY-THIS-TV"}]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def select_image(self, content_id, *, show=True, **_kwargs):
+            assert show is True
+            selected_ids.append(content_id)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    db_path = tmp_path / "art.db"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(db_path))
+    await client.async_track_art("MY-THIS-TV", source_file=source_file)
+    await client.async_track_art("MY-OTHER-TV", source_file=source_file)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE art_library SET last_displayed_at = ? WHERE content_id = ?",
+            (1, "MY-THIS-TV"),
+        )
+        conn.execute(
+            "UPDATE art_library SET last_displayed_at = ? WHERE content_id = ?",
+            (2, "MY-OTHER-TV"),
+        )
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+    assert content_id == "MY-THIS-TV"
+    assert upload_calls == 0
+    assert selected_ids == ["MY-THIS-TV"]
 
 
 async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
