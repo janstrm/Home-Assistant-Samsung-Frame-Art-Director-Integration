@@ -176,6 +176,67 @@ async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
     assert upload_calls == 1
 
 
+async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path):
+    """An already uploaded source is selected instead of uploaded again."""
+    upload_calls = 0
+    selected_ids = []
+
+    class FakeArt:
+        token = "token"
+
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def get_current(self):
+            return {"content_id": "MY-EXISTING"}
+
+        def available(self):
+            return [{"content_id": "MY-EXISTING"}]
+
+        def upload(self, _image, **_kwargs):
+            nonlocal upload_calls
+            upload_calls += 1
+            return "MY-NEW"
+
+        def select_image(self, content_id, *, show=True, **_kwargs):
+            assert show is True
+            selected_ids.append(content_id)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    source_file = "/media/frame/library/sunrise.jpg"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art("MY-EXISTING", source_file=source_file)
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(
+            _jpeg(100, 100),
+            source_file=source_file,
+        )
+
+    assert content_id == "MY-EXISTING"
+    assert upload_calls == 0
+    assert selected_ids == ["MY-EXISTING"]
+
+
 async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
     """Automatic cleanup only deletes art with integration provenance."""
     deleted_ids = []
