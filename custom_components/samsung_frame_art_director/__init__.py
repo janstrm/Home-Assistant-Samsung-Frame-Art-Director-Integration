@@ -57,6 +57,7 @@ PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sen
 _LOGGER = logging.getLogger(__name__)
 
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_REMOTE_REDIRECTS = 5
 
 
 def _send_magic_packet(mac: str, broadcast_ips: list[str] | None = None) -> None:
@@ -149,6 +150,30 @@ def _enable_verbose_logging() -> None:
         pass
 
 
+def _validate_remote_image_url(hass: HomeAssistant, url: str) -> None:
+    """Reject unsafe remote artwork URLs before they reach the HTTP client."""
+    from urllib.parse import urlsplit
+
+    try:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+    except ValueError as err:
+        raise ServiceValidationError("Remote image URL is invalid") from err
+
+    if scheme not in ("http", "https"):
+        raise ServiceValidationError("Unsupported image URL scheme; use HTTP or HTTPS")
+    if not hostname:
+        raise ServiceValidationError("Remote image URL must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ServiceValidationError("Remote image URL must not include credentials")
+    if not hass.config.is_allowed_external_url(url):
+        raise ServiceValidationError(
+            "Remote image URL is not trusted; add it to Home Assistant's "
+            "allowlist_external_urls"
+        )
+
+
 async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
     """Return the image bytes to upload, from an http(s) URL or a local path.
 
@@ -158,32 +183,59 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
     host's filesystem first. Local paths keep the existing ``/media``/``/config``
     sandboxing and are read off-loop in an executor.
     """
-    from urllib.parse import urlsplit
+    from urllib.parse import urljoin, urlsplit
 
-    if urlsplit(path).scheme.lower() in ("http", "https"):
+    parsed_scheme = urlsplit(path).scheme.lower()
+    if parsed_scheme in ("http", "https"):
         from aiohttp import ClientTimeout
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-        if not hass.config.is_allowed_external_url(path):
-            raise ServiceValidationError(
-                "Remote image URL is not trusted; add it to Home Assistant's "
-                "allowlist_external_urls"
-            )
-
+        _validate_remote_image_url(hass, path)
         session = async_get_clientsession(hass)
-        async with session.get(path, timeout=ClientTimeout(total=30)) as resp:
-            resp.raise_for_status()
-            if (
-                resp.content_length is not None
-                and resp.content_length > MAX_REMOTE_IMAGE_BYTES
-            ):
-                raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
-            image_bytes = bytearray()
-            async for chunk in resp.content.iter_chunked(64 * 1024):
-                if len(image_bytes) + len(chunk) > MAX_REMOTE_IMAGE_BYTES:
+        timeout = ClientTimeout(total=30)
+        current_url = path
+        redirect_statuses = {301, 302, 303, 307, 308}
+
+        for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
+            async with session.get(
+                current_url,
+                timeout=timeout,
+                allow_redirects=False,
+            ) as resp:
+                if resp.status in redirect_statuses:
+                    location = resp.headers.get("Location")
+                    if not location:
+                        raise ServiceValidationError(
+                            "Remote image redirect is missing a destination"
+                        )
+                    if redirect_count >= MAX_REMOTE_REDIRECTS:
+                        raise ServiceValidationError(
+                            "Remote image exceeded the redirect limit"
+                        )
+                    current_url = urljoin(current_url, location)
+                    _validate_remote_image_url(hass, current_url)
+                    continue
+
+                _remote_filename(current_url)
+                resp.raise_for_status()
+                if (
+                    resp.content_length is not None
+                    and resp.content_length > MAX_REMOTE_IMAGE_BYTES
+                ):
                     raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
-                image_bytes.extend(chunk)
-            return bytes(image_bytes)
+                image_bytes = bytearray()
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    if len(image_bytes) + len(chunk) > MAX_REMOTE_IMAGE_BYTES:
+                        raise ServiceValidationError(
+                            "Remote image exceeds the 20 MiB limit"
+                        )
+                    image_bytes.extend(chunk)
+                return bytes(image_bytes)
+
+    if parsed_scheme and "://" in path:
+        raise ServiceValidationError(
+            "Unsupported image URL scheme; use HTTP or HTTPS"
+        )
 
     def _read() -> bytes:
         try:
