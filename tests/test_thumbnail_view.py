@@ -35,6 +35,7 @@ async def test_thumbnail_requires_home_assistant_authentication(
 async def test_signed_thumbnail_uses_an_opaque_library_identifier(
     hass,
     hass_client_no_auth,
+    tmp_path,
 ):
     """A signed tracked PNG works without putting its filesystem path in the URL."""
     assert await async_setup_component(hass, "http", {})
@@ -44,7 +45,7 @@ async def test_signed_thumbnail_uses_an_opaque_library_identifier(
     image_path.write_bytes(image_bytes)
 
     frame_client = SamsungFrameClient(hass, "frame.local")
-    frame_client.set_db_path(hass.config.path(".storage", "frame-art.db"))
+    frame_client.set_db_path(str(tmp_path / "frame-art.db"))
     await frame_client.async_add_local_art(
         str(image_path),
         "test",
@@ -93,7 +94,7 @@ async def test_library_hides_a_tracked_symlink_that_escapes_allowed_roots(
         pytest.skip(f"symlinks unavailable: {err}")
 
     frame_client = SamsungFrameClient(hass, "frame.local")
-    frame_client.set_db_path(hass.config.path(".storage", "frame-art.db"))
+    frame_client.set_db_path(str(tmp_path / "frame-art.db"))
     await frame_client.async_add_local_art(
         str(link), "test", "escape", 1, 1, outside.stat().st_size
     )
