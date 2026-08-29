@@ -840,7 +840,9 @@ async def async_setup_entry(
         import os as _os
         db_dir = hass.config.path(DB_DIR)
         _os.makedirs(db_dir, exist_ok=True)
-        client.set_db_path(hass.config.path(f"{DB_DIR}/{DB_FILE}"))
+        db_stem, db_extension = _os.path.splitext(DB_FILE)
+        entry_db_file = f"{db_stem}_{entry.entry_id}{db_extension}"
+        client.set_db_path(hass.config.path(f"{DB_DIR}/{entry_db_file}"))
         await client.async_initialize_database()
     except Exception as err:  # noqa: BLE001
         raise ConfigEntryNotReady(
