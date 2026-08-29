@@ -732,11 +732,15 @@ class SamsungFrameClient:
         
     async def _async_select_image_id(
         self,
-        content_id: str,
+        content_ids: str | list[str],
         matte: str = "none",
         require_available: bool = False,
-    ) -> bool:
-        """Helper to select an image by ID (best effort)."""
+    ) -> Optional[str]:
+        """Select the first matching image ID (best effort)."""
+        candidate_ids = (
+            [content_ids] if isinstance(content_ids, str) else content_ids
+        )
+
          # Fallback logic similar to upload select
         def _do_select():
             tv = self._make_tv()
@@ -756,8 +760,16 @@ class SamsungFrameClient:
                             available_id = str(item)
                         if available_id:
                             available_ids.add(str(available_id))
-                    if content_id not in available_ids:
-                        return False
+                    selected_content_id = next(
+                        (item for item in candidate_ids if item in available_ids),
+                        None,
+                    )
+                    if selected_content_id is None:
+                        return None
+                else:
+                    selected_content_id = candidate_ids[0] if candidate_ids else None
+                    if selected_content_id is None:
+                        return None
 
                 # CRITICAL: For change_matte and 3.0.5, "none" is often the literal string expected,
                 # but select_image prefers None to clear it.
@@ -765,34 +777,47 @@ class SamsungFrameClient:
                 try:
                     # For select_image, we use None for "none"
                     sel_matte = None if tv_matte == "none" else tv_matte
-                    art_client.select_image(content_id, show=True, matte=sel_matte)
+                    art_client.select_image(
+                        selected_content_id,
+                        show=True,
+                        matte=sel_matte,
+                    )
                 except TypeError:
-                    art_client.select_image(content_id, show=True)
+                    art_client.select_image(selected_content_id, show=True)
                     # Secondary fallback: use change_matte
                     if hasattr(art_client, "change_matte"):
                         try:
                             # Apply to both landscape and portrait. 
                             # Try passing None if it's "none" just in case the string is not recognized.
                             final_matte = None if tv_matte == "none" else tv_matte
-                            art_client.change_matte(content_id, matte_id=final_matte, portrait_matte=final_matte)
+                            art_client.change_matte(
+                                selected_content_id,
+                                matte_id=final_matte,
+                                portrait_matte=final_matte,
+                            )
                         except Exception:
                             # If None fails, try the string "none"
                             if tv_matte == "none":
                                 try:
-                                    art_client.change_matte(content_id, matte_id="none", portrait_matte="none")
+                                    art_client.change_matte(
+                                        selected_content_id,
+                                        matte_id="none",
+                                        portrait_matte="none",
+                                    )
                                 except Exception:
                                     pass
-                return True
+                return selected_content_id
             except Exception as e:
                 _LOGGER.debug("Select failed: %s", e)
-                return False
+                return None
             finally:
                 self._close_art_connection(tv, art_client)
 
-        selected = await asyncio.to_thread(_do_select)
-        if selected:
-            self._fire_art_changed(content_id)
-        return selected
+        selected_content_id = await asyncio.to_thread(_do_select)
+        if selected_content_id:
+            self._fire_art_changed(selected_content_id)
+            return str(selected_content_id)
+        return None
 
     async def async_rotate_from_folder(self, source_dir: str, matte: str = "none") -> bool:
         """Rotate art by picking a random file from a folder and uploading it."""
@@ -1311,56 +1336,56 @@ class SamsungFrameClient:
         if source_file and self._db_path:
             await self._ensure_db()
 
-            def _find_existing_content_id() -> Optional[str]:
+            def _find_existing_content_ids() -> list[str]:
                 import sqlite3
 
                 try:
                     with sqlite3.connect(self._db_path) as conn:
-                        row = conn.execute(
+                        rows = conn.execute(
                             """
                             SELECT content_id
                             FROM art_library
                             WHERE source_file = ? AND on_tv = 1
                             ORDER BY COALESCE(last_displayed_at, created_at) DESC
-                            LIMIT 1
                             """,
                             (source_file,),
-                        ).fetchone()
-                    return str(row[0]) if row else None
+                        ).fetchall()
+                    return [str(row[0]) for row in rows]
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.debug(
                         "Upload: existing source lookup failed for %s: %r",
                         source_file,
                         err,
                     )
-                    return None
+                    return []
 
-            existing_content_id = await asyncio.to_thread(
-                _find_existing_content_id
+            existing_content_ids = await asyncio.to_thread(
+                _find_existing_content_ids
             )
-            if existing_content_id:
+            if existing_content_ids:
                 async with self._art_lock:
-                    selected = await self._async_select_image_id(
-                        existing_content_id,
+                    selected_content_id = await self._async_select_image_id(
+                        existing_content_ids,
                         matte=matte,
                         require_available=True,
                     )
-                if selected:
+                if selected_content_id:
                     await self.async_track_art(
-                        existing_content_id,
+                        selected_content_id,
                         tags=tags,
                         source_file=source_file,
                     )
                     _LOGGER.info(
                         "Upload: reused existing content_id=%s for source=%s on host=%s",
-                        existing_content_id,
+                        selected_content_id,
                         source_file,
                         self._host,
                     )
-                    return existing_content_id
+                    return selected_content_id
                 _LOGGER.debug(
-                    "Upload: tracked content_id=%s is absent from target host=%s; uploading",
-                    existing_content_id,
+                    "Upload: tracked content IDs for source=%s are absent from "
+                    "target host=%s; uploading",
+                    source_file,
                     self._host,
                 )
 
