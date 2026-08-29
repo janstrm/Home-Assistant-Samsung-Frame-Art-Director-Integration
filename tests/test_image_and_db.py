@@ -140,6 +140,55 @@ async def test_get_state_falls_back_gracefully_without_tv(hass):
     assert await client.async_get_state() == {"status": None, "content_id": None}
 
 
+async def test_get_state_retains_art_token_and_closes_art_socket(hass):
+    """State polling keeps a rotated Art token and closes its child socket."""
+    art_clients = []
+    tv_clients = []
+    persisted_tokens = []
+
+    class FakeArt:
+        def __init__(self):
+            self.token = "OLD"
+            self.closed = False
+            art_clients.append(self)
+
+        def get_artmode(self):
+            self.token = "NEW"
+            return "on"
+
+        def get_current(self):
+            return {"content_id": "MY-CURRENT"}
+
+        def close(self):
+            self.closed = True
+
+    class FakeTV:
+        token = "OLD"
+
+        def __init__(self, *_args, **_kwargs):
+            self.closed = False
+            tv_clients.append(self)
+
+        def art(self):
+            return FakeArt()
+
+        def close(self):
+            self.closed = True
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    client = SamsungFrameClient(hass, "1.2.3.4", token="OLD")
+    client.set_token_persister(persisted_tokens.append)
+
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        state = await client.async_get_state()
+
+    assert state == {"status": "on", "content_id": "MY-CURRENT"}
+    assert persisted_tokens == ["NEW"]
+    assert len(art_clients) == 1
+    assert art_clients[0].closed is True
+    assert tv_clients[0].closed is True
+
+
 def test_manifest_requires_pypi_samsungtvws():
     # HACS/hassfest discourage git+ requirements. Guard against regressing to a
     # VCS dependency: the requirement must resolve from PyPI.
