@@ -630,9 +630,7 @@ async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
     ):
         assert await async_setup_entry(hass, entry)
         assert entry.runtime_data.client is client
-
-        # Runtime ownership must not depend on the legacy hass.data mirror.
-        hass.data[DOMAIN].pop(entry.entry_id)
+        assert entry.entry_id not in hass.data.get(DOMAIN, {})
         assert await async_unload_entry(hass, entry)
 
     client.async_disconnect.assert_awaited_once_with()
