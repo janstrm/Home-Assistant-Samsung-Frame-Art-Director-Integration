@@ -9,11 +9,12 @@ This module handles:
 import os
 import shutil
 import logging
+from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
 
-from .ai import create_analyzer
+from .ai import create_analyzer, detect_image_mime
 from .api import SamsungFrameClient
 from .const import (
     AI_PROVIDER_GEMINI,
@@ -29,6 +30,41 @@ from .const import (
 from .file_access import UnsafeLocalPathError, ensure_allowed_local_path
 
 _LOGGER = logging.getLogger(__name__)
+
+MAX_AI_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_AI_IMAGE_PIXELS = 40_000_000
+MAX_AI_IMAGE_DIMENSION = 16_384
+
+
+class UnsafeAIImageError(ValueError):
+    """Raised when an image is unsafe to submit to an AI provider."""
+
+
+def _read_and_validate_ai_image(hass, path: Path) -> tuple[bytes, int, int, int]:
+    """Read and validate an AI input while running in HA's executor."""
+    trusted_path = ensure_allowed_local_path(hass, path)
+    if trusted_path.stat().st_size > MAX_AI_IMAGE_BYTES:
+        raise UnsafeAIImageError("Image exceeds the 20 MiB AI input limit")
+
+    with trusted_path.open("rb") as file_handle:
+        data = file_handle.read(MAX_AI_IMAGE_BYTES + 1)
+    if len(data) > MAX_AI_IMAGE_BYTES:
+        raise UnsafeAIImageError("Image exceeds the 20 MiB AI input limit")
+
+    detect_image_mime(data)
+    with Image.open(BytesIO(data)) as image:
+        width, height = image.size
+        if (
+            width <= 0
+            or height <= 0
+            or width > MAX_AI_IMAGE_DIMENSION
+            or height > MAX_AI_IMAGE_DIMENSION
+            or width * height > MAX_AI_IMAGE_PIXELS
+        ):
+            raise UnsafeAIImageError("Image dimensions exceed the AI input limit")
+        image.verify()
+
+    return data, width, height, len(data)
 
 class ContentCurator:
     def __init__(self, hass, entry, api: SamsungFrameClient):
@@ -100,12 +136,13 @@ class ContentCurator:
             
             # 1. Analyze (Atomic: Stop here if fails)
             try:
-                def _read_file():
-                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
-                    with trusted_source.open("rb") as file_handle:
-                        return file_handle.read()
-                
-                data = await self.hass.async_add_executor_job(_read_file)
+                data, width, height, file_size = (
+                    await self.hass.async_add_executor_job(
+                        _read_and_validate_ai_image,
+                        self.hass,
+                        source_path,
+                    )
+                )
                 result = await analyzer.analyze_image(data, prompt="Describe this image")
                 
                 if "error" in result:
@@ -129,16 +166,7 @@ class ContentCurator:
                 
                 _LOGGER.info("Process Inbox: AI tagged '%s' -> Tags: %s", filename, tags)
 
-                # 2. Probe Metadata (Executor)
-                def _probe():
-                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
-                    with Image.open(trusted_source) as img:
-                        w, h = img.size
-                    return w, h, len(data)
-
-                width, height, file_size = await self.hass.async_add_executor_job(_probe)
-
-                # 3. Move to Library (Executor)
+                # 2. Move to Library (Executor)
                 def _move():
                     trusted_source = ensure_allowed_local_path(self.hass, source_path)
                     # Ensure unique filename in library
@@ -277,15 +305,13 @@ class ContentCurator:
 
             for path in missing_files:
                 try:
-                    def _read_and_probe():
-                        trusted_path = ensure_allowed_local_path(self.hass, path)
-                        with trusted_path.open("rb") as file_handle:
-                            data = file_handle.read()
-                        with Image.open(trusted_path) as img:
-                            w, h = img.size
-                        return data, w, h, len(data)
-
-                    data, width, height, size = await self.hass.async_add_executor_job(_read_and_probe)
+                    data, width, height, size = (
+                        await self.hass.async_add_executor_job(
+                            _read_and_validate_ai_image,
+                            self.hass,
+                            path,
+                        )
+                    )
                     
                     result = await analyzer.analyze_image(data, prompt="Describe this image")
                     if "error" in result:

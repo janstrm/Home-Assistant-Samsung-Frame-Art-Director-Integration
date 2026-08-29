@@ -73,8 +73,8 @@ async def test_gemini_uses_injected_session_without_persisting_key():
 
 async def test_process_inbox_uses_home_assistant_shared_session(hass):
     """The public inbox action wires Gemini through HA's shared HTTP client."""
-    inbox = Path(hass.config.path("www", "inbox"))
-    library = Path(hass.config.path("www", "library"))
+    inbox = Path(hass.config.path("www", "ai-session-inbox"))
+    library = Path(hass.config.path("www", "ai-session-library"))
     inbox.mkdir(parents=True, exist_ok=True)
     (inbox / "art.png").write_bytes(_png_bytes())
     entry = SimpleNamespace(

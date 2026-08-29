@@ -97,8 +97,8 @@ async def test_sync_library_registers_an_in_root_file_as_a_canonical_string(hass
 
 async def test_process_inbox_rejects_oversized_input_before_ai(hass):
     """Inbox files are byte-bounded before any provider sees their contents."""
-    inbox = Path(hass.config.path("www", "inbox"))
-    library = Path(hass.config.path("www", "library"))
+    inbox = Path(hass.config.path("www", "oversized-inbox"))
+    library = Path(hass.config.path("www", "oversized-library"))
     inbox.mkdir(parents=True, exist_ok=True)
     image_path = inbox / "large.png"
     Image.new("RGB", (2, 2), (10, 20, 30)).save(image_path, "PNG")
@@ -121,13 +121,13 @@ async def test_process_inbox_rejects_oversized_input_before_ai(hass):
 
 async def test_sync_library_rejects_excessive_dimensions_before_ai(hass):
     """Decoded dimensions are bounded before an untracked image reaches AI."""
-    library = Path(hass.config.path("www", "library"))
+    library = Path(hass.config.path("www", "dimension-library"))
     library.mkdir(parents=True, exist_ok=True)
     image_path = library / "bomb.png"
     Image.new("RGB", (2, 2), (10, 20, 30)).save(image_path, "PNG")
     curator, api, analyzer = _curator(
         hass,
-        inbox_dir=Path(hass.config.path("www", "inbox")),
+        inbox_dir=Path(hass.config.path("www", "dimension-inbox")),
         library_dir=library,
     )
 
