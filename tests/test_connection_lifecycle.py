@@ -1,25 +1,36 @@
 """Regression tests for startup authentication and Art client lifecycle."""
 
 import asyncio
+import logging
 import sys
 import time
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.samsung_frame_art_director import (
+    _enable_verbose_logging,
+    async_setup_entry,
+)
 from custom_components.samsung_frame_art_director.api import (
     AuthenticationRejectedError,
     DeviceUnavailableError,
     SamsungFrameClient,
 )
+from custom_components.samsung_frame_art_director.const import DOMAIN
 
 
 def _fake_module(tv_type):
     return SimpleNamespace(SamsungTVWS=tv_type)
 
 
-async def test_startup_reuses_saved_token_without_token_file_pairing(hass):
+async def test_startup_reuses_saved_token_without_token_file_pairing(
+    hass,
+    tmp_path,
+):
     """A normal HA restart validates the existing identity without re-pairing."""
     constructor_calls = []
     art_clients = []
@@ -56,11 +67,13 @@ async def test_startup_reuses_saved_token_without_token_file_pairing(hass):
         def close(self):
             self.close_calls += 1
 
+    obsolete_pairing_file = tmp_path / "pairing-token.txt"
+    obsolete_pairing_file.write_text("SAVED", encoding="utf-8")
     client = SamsungFrameClient(
         hass,
         "frame.local",
         token="SAVED",
-        token_file_path="must-not-be-used.txt",
+        token_file_path=str(obsolete_pairing_file),
         port=8002,
     )
 
@@ -81,6 +94,7 @@ async def test_startup_reuses_saved_token_without_token_file_pairing(hass):
     assert len(art_clients) == len(tv_clients) == 1
     assert art_clients[0].close_calls == 1
     assert tv_clients[0].close_calls == 1
+    assert obsolete_pairing_file.exists() is False
 
 
 async def test_offline_tv_is_a_transient_setup_failure(hass):
@@ -447,3 +461,45 @@ async def test_state_poll_and_setting_call_share_one_serialization_lock(hass):
         assert await brightness_task == 5
 
     assert events == ["state-start", "state-end", "brightness"]
+
+
+@pytest.mark.parametrize(
+    ("client_error", "setup_error"),
+    [
+        (AuthenticationRejectedError("rejected"), ConfigEntryAuthFailed),
+        (DeviceUnavailableError("offline"), ConfigEntryNotReady),
+    ],
+)
+async def test_setup_maps_auth_and_reachability_failures_separately(
+    hass,
+    client_error,
+    setup_error,
+):
+    """HA starts reauth only for rejection and retries an offline device."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.async_connect_and_pair = AsyncMock(side_effect=client_error)
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        pytest.raises(setup_error),
+    ):
+        await async_setup_entry(hass, entry)
+
+
+def test_verbose_logging_suppresses_library_token_messages():
+    """The dependency module known to print tokens never runs below WARNING."""
+    connection_logger = logging.getLogger("samsungtvws.connection")
+    previous_level = connection_logger.level
+    try:
+        _enable_verbose_logging()
+        assert connection_logger.getEffectiveLevel() >= logging.WARNING
+    finally:
+        connection_logger.setLevel(previous_level)

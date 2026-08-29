@@ -98,6 +98,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             logging.getLogger("samsung_frame_art_director").setLevel(logging.DEBUG)
             logging.getLogger(__name__).setLevel(logging.DEBUG)
             logging.getLogger("samsungtvws").setLevel(logging.INFO)
+            logging.getLogger("samsungtvws.connection").setLevel(logging.WARNING)
         except Exception:  # noqa: BLE001
             pass
         _LOGGER.debug("Flow step_user: user_input=%s", bool(user_input))

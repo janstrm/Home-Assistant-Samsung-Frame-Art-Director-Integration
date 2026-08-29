@@ -1024,6 +1024,20 @@ class SamsungFrameClient:
             self._duid = device.get("duid") or device.get("udn")
             self._port = port
             self._connected = True
+            token_path = self._token_file_path
+            if token_path:
+                def _remove_pairing_file() -> None:
+                    try:
+                        os.remove(token_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        _LOGGER.debug(
+                            "Could not remove obsolete pairing token file for host=%s",
+                            self._host,
+                        )
+
+                await asyncio.to_thread(_remove_pairing_file)
             _LOGGER.info(
                 "Client: authenticated host=%s port=%s duid=%s",
                 self._host,

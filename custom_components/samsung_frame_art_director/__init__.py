@@ -144,6 +144,8 @@ def _enable_verbose_logging() -> None:
         logging.getLogger("samsung_frame_art_director").setLevel(logging.DEBUG)
         # Third-party lib at info
         logging.getLogger("samsungtvws").setLevel(logging.INFO)
+        # samsungtvws 3.0.5 includes token values in connection INFO logs.
+        logging.getLogger("samsungtvws.connection").setLevel(logging.WARNING)
         _LOGGER.info("Verbose logging enabled for Samsung Frame Art Director (debug) and samsungtvws (info)")
     except Exception:  # noqa: BLE001
         # Best effort; logging config is managed by HA logger integration normally
