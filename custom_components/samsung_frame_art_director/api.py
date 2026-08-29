@@ -809,11 +809,22 @@ class SamsungFrameClient:
                 return selected_content_id
             except Exception as e:
                 _LOGGER.debug("Select failed: %s", e)
+                if require_available:
+                    raise
                 return None
             finally:
                 self._close_art_connection(tv, art_client)
 
-        selected_content_id = await asyncio.to_thread(_do_select)
+        try:
+            selected_content_id = await asyncio.wait_for(
+                asyncio.to_thread(_do_select),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            _LOGGER.debug("Select timed out on host=%s", self._host)
+            if require_available:
+                raise
+            return None
         if selected_content_id:
             self._fire_art_changed(selected_content_id)
             return str(selected_content_id)
@@ -1333,7 +1344,10 @@ class SamsungFrameClient:
         tags: Optional[str] = None,
     ) -> Optional[str]:
         """Upload an image, select it, and return the TV content ID."""
-        if source_file and self._db_path:
+        async def _reuse_existing_upload() -> Optional[str]:
+            if not source_file or not self._db_path:
+                return None
+
             await self._ensure_db()
 
             def _find_existing_content_ids() -> list[str]:
@@ -1362,32 +1376,40 @@ class SamsungFrameClient:
             existing_content_ids = await asyncio.to_thread(
                 _find_existing_content_ids
             )
-            if existing_content_ids:
-                async with self._art_lock:
-                    selected_content_id = await self._async_select_image_id(
-                        existing_content_ids,
-                        matte=matte,
-                        require_available=True,
-                    )
-                if selected_content_id:
-                    await self.async_track_art(
-                        selected_content_id,
-                        tags=tags,
-                        source_file=source_file,
-                    )
-                    _LOGGER.info(
-                        "Upload: reused existing content_id=%s for source=%s on host=%s",
-                        selected_content_id,
-                        source_file,
-                        self._host,
-                    )
-                    return selected_content_id
-                _LOGGER.debug(
-                    "Upload: tracked content IDs for source=%s are absent from "
-                    "target host=%s; uploading",
+            if not existing_content_ids:
+                return None
+
+            selected_content_id = await self._async_select_image_id(
+                existing_content_ids,
+                matte=matte,
+                require_available=True,
+            )
+            if selected_content_id:
+                await self.async_track_art(
+                    selected_content_id,
+                    tags=tags,
+                    source_file=source_file,
+                )
+                _LOGGER.info(
+                    "Upload: reused existing content_id=%s for source=%s on host=%s",
+                    selected_content_id,
                     source_file,
                     self._host,
                 )
+                return selected_content_id
+            _LOGGER.debug(
+                "Upload: tracked content IDs for source=%s are absent from "
+                "target host=%s; uploading",
+                source_file,
+                self._host,
+            )
+            return None
+
+        if source_file and self._db_path:
+            async with self._art_lock:
+                existing_content_id = await _reuse_existing_upload()
+            if existing_content_id:
+                return existing_content_id
 
         processed = await self.async_preprocess_image(image_bytes)
         _LOGGER.debug("Upload: processed image size=%s bytes for host=%s", len(processed), self._host)
@@ -1448,6 +1470,11 @@ class SamsungFrameClient:
                 self._close_art_connection(tv, art_client)
 
         async with self._art_lock:
+            # Another caller may have uploaded this source while preprocessing.
+            existing_content_id = await _reuse_existing_upload()
+            if existing_content_id:
+                return existing_content_id
+
             # Retry a few times on transient art channel ConnectionFailure
             backoff_seconds = [0.75, 1.5, 2.5, 4.0]
             for attempt in range(1, 5 + 1):
