@@ -43,8 +43,11 @@ async def test_startup_reuses_saved_token_without_token_file_pairing(
             self.close_calls = 0
             art_clients.append(self)
 
+        def open(self):
+            return object()
+
         def supported(self):
-            return True
+            raise AssertionError("REST support probing is not authentication")
 
         def close(self):
             self.close_calls += 1
@@ -122,7 +125,7 @@ async def test_rejected_saved_token_is_an_auth_failure(hass):
         pass
 
     class FakeArt:
-        def supported(self):
+        def open(self):
             raise UnauthorizedError("rejected")
 
         def close(self):
@@ -158,7 +161,7 @@ async def test_rest_duid_does_not_replace_authenticated_validation(hass):
         pass
 
     class FakeArt:
-        def supported(self):
+        def open(self):
             raise ConnectionFailure("art channel failed")
 
         def close(self):
@@ -199,12 +202,12 @@ async def test_timed_out_port_finishes_before_fallback_starts(hass):
         def __init__(self, port):
             self._port = port
 
-        def supported(self):
+        def open(self):
             if self._port == 8002:
                 events.append("first-start")
                 time.sleep(0.05)
                 events.append("first-end")
-            return True
+            return object()
 
         def close(self):
             return None
