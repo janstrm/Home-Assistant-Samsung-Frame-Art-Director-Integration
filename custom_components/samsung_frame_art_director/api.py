@@ -414,6 +414,12 @@ class SamsungFrameClient:
                     if "source_file" not in existing_cols:
                         _LOGGER.info("DB Sync: adding 'source_file' column to art_library")
                         conn.execute("ALTER TABLE art_library ADD COLUMN source_file TEXT")
+                    if "width" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'width' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN width INTEGER")
+                    if "height" not in existing_cols:
+                        _LOGGER.info("DB Sync: adding 'height' column to art_library")
+                        conn.execute("ALTER TABLE art_library ADD COLUMN height INTEGER")
 
                     # Migration: local_art
                     local_cols = [row[1] for row in conn.execute("PRAGMA table_info(local_art)")]
