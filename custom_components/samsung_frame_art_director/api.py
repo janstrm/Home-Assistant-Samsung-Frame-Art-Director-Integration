@@ -803,25 +803,15 @@ class SamsungFrameClient:
                     # Secondary fallback: use change_matte
                     if hasattr(art_client, "change_matte"):
                         try:
-                            # Apply to both landscape and portrait. 
-                            # Try passing None if it's "none" just in case the string is not recognized.
-                            final_matte = None if tv_matte == "none" else tv_matte
+                            # Do not overwrite portrait_matte_id. LS03D/LS03F
+                            # reject that optional parameter for landscape art.
+                            final_matte = "none" if tv_matte == "none" else tv_matte
                             art_client.change_matte(
                                 selected_content_id,
                                 matte_id=final_matte,
-                                portrait_matte=final_matte,
                             )
                         except Exception:
-                            # If None fails, try the string "none"
-                            if tv_matte == "none":
-                                try:
-                                    art_client.change_matte(
-                                        selected_content_id,
-                                        matte_id="none",
-                                        portrait_matte="none",
-                                    )
-                                except Exception:
-                                    pass
+                            pass
                 return selected_content_id
             except Exception as e:
                 _LOGGER.debug("Select failed: %s", e)
@@ -1480,7 +1470,6 @@ class SamsungFrameClient:
                             art_client.change_matte(
                                 remote_filename,
                                 matte_id=final_matte,
-                                portrait_matte=final_matte,
                             )
                         except Exception as err:  # noqa: BLE001
                             _LOGGER.debug("Upload: change_matte failed: %r", err)
