@@ -340,7 +340,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:  # noqa: BLE001
         _LOGGER.debug("Could not pre-create media folders", exc_info=True)
 
-    # Initialize and connect client; use persistent token file under /config
+    # Initialize with the persisted ConfigEntry identity. The pairing file path
+    # is retained only so an obsolete config-flow token file can be removed
+    # after authenticated startup succeeds.
     host = entry.data.get("host")
     safe_host = str(host).replace("/", "_").replace(".", "_")
     token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")

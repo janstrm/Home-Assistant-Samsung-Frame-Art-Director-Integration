@@ -232,7 +232,7 @@ class SamsungFrameClient:
             return None
 
         def _call():
-            tv = self._make_tv()
+            tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
             art = None
             try:
                 art = tv.art()
@@ -285,7 +285,7 @@ class SamsungFrameClient:
         adds no extra connections beyond the existing status poll.
         """
         def _read() -> dict:
-            tv = self._make_tv()
+            tv = self._make_tv(timeout=10)
             art = None
             status = None
             content_id = None
@@ -990,9 +990,10 @@ class SamsungFrameClient:
                     timeout=CONNECTION_ATTEMPT_TIMEOUT_SECONDS,
                 )
                 art = tv.art()
-                # This opens the authenticated Art websocket. Public REST
-                # identity data alone is deliberately not sufficient.
-                art.supported()
+                # Opening the Art websocket proves the saved token is accepted.
+                # ``art.supported()`` and device info are both public REST and
+                # therefore cannot be used as authentication evidence.
+                art.open()
                 info = tv.rest_device_info()
                 device = info.get("device") if isinstance(info, dict) else None
                 if not isinstance(device, dict) or not device:
@@ -1073,7 +1074,7 @@ class SamsungFrameClient:
             tv = None
             art = None
             try:
-                tv = self._make_tv()
+                tv = self._make_tv(timeout=10)
             except (ConnectionError, TimeoutError, OSError) as e:
                 _LOGGER.debug("get_artmode: connection error on %s: %r", self._host, e)
                 return None
@@ -1112,7 +1113,7 @@ class SamsungFrameClient:
             tv = None
             art_client = None
             try:
-                tv = self._make_tv()
+                tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
                 art_client = tv.art()
                 # Prime the art channel
                 try:
@@ -1255,7 +1256,10 @@ class SamsungFrameClient:
                 self._host,
                 bool(self._token),
             )
-            return self._make_tv(port=self._port)
+            return self._make_tv(
+                port=self._port,
+                timeout=ART_OPERATION_TIMEOUT_SECONDS,
+            )
 
         def _set():
             tv_local = _make_client()
@@ -1477,12 +1481,12 @@ class SamsungFrameClient:
             _LOGGER.warning("samsungtvws import failed, cannot upload image: %s", err)
             return
 
-        def _make_client():
+        def _make_client(timeout: float):
             # Force SSL websocket port 8002 for upload operations
-            return self._make_tv(port=8002)
+            return self._make_tv(port=8002, timeout=timeout)
 
         def _upload_once():
-            tv = _make_client()
+            tv = _make_client(120)
             art_client = None
             try:
                 _LOGGER.debug("Upload: starting art.upload on %s (matte=%s)", self._host, matte)
@@ -1496,7 +1500,7 @@ class SamsungFrameClient:
 
         def _select_once(remote_filename: str) -> None:
             """Select an uploaded image without ever repeating the upload."""
-            tv = _make_client()
+            tv = _make_client(30)
             art_client = None
             try:
                 # For change_matte and 3.0.5, "none" is the literal string
@@ -1534,7 +1538,9 @@ class SamsungFrameClient:
                     try:
                         from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
                         def _prime():
-                            tvp = self._make_tv()
+                            tvp = self._make_tv(
+                                timeout=ART_OPERATION_TIMEOUT_SECONDS
+                            )
                             art_client = None
                             try:
                                 art_client = tvp.art()
@@ -1548,7 +1554,10 @@ class SamsungFrameClient:
                                     pass
                             finally:
                                 self._close_art_connection(tvp, art_client)
-                        await asyncio.to_thread(_prime)
+                        await self._async_run_blocking_contained(
+                            _prime,
+                            ART_OPERATION_TIMEOUT_SECONDS,
+                        )
                         await asyncio.sleep(0.3)
                     except Exception:
                         pass
@@ -1634,7 +1643,7 @@ class SamsungFrameClient:
             return {"error": str(err)}
 
         def _collect() -> dict:
-            tv = self._make_tv()
+            tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
             art = None
             result: dict = {"host": self._host}
             try:
@@ -1694,7 +1703,7 @@ class SamsungFrameClient:
             return {"error": str(err)}
 
         def _fetch_tv_state():
-            tv = self._make_tv()
+            tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
             art = None
             current_id = None
             available: list = []
@@ -1846,6 +1855,46 @@ class SamsungFrameClient:
 
         # Execute deletion in batches under art lock
         async with self._art_lock:
+            if preserve_current:
+                def _read_current_id() -> str | None:
+                    tv = self._make_tv(
+                        timeout=ART_OPERATION_TIMEOUT_SECONDS
+                    )
+                    art = None
+                    try:
+                        art = tv.art()
+                        current = art.get_current()
+                        if isinstance(current, dict):
+                            return current.get("content_id") or current.get(
+                                "contentId"
+                            )
+                        return None
+                    finally:
+                        self._close_art_connection(tv, art)
+
+                try:
+                    latest_current = await self._async_run_blocking_contained(
+                        _read_current_id,
+                        ART_OPERATION_TIMEOUT_SECONDS,
+                    )
+                except Exception:  # noqa: BLE001
+                    summary["errors"].append(
+                        "Current artwork could not be revalidated; deletion aborted"
+                    )
+                    summary["to_delete"] = []
+                    return summary
+                if latest_current in to_delete:
+                    to_delete = [
+                        content_id
+                        for content_id in to_delete
+                        if content_id != latest_current
+                    ]
+                    summary["to_delete"] = to_delete
+                    if latest_current not in summary["skipped_current"]:
+                        summary["skipped_current"].append(latest_current)
+                if not to_delete:
+                    return summary
+
             try:
                 from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
             except Exception as err:  # noqa: BLE001
@@ -1857,7 +1906,7 @@ class SamsungFrameClient:
                 errors: list[str] = []
                 if not ids:
                     return deleted, errors
-                tv = self._make_tv()
+                tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
                 art = None
                 try:
                     art = tv.art()

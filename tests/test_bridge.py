@@ -61,6 +61,9 @@ async def test_sync_pairing_fallback_reuses_and_closes_one_art_child():
         def supported(self):
             return True
 
+        def open(self):
+            return object()
+
         def get_artmode(self):
             return "on"
 
