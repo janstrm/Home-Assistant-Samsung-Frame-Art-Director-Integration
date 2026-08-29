@@ -822,6 +822,83 @@ async def test_cleanup_never_deletes_manual_tv_art(hass, tmp_path):
     assert deleted_ids == ["MY-INTEGRATION"]
 
 
+async def test_cleanup_retries_tv_deletion_without_forgetting_database_state(
+    hass, tmp_path
+):
+    """A failed TV deletion remains tracked and succeeds on a later cleanup."""
+    deletion_fails = True
+    deleted_ids = []
+
+    class FakeArt:
+        def get_current(self):
+            return {"content_id": "MY-OTHER"}
+
+        def available(self):
+            return [{"content_id": "MY-RETRY"}]
+
+        def delete_list(self, content_ids):
+            if deletion_fails:
+                raise ConnectionError("TV rejected batch delete")
+            deleted_ids.extend(content_ids)
+
+        def delete(self, content_id):
+            if deletion_fails:
+                raise ConnectionError("TV rejected delete")
+            deleted_ids.append(content_id)
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    db_path = tmp_path / "art.db"
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(db_path))
+    await client.async_track_art(
+        "MY-RETRY",
+        source_file="/media/frame/library/retry.jpg",
+    )
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        failed = await client.async_cleanup_storage(
+            max_items=0,
+            preserve_current=False,
+        )
+        with sqlite3.connect(db_path) as conn:
+            failed_row = conn.execute(
+                "SELECT on_tv, deleted_at FROM art_library WHERE content_id=?",
+                ("MY-RETRY",),
+            ).fetchone()
+
+        deletion_fails = False
+        retried = await client.async_cleanup_storage(
+            max_items=0,
+            preserve_current=False,
+        )
+
+    with sqlite3.connect(db_path) as conn:
+        retried_row = conn.execute(
+            "SELECT on_tv, deleted_at FROM art_library WHERE content_id=?",
+            ("MY-RETRY",),
+        ).fetchone()
+
+    assert failed["deleted"] == []
+    assert failed["errors"]
+    assert failed_row == (1, None)
+    assert retried["deleted"] == ["MY-RETRY"]
+    assert deleted_ids == ["MY-RETRY"]
+    assert retried_row[0] == 0
+    assert retried_row[1] is not None
+
+
 async def test_cleanup_max_items_counts_only_managed_tv_art(hass, tmp_path):
     """Manual TV art must not force managed art below its configured limit."""
     deleted_ids = []
