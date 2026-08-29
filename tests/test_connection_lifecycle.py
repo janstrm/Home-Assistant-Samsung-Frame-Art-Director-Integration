@@ -596,6 +596,38 @@ async def test_setup_stops_before_tv_connection_when_database_init_fails(hass):
     client.async_connect_and_pair.assert_not_awaited()
 
 
+async def test_platform_setup_failure_clears_partial_runtime(hass):
+    """A partially forwarded entry must never remain action-addressable."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock()
+    client.async_connect_and_pair = AsyncMock()
+    client.async_disconnect = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            AsyncMock(side_effect=RuntimeError("platform setup failed")),
+        ),
+        pytest.raises(RuntimeError, match="platform setup failed"),
+    ):
+        await async_setup_entry(hass, entry)
+
+    assert getattr(entry, "runtime_data", None) is None
+    client.async_disconnect.assert_awaited_once_with()
+
+
 async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
     """A loaded entry retains and disconnects its own Frame client."""
     hass.http = MagicMock()
