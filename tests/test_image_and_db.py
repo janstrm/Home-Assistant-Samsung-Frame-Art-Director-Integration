@@ -749,6 +749,35 @@ async def test_cleanup_max_items_counts_only_managed_tv_art(hass, tmp_path):
     assert deleted_ids == []
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_cleanup_preserving_unknown_current_art_fails_closed(
+    hass, tmp_path, dry_run
+):
+    """Cleanup must not plan or perform deletion when current art is unknown."""
+    deleted_ids = []
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    await client.async_track_art(
+        "MY-MANAGED",
+        source_file="/media/frame/library/managed.jpg",
+    )
+
+    fake_samsungtvws = _cleanup_samsungtvws(["MY-MANAGED"], deleted_ids)
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        summary = await client.async_cleanup_storage(
+            max_items=0,
+            preserve_current=True,
+            dry_run=dry_run,
+        )
+
+    assert summary["to_delete"] == []
+    assert summary["deleted"] == []
+    assert summary["errors"] == [
+        "Current artwork could not be determined; deletion aborted"
+    ]
+    assert deleted_ids == []
+
+
 async def test_cleanup_without_provenance_db_deletes_nothing(hass):
     """Cleanup fails closed when no provenance database is configured."""
     deleted_ids = []
