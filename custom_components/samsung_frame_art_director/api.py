@@ -120,6 +120,27 @@ class SamsungFrameClient:
                 except Exception:  # noqa: BLE001
                     _LOGGER.debug("Token persister failed", exc_info=True)
 
+    def _close_art_connection(self, tv, art=None) -> None:
+        """Persist the freshest token and close Art before its parent client."""
+        token_source = tv
+        if art is not None:
+            try:
+                if getattr(art, "token", None):
+                    token_source = art
+            except Exception:  # noqa: BLE001
+                pass
+        self._capture_token(token_source)
+
+        for client in (art, tv):
+            if client is None:
+                continue
+            closer = getattr(client, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def async_send_key(self, key: str) -> None:
         """Send a remote key over a properly-identified connection."""
         def _send():
@@ -222,27 +243,23 @@ class SamsungFrameClient:
         """
         def _read() -> dict:
             tv = self._make_tv()
+            art = None
             status = None
             content_id = None
             try:
+                art = tv.art()
                 try:
-                    status = tv.art().get_artmode()
+                    status = art.get_artmode()
                 except Exception:  # noqa: BLE001
                     pass
                 try:
-                    cur = tv.art().get_current()
+                    cur = art.get_current()
                     if isinstance(cur, dict):
                         content_id = cur.get("content_id") or cur.get("contentId")
                 except Exception:  # noqa: BLE001
                     pass
             finally:
-                self._capture_token(tv)
-                closer = getattr(tv, "close", None)
-                if callable(closer):
-                    try:
-                        closer()
-                    except Exception:  # noqa: BLE001
-                        pass
+                self._close_art_connection(tv, art)
             return {
                 "status": str(status).lower() if status is not None else None,
                 "content_id": content_id,
