@@ -159,6 +159,12 @@ async def test_targeted_actions_use_only_the_selected_frames_runtime_and_options
         assert await async_setup_entry(hass, first_entry)
         assert await async_setup_entry(hass, second_entry)
 
+    first_db_path = first_client.set_db_path.call_args.args[0]
+    second_db_path = second_client.set_db_path.call_args.args[0]
+    assert first_db_path != second_db_path
+    assert first_entry.entry_id in first_db_path
+    assert second_entry.entry_id in second_db_path
+
     entity = er.async_get(hass).async_get_or_create(
         "media_player",
         DOMAIN,
