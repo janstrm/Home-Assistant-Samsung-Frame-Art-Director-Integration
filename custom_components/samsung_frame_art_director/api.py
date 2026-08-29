@@ -802,16 +802,13 @@ class SamsungFrameClient:
                     art_client.select_image(selected_content_id, show=True)
                     # Secondary fallback: use change_matte
                     if hasattr(art_client, "change_matte"):
-                        try:
-                            # Do not overwrite portrait_matte_id. LS03D/LS03F
-                            # reject that optional parameter for landscape art.
-                            final_matte = "none" if tv_matte == "none" else tv_matte
-                            art_client.change_matte(
-                                selected_content_id,
-                                matte_id=final_matte,
-                            )
-                        except Exception:
-                            pass
+                        # Do not overwrite portrait_matte_id. LS03D/LS03F
+                        # reject that optional parameter for landscape art.
+                        final_matte = "none" if tv_matte == "none" else tv_matte
+                        art_client.change_matte(
+                            selected_content_id,
+                            matte_id=final_matte,
+                        )
                 return selected_content_id
             except Exception as e:
                 _LOGGER.debug("Select failed: %s", e)
@@ -1465,14 +1462,11 @@ class SamsungFrameClient:
                     _LOGGER.debug("Upload: select_image does not support 'matte' keyword, falling back")
                     art_client.select_image(remote_filename, show=True)
                     if hasattr(art_client, "change_matte"):
-                        try:
-                            final_matte = "none" if tv_matte == "none" else tv_matte
-                            art_client.change_matte(
-                                remote_filename,
-                                matte_id=final_matte,
-                            )
-                        except Exception as err:  # noqa: BLE001
-                            _LOGGER.debug("Upload: change_matte failed: %r", err)
+                        final_matte = "none" if tv_matte == "none" else tv_matte
+                        art_client.change_matte(
+                            remote_filename,
+                            matte_id=final_matte,
+                        )
             finally:
                 self._close_art_connection(tv, art_client)
 
