@@ -179,6 +179,71 @@ async def test_upload_selection_timeout_does_not_duplicate_upload(hass):
     assert upload_calls == 1
 
 
+async def test_upload_matte_fallback_does_not_overwrite_portrait_matte(hass):
+    """LS03D/F accepts a landscape matte when portrait matte is omitted."""
+    matte_calls = []
+    applied_mattes = []
+
+    class FakeResponseError(Exception):
+        pass
+
+    class FakeArt:
+        token = "token"
+
+        def supported(self):
+            return True
+
+        def get_artmode(self):
+            return "on"
+
+        def upload(self, _image, **_kwargs):
+            return "MY-MATTE"
+
+        def select_image(self, _content_id, *, show=True):
+            assert show is True
+
+        def change_matte(
+            self,
+            content_id,
+            matte_id=None,
+            portrait_matte=None,
+        ):
+            matte_calls.append((content_id, matte_id, portrait_matte))
+            if portrait_matte is not None:
+                raise FakeResponseError(
+                    "`change_matte` request failed with error number -7"
+                )
+            applied_mattes.append(matte_id)
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "token"
+
+        def __init__(self, *_args, **_kwargs):
+            self._art = FakeArt()
+
+        def art(self):
+            return self._art
+
+        def close(self):
+            return None
+
+    fake_samsungtvws = SimpleNamespace(SamsungTVWS=FakeTV)
+    client = SamsungFrameClient(hass, "1.2.3.4", token="token")
+
+    with patch.dict(sys.modules, {"samsungtvws": fake_samsungtvws}):
+        content_id = await client.async_upload_image(
+            _jpeg(100, 100),
+            matte="shadowbox_polar",
+        )
+
+    assert content_id == "MY-MATTE"
+    assert matte_calls == [("MY-MATTE", "shadowbox_polar", None)]
+    assert applied_mattes == ["shadowbox_polar"]
+
+
 async def test_upload_reuses_existing_content_for_the_same_source(hass, tmp_path):
     """An already uploaded source is selected instead of uploaded again."""
     upload_calls = 0
