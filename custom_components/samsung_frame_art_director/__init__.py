@@ -705,33 +705,44 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
     # Service to change gallery page (Avoiding Jinja in frontend tap_action)
     async def async_change_page(call: ServiceCall) -> None:
         step = call.data.get("step", 0)
-        entity_id = "number.samsung_frame_gallery_page"
-        state = hass.states.get(entity_id)
-        
-        # Get total items to calculate max page
-        lib_sensor = hass.states.get("sensor.samsung_frame_art_library")
-        total_items = 0
-        if lib_sensor and lib_sensor.state not in ("unknown", "unavailable"):
-            try:
-                total_items = int(lib_sensor.state)
-            except ValueError:
-                pass
-        
-        page_size = 25
-        max_page = max(1, (total_items + page_size - 1) // page_size)
+        for target in await async_resolve_action_targets(hass, call):
+            page_entity_id = entry_entity_id(
+                hass, target.entry, "number", "gallery_page"
+            )
+            library_entity_id = entry_entity_id(
+                hass, target.entry, "sensor", "art_library"
+            )
+            page_state = (
+                hass.states.get(page_entity_id) if page_entity_id else None
+            )
+            library_state = (
+                hass.states.get(library_entity_id) if library_entity_id else None
+            )
 
-        if state and state.state not in ("unknown", "unavailable"):
-            try:
-                current = int(float(state.state))
-                new_val = max(1, min(max_page, current + step))
-                await hass.services.async_call(
-                    "number", 
-                    "set_value", 
-                    {"entity_id": entity_id, "value": new_val},
-                    blocking=False
-                )
-            except ValueError:
-                pass
+            total_items = 0
+            if library_state and library_state.state not in (
+                "unknown",
+                "unavailable",
+            ):
+                try:
+                    total_items = int(library_state.state)
+                except ValueError:
+                    pass
+
+            page_size = 25
+            max_page = max(1, (total_items + page_size - 1) // page_size)
+            if page_state and page_state.state not in ("unknown", "unavailable"):
+                try:
+                    current = int(float(page_state.state))
+                    new_val = max(1, min(max_page, current + step))
+                    await hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {"entity_id": page_entity_id, "value": new_val},
+                        blocking=False,
+                    )
+                except ValueError:
+                    pass
     
     hass.services.async_register(DOMAIN, "change_gallery_page", async_change_page)
 
