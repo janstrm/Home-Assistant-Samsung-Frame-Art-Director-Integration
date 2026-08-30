@@ -150,7 +150,6 @@ async def async_try_connect(host: str, port: int, token: str | None, token_file_
 
     def _attempt() -> PairResult:
         tv = None
-        art = None
         try:
             from samsungtvws import SamsungTVWS  # type: ignore
 
@@ -180,10 +179,11 @@ async def async_try_connect(host: str, port: int, token: str | None, token_file_
                         timeout=31,
                     )
 
-            # Open one authenticated Art child to provoke/confirm pairing.
-            art = tv.art()
+            # Pair and authenticate on the remote-control channel. The Art App
+            # websocket is a separate unauthenticated channel and must not be
+            # used as proof that the remote token was accepted.
             try:
-                art.open()
+                tv.open()
             except Exception as err:  # noqa: BLE001
                 if type(err).__name__ == "UnauthorizedError":
                     _LOGGER.info("Auth missing: host=%s port=%s", host, port)
@@ -195,8 +195,7 @@ async def async_try_connect(host: str, port: int, token: str | None, token_file_
             except Exception:
                 info = None
 
-            # Prefer the Art child's freshest token, then the parent/file.
-            new_token = getattr(art, "token", None) or getattr(tv, "token", None)
+            new_token = getattr(tv, "token", None)
             # If token not set on object, try reading token_file if provided
             if not new_token and token_file_path:
                 new_token = _read_token_file(token_file_path)
@@ -216,12 +215,8 @@ async def async_try_connect(host: str, port: int, token: str | None, token_file_
             _LOGGER.debug("Cannot connect: host=%s port=%s", host, port)
             return PairResult(RESULT_CANNOT_CONNECT)
         finally:
-            closed_ids: set[int] = set()
-            for client in (art, tv):
-                if client is None or id(client) in closed_ids:
-                    continue
-                closed_ids.add(id(client))
-                closer = getattr(client, "close", None)
+            if tv is not None:
+                closer = getattr(tv, "close", None)
                 if callable(closer):
                     try:
                         closer()
