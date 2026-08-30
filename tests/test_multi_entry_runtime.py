@@ -1,6 +1,7 @@
 """Regression tests for independent Samsung Frame config entries."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -92,7 +93,7 @@ async def test_setup_migrates_legacy_database_into_entry_owned_database(
     """Per-Frame isolation preserves data from the previous shared database."""
     legacy_db_path = tmp_path / DB_DIR / DB_FILE
     legacy_db_path.parent.mkdir(parents=True)
-    with sqlite3.connect(legacy_db_path) as connection:
+    with closing(sqlite3.connect(legacy_db_path)) as connection, connection:
         connection.execute("CREATE TABLE migration_marker (value TEXT)")
         connection.execute(
             "INSERT INTO migration_marker (value) VALUES (?)", ("preserved",)
@@ -126,7 +127,7 @@ async def test_setup_migrates_legacy_database_into_entry_owned_database(
 
     entry_db_path = Path(client.set_db_path.call_args.args[0])
     assert entry_db_path.exists()
-    with sqlite3.connect(entry_db_path) as connection:
+    with closing(sqlite3.connect(entry_db_path)) as connection, connection:
         marker = connection.execute(
             "SELECT value FROM migration_marker"
         ).fetchone()

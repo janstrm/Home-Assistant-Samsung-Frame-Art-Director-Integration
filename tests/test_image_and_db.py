@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -69,7 +70,7 @@ async def test_preprocess_crop_outputs_target_size(hass):
 async def test_tracking_art_migrates_legacy_dimension_columns(hass, tmp_path):
     """Using an older library upgrades columns required by the current schema."""
     db_path = tmp_path / "legacy-art.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE art_library (
@@ -93,7 +94,7 @@ async def test_tracking_art_migrates_legacy_dimension_columns(hass, tmp_path):
         source_file="/media/frame/library/migrated.jpg",
     )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(art_library)")}
     assert {"width", "height"} <= columns
 
@@ -125,12 +126,60 @@ async def test_tracking_canonicalizes_source_off_the_event_loop(hass, tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "schema_failure",
+    [False, True],
+    ids=["success", "schema-error"],
+)
+async def test_library_operation_closes_its_sqlite_connections(
+    tmp_path, schema_failure
+):
+    """A completed library operation releases every SQLite connection it opened."""
+    client = SamsungFrameClient(SimpleNamespace(), "1.2.3.4", token="token")
+    client.set_db_path(str(tmp_path / "art.db"))
+    client.set_local_db_path(str(tmp_path / "local-art.db"))
+    real_connect = sqlite3.connect
+    opened_connections = []
+
+    class TrackedConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=(), /):
+            if schema_failure and "CREATE TABLE IF NOT EXISTS art_library" in sql:
+                raise sqlite3.OperationalError("forced schema failure")
+            return super().execute(sql, parameters)
+
+    def _tracked_connect(*args, **kwargs):
+        kwargs["check_same_thread"] = False
+        kwargs["factory"] = TrackedConnection
+        connection = real_connect(*args, **kwargs)
+        opened_connections.append(connection)
+        return connection
+
+    try:
+        with patch("sqlite3.connect", side_effect=_tracked_connect):
+            if schema_failure:
+                with pytest.raises(
+                    sqlite3.OperationalError,
+                    match="forced schema failure",
+                ):
+                    await client.async_get_library_data()
+            else:
+                assert await client.async_get_library_data() == {"items": []}
+
+        assert opened_connections
+        for connection in opened_connections:
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                connection.execute("SELECT 1")
+    finally:
+        for connection in opened_connections:
+            connection.close()
+
+
 async def test_database_migration_preserves_and_canonicalizes_legacy_sources(
     hass, tmp_path
 ):
     """Legacy provenance remains usable after an in-place schema upgrade."""
     db_path = tmp_path / "legacy-source-art.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE art_library (
@@ -158,7 +207,7 @@ async def test_database_migration_preserves_and_canonicalizes_legacy_sources(
     client.set_db_path(str(db_path))
     await client.async_initialize_database()
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         migrated = conn.execute(
             """
             SELECT created_at, last_displayed_at, source_file
@@ -177,7 +226,7 @@ async def test_database_migration_preserves_and_canonicalizes_legacy_sources(
 async def test_database_migration_canonicalizes_existing_source_file(hass, tmp_path):
     """A current-schema source alias is normalized during the DB upgrade."""
     db_path = tmp_path / "aliased-source-art.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             """
             CREATE TABLE art_library (
@@ -198,7 +247,7 @@ async def test_database_migration_canonicalizes_existing_source_file(hass, tmp_p
     client.set_db_path(str(db_path))
     await client.async_initialize_database()
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         source_file = conn.execute(
             "SELECT source_file FROM art_library WHERE content_id = ?",
             ("MY-ALIASED",),
@@ -626,7 +675,7 @@ async def test_upload_checks_all_source_ids_for_the_target_tv(hass, tmp_path):
     client.set_db_path(str(db_path))
     await client.async_track_art("MY-THIS-TV", source_file=source_file)
     await client.async_track_art("MY-OTHER-TV", source_file=source_file)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute(
             "UPDATE art_library SET last_displayed_at = ?, on_tv = 0 "
             "WHERE content_id = ?",
@@ -989,7 +1038,7 @@ async def test_cleanup_retries_tv_deletion_without_forgetting_database_state(
             max_items=0,
             preserve_current=False,
         )
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             failed_row = conn.execute(
                 "SELECT on_tv, deleted_at FROM art_library WHERE content_id=?",
                 ("MY-RETRY",),
@@ -1001,7 +1050,7 @@ async def test_cleanup_retries_tv_deletion_without_forgetting_database_state(
             preserve_current=False,
         )
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         retried_row = conn.execute(
             "SELECT on_tv, deleted_at FROM art_library WHERE content_id=?",
             ("MY-RETRY",),
@@ -1209,11 +1258,11 @@ async def test_entry_databases_share_local_art_without_sharing_tv_state(
     assert [item["id"] for item in first_items] == [
         item["id"] for item in second_items
     ]
-    with sqlite3.connect(tmp_path / "frame-a.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "frame-a.db")) as connection, connection:
         assert connection.execute(
             "SELECT content_id FROM art_library"
         ).fetchall() == [("MY-SAME",)]
-    with sqlite3.connect(tmp_path / "frame-b.db") as connection:
+    with closing(sqlite3.connect(tmp_path / "frame-b.db")) as connection, connection:
         assert connection.execute(
             "SELECT content_id FROM art_library"
         ).fetchall() == [("MY-SAME",)]
