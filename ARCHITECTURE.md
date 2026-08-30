@@ -86,7 +86,7 @@ Two external boundaries dominate the design:
 custom_components/samsung_frame_art_director/
 ├── __init__.py        # Setup, teardown, service & WS-API registration, slideshow timer
 ├── api.py             # SamsungFrameClient: the core TV facade + SQLite library DB (~1.8k lines)
-├── database.py        # Per-entry DB paths + one-time legacy DB migration
+├── database.py        # Shared local-art + per-entry TV-state DB paths/migration
 ├── bridge.py          # Pairing/handshake + port/method selection (used by config_flow)
 ├── config_flow.py     # Pairing UI, zeroconf discovery, reauth, reconfigure, options
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
@@ -201,16 +201,24 @@ art preview, brightness, color temperature) stay primary. Notable:
 
 ## 5. Data model (SQLite)
 
-Each Frame owns a DB at
-`<config>/samsung_frame_director/art_library_<config-entry-id>.db`. This keeps
-Samsung content IDs, TV presence, favorites, and cleanup state isolated even
-when two TVs return the same ID. On the first start after this change,
-`database.py` copies the former shared `art_library.db` into each entry-owned
-database with SQLite's backup API and an atomic rename. The original is kept as
-a recovery source. Each DB is opened **per operation** (no long-lived
-connection). Config-entry setup eagerly prepares and migrates it through
-`async_initialize_database()` so a broken DB stops setup visibly; public DB
-operations still call `_ensure_db()` defensively.
+The database model deliberately has two scopes:
+
+- `<config>/samsung_frame_director/art_library.db` owns the shared `local_art`
+  table because the files on Home Assistant belong to the installation, not to
+  one TV.
+- `<config>/samsung_frame_director/art_library_<config-entry-id>.db` owns the
+  `art_library` table for one Frame. This keeps Samsung content IDs, TV
+  presence, favorites, and cleanup state isolated even when two TVs return the
+  same ID.
+
+On the first start after this change, `database.py` copies the former shared DB
+into each entry-owned database with SQLite's backup API and an atomic rename,
+then removes `local_art` from that copy. The original remains the shared local
+library and a recovery source. The client attaches it to each short-lived
+per-entry connection so existing queries can combine local files with the
+selected TV's state. Config-entry setup eagerly prepares and migrates both
+schemas through `async_initialize_database()` so a broken DB stops setup
+visibly; public DB operations still call `_ensure_db()` defensively.
 
 There are **two tables**, and understanding the split is key:
 
@@ -259,8 +267,9 @@ The columns the code actually reads/writes are: `content_id` (PK), `tags`,
 
 ### Why two tables?
 
-`local_art` = "what I have on disk and could show". `art_library` = "what is
-currently/previously on the TV's limited internal storage". Rotation can either
+`local_art` = "what this HA installation has on disk and could show on any
+Frame". `art_library` = "what is currently/previously on this TV's limited
+internal storage". Rotation can either
 re-select something already on the TV (`art_library`, fast) or upload a local
 file (`local_art`, slower). Cleanup operates on `art_library` to free TV space
 while preserving favorites and the currently-displayed image.
@@ -526,6 +535,8 @@ the [README](README.md#-services).
   successor.
 - SQLite is accessed with short-lived per-call connections inside executor jobs
   (`_get_db()` / `sqlite3.connect`), avoiding cross-thread connection sharing.
+  `_get_db()` attaches the shared local-art DB to the selected Frame's isolated
+  TV-state DB.
 - Network calls use explicit client timeouts plus an aggregate timeout, either
   `_async_run_blocking_contained()` for synchronous TV calls or
   `aiohttp.ClientTimeout` for HTTP (typically 10–120s).

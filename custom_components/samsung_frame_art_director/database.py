@@ -37,7 +37,7 @@ def _prepare_entry_database(legacy_path: str, entry_path: str) -> None:
 async def async_prepare_entry_database(
     hass: HomeAssistant, entry_id: str
 ) -> tuple[str, str]:
-    """Return an isolated DB path, preserving data from the shared legacy DB."""
+    """Return the isolated TV-state and shared local-art database paths."""
     legacy_path = hass.config.path(f"{DB_DIR}/{DB_FILE}")
     db_stem, db_extension = os.path.splitext(DB_FILE)
     entry_file = f"{db_stem}_{entry_id}{db_extension}"

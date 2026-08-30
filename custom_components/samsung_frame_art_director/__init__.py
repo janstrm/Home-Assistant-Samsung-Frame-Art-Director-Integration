@@ -358,11 +358,6 @@ def _register_domain_websocket(hass: HomeAssistant) -> None:
 
 def _register_domain_actions(hass: HomeAssistant) -> None:
     """Register action handlers shared by every loaded Frame."""
-    # Register domain-level actions (a.k.a. services) that accept target entities
-    async def _resolve_clients(call: ServiceCall):
-        for target in await async_resolve_action_targets(hass, call):
-            yield target.runtime.client
-
     async def _svc_set_artmode(call: ServiceCall) -> None:
         enabled = bool(call.data.get("enabled"))
         _LOGGER.debug("Action set_artmode called: enabled=%s, data=%s", enabled, dict(call.data))
@@ -503,8 +498,9 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
     )
 
     async def _svc_art_diagnostics(call: ServiceCall) -> None:
-        async for client in _resolve_clients(call):
-            await client.async_art_diagnostics()
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            await target.runtime.client.async_art_diagnostics()
 
     hass.services.async_register(
         DOMAIN,
