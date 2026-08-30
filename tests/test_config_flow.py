@@ -10,9 +10,6 @@ from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.bridge import PairResult
-from custom_components.samsung_frame_art_director.config_flow import (
-    _flow_title_placeholders,
-)
 from custom_components.samsung_frame_art_director.const import DOMAIN, RESULT_SUCCESS
 from custom_components.samsung_frame_art_director.ip_control import (
     IPControlAuthError,
@@ -24,13 +21,6 @@ from custom_components.samsung_frame_art_director.ip_control import (
 _CF = "custom_components.samsung_frame_art_director.config_flow"
 
 
-def test_flow_title_placeholders_support_ha_and_step_titles():
-    assert _flow_title_placeholders("Frame") == {
-        "name": "Frame",
-        "device": "Frame",
-    }
-
-
 @pytest.mark.parametrize(
     "path",
     [
@@ -40,9 +30,9 @@ def test_flow_title_placeholders_support_ha_and_step_titles():
         ),
     ],
 )
-def test_flow_title_uses_home_assistant_name_placeholder(path):
+def test_flow_title_does_not_require_runtime_placeholders(path):
     strings = json.loads(path.read_text(encoding="utf-8"))
-    assert strings["config"]["flow_title"] == "{name}"
+    assert strings["config"]["flow_title"] == "Samsung Frame Art Director"
 
 
 async def test_user_flow_success(hass):
@@ -165,10 +155,7 @@ async def test_ip_control_pairing_preserves_entry_data_and_replaces_stale_token(
         )
         assert result["type"] == FlowResultType.MENU
         assert result["menu_options"] == ["reconfigure_connection", "ip_control"]
-        assert result["context"]["title_placeholders"] == {
-            "name": "Frame",
-            "device": "Frame",
-        }
+        assert result["description_placeholders"] == {"device": "Frame"}
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"next_step_id": "ip_control"}

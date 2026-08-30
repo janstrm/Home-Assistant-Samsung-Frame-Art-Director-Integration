@@ -87,12 +87,6 @@ def _normalize_host(raw: str) -> str:
     return host.strip()
 
 
-def _flow_title_placeholders(device: str | None) -> dict[str, str]:
-    """Provide both HA's standard flow title and our step title placeholder."""
-    value = device or "Samsung Frame"
-    return {"name": value, "device": value}
-
-
 class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_art_director"):
     """Handle a config flow for Samsung Frame Art Director."""
 
@@ -145,13 +139,13 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 model = (self._device_info or {}).get("device", {}).get("modelName")
                 if model and isinstance(model, str) and model.upper().startswith(("H", "J")):
                     self._port = ENCRYPTED_WEBSOCKET_PORT
-                    self.context["title_placeholders"] = _flow_title_placeholders(
-                        self._name or self._host
-                    )
+                    self.context["title_placeholders"] = {
+                        "device": self._name or self._host
+                    }
                     return await self.async_step_encrypted_pairing()
-                self.context["title_placeholders"] = _flow_title_placeholders(
-                    self._name or self._host
-                )
+                self.context["title_placeholders"] = {
+                    "device": self._name or self._host
+                }
                 return await self.async_step_pairing()
 
         return self.async_show_form(
@@ -213,9 +207,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 _LOGGER.debug("Pairing failed (not_supported): host=%s", self._host)
                 errors = {"base": RESULT_NOT_SUPPORTED}
 
-        self.context["title_placeholders"] = _flow_title_placeholders(
-            self._name or self._host
-        )
+        self.context["title_placeholders"] = {"device": self._name or self._host}
         return self.async_show_form(
             step_id="pairing",
             data_schema=vol.Schema({}),
@@ -248,9 +240,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 return self.async_create_entry(title=self._name or self._host, data=data)
             errors = {"base": RESULT_INVALID_PIN}
 
-        self.context["title_placeholders"] = _flow_title_placeholders(
-            self._name or self._host
-        )
+        self.context["title_placeholders"] = {"device": self._name or self._host}
         return self.async_show_form(
             step_id="encrypted_pairing",
             data_schema=vol.Schema({vol.Required("pin"): str}),
@@ -297,9 +287,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             else:
                 errors = {"base": RESULT_NOT_SUPPORTED}
 
-        self.context["title_placeholders"] = _flow_title_placeholders(
-            self._name or self._host
-        )
+        self.context["title_placeholders"] = {"device": self._name or self._host}
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=vol.Schema({}),
@@ -348,9 +336,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
         await self.async_set_unique_id(self._duid)
         self._abort_if_unique_id_configured(updates={CONF_HOST: self._host, CONF_PORT: self._port})
 
-        self.context["title_placeholders"] = _flow_title_placeholders(
-            self._name or self._host
-        )
+        self.context["title_placeholders"] = {"device": self._name or self._host}
         return await self.async_step_discovery_confirm()
 
     async def async_step_discovery_confirm(self, user_input: dict | None = None):
@@ -362,9 +348,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 return await self.async_step_encrypted_pairing()
             return await self.async_step_pairing()
 
-        self.context["title_placeholders"] = _flow_title_placeholders(
-            self._name or self._host
-        )
+        self.context["title_placeholders"] = {"device": self._name or self._host}
         return self.async_show_form(
             step_id="discovery_confirm",
             description_placeholders={"device": self._name or self._host},
@@ -373,12 +357,12 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
     async def async_step_reconfigure(self, user_input: dict | None = None):
         """Choose which per-TV connection should be reconfigured."""
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
-        self.context["title_placeholders"] = _flow_title_placeholders(
-            entry.data.get(CONF_NAME, entry.title) if entry else None
-        )
+        device = entry.data.get(CONF_NAME, entry.title) if entry else "Samsung Frame"
+        self.context["title_placeholders"] = {"device": device}
         return self.async_show_menu(
             step_id="reconfigure",
             menu_options=["reconfigure_connection", "ip_control"],
+            description_placeholders={"device": device},
         )
 
     async def async_step_reconfigure_connection(self, user_input: dict | None = None):
@@ -418,7 +402,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             return self.async_abort(reason=RESULT_CANNOT_CONNECT)
 
         device = entry.data.get(CONF_NAME, entry.title)
-        self.context["title_placeholders"] = _flow_title_placeholders(device)
+        self.context["title_placeholders"] = {"device": device}
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
