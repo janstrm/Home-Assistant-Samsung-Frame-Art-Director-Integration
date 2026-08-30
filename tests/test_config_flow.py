@@ -33,6 +33,7 @@ _CF = "custom_components.samsung_frame_art_director.config_flow"
 def test_flow_title_does_not_require_runtime_placeholders(path):
     strings = json.loads(path.read_text(encoding="utf-8"))
     assert strings["config"]["flow_title"] == "Samsung Frame Art Director"
+    assert "{" not in strings["config"]["step"]["reconfigure"]["title"]
 
 
 async def test_user_flow_success(hass):

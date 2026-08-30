@@ -1,5 +1,7 @@
 """Tests for explicit Home Assistant IP Control power actions."""
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -15,11 +17,50 @@ from custom_components.samsung_frame_art_director.ip_control import (
     IPControlTransportError,
     IPControlUnavailableError,
 )
+from custom_components.samsung_frame_art_director.ip_control_actions import (
+    async_execute_ip_control_action,
+)
 from custom_components.samsung_frame_art_director.runtime import (
     SamsungFrameRuntimeData,
 )
 
 _ACTIONS = "custom_components.samsung_frame_art_director.ip_control_actions"
+
+
+def test_power_on_transport_error_falls_back_to_configured_wake_on_lan():
+    hass = SimpleNamespace(async_add_executor_job=AsyncMock())
+    entry = SimpleNamespace(
+        data={
+            "host": "192.168.68.61",
+            "ip_control_token": "IP-TOKEN",
+            "ip_control_port": 1516,
+        },
+        options={
+            "mac_address": "AA:BB:CC:DD:EE:FF",
+            "use_wol_before_on": True,
+        },
+    )
+    target = SimpleNamespace(entry=entry)
+    ip_client = MagicMock()
+    ip_client.async_power_on = AsyncMock(
+        side_effect=IPControlTransportError("TV is asleep")
+    )
+
+    with (
+        patch(f"{_ACTIONS}.SamsungIPControlClient", return_value=ip_client),
+        patch(
+            "custom_components.samsung_frame_art_director._send_magic_packet"
+        ) as send_magic_packet,
+    ):
+        asyncio.run(
+            async_execute_ip_control_action(hass, target, "power_on")
+        )
+
+    hass.async_add_executor_job.assert_awaited_once_with(
+        send_magic_packet,
+        "AA:BB:CC:DD:EE:FF",
+        ["192.168.68.255"],
+    )
 
 
 def _add_frame(hass, *, host: str, token: str | None):

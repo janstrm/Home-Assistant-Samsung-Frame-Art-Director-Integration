@@ -350,7 +350,9 @@ remain distinct user-facing validation errors without exposing raw responses.
 
 These actions are deliberately separate from the media-player power methods.
 `media_player.turn_on` and `turn_off` still enter and leave Art Mode through the
-established WebSocket client. There is no IP Control polling or Art Mode routing.
+established WebSocket client. When explicit power-on finds the paired IP Control
+port asleep, it may fall back to the entry's already configured Wake-on-LAN MAC
+address. There is no IP Control polling or Art Mode routing.
 
 ### Set Art Mode (with verification)
 

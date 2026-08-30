@@ -31,6 +31,33 @@ IP_CONTROL_ACTIONS: tuple[IPControlAction, ...] = (
 )
 
 
+async def _async_try_wake_on_lan(
+    hass: HomeAssistant,
+    target: FrameActionTarget,
+) -> bool:
+    """Wake a sleeping TV when its configured IP Control port is offline."""
+    options = target.entry.options
+    mac = options.get("mac_address")
+    if not options.get("use_wol_before_on") or not isinstance(mac, str) or not mac:
+        return False
+
+    host = target.entry.data[CONF_HOST]
+    broadcasts = (
+        [host.rsplit(".", 1)[0] + ".255"]
+        if isinstance(host, str) and host.count(".") == 3
+        else []
+    )
+    # Imported lazily because the package registers this action module while
+    # defining the shared Wake-on-LAN helper.
+    from . import _send_magic_packet
+
+    try:
+        await hass.async_add_executor_job(_send_magic_packet, mac, broadcasts)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 async def async_execute_ip_control_action(
     hass: HomeAssistant,
     target: FrameActionTarget,
@@ -73,9 +100,12 @@ async def async_execute_ip_control_action(
             "its current state."
         ) from None
     except IPControlTransportError:
+        if action == "power_on" and await _async_try_wake_on_lan(hass, target):
+            return
         raise ServiceValidationError(
             "Cannot reach IP Control on the selected TV. Verify that the TV "
-            "is reachable on the local network."
+            "is reachable on the local network, or configure Wake-on-LAN "
+            "with its MAC address."
         ) from None
     except IPControlProtocolError:
         raise ServiceValidationError(

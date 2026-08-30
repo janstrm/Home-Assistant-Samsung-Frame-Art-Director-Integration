@@ -39,7 +39,7 @@
         "description": "A Samsung TV ({device}) was found on your network. Set it up with Samsung Frame Art Director? You'll be asked to accept an authorization prompt on the TV next."
       },
       "reconfigure": {
-        "title": "Reconfigure {device}",
+        "title": "Reconfigure Samsung Frame",
         "description": "Choose which connection to configure.",
         "menu_options": {
           "reconfigure_connection": "TV Connection",
@@ -47,7 +47,7 @@
         }
       },
       "reconfigure_connection": {
-        "title": "TV Connection for {device}",
+        "title": "TV Connection",
         "description": "Update the TV's IP address (e.g. after a DHCP change). It must be the same TV.",
         "data": {
           "host": "Host",
@@ -55,7 +55,7 @@
         }
       },
       "ip_control": {
-        "title": "Pair IP Control for {device}",
+        "title": "Pair IP Control",
         "description": "On the TV, enable IP Remote and switch to normal TV viewing (not Art Mode). Then click Submit and approve the access prompt on {device}. The token is stored only for this TV. Use IP Control only on a trusted local network.",
         "data": {}
       }

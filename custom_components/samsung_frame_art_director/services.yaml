@@ -44,8 +44,9 @@ power_on:
   name: Power On (IP Control)
   description: >-
     Request true panel power-on through Samsung IP Control. Pair IP Control
-    first under Reconfigure. Availability from standby varies by model,
-    firmware, network, and energy settings.
+    first under Reconfigure. If the IP Control port sleeps in standby, the
+    action falls back to a configured Wake-on-LAN MAC address. Availability
+    from standby varies by model, firmware, network, and energy settings.
   target:
     entity:
       domain: media_player
