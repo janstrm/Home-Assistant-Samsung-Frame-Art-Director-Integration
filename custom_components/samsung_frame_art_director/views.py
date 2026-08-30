@@ -6,7 +6,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .targets import loaded_frame_target
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,12 +31,11 @@ class SamsungFrameThumbnailView(HomeAssistantView):
         content_id: str,
     ) -> web.Response:
         """Handle GET request for thumbnail."""
-        entry = self.hass.config_entries.async_get_entry(config_entry_id)
-        runtime = getattr(entry, "runtime_data", None) if entry else None
-        if entry is None or entry.domain != DOMAIN or runtime is None:
+        target = loaded_frame_target(self.hass, config_entry_id)
+        if target is None:
             return web.Response(status=HTTPStatus.NOT_FOUND)
 
-        thumbnail = await runtime.client.async_get_thumbnail(content_id)
+        thumbnail = await target.runtime.client.async_get_thumbnail(content_id)
 
         if not thumbnail:
             return web.Response(status=HTTPStatus.NOT_FOUND)

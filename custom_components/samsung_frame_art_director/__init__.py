@@ -46,6 +46,7 @@ from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
 from .targets import (
     async_resolve_action_targets,
     entry_entity_id,
+    loaded_frame_target,
     loaded_frame_targets,
 )
 
@@ -325,18 +326,15 @@ def _register_domain_websocket(hass: HomeAssistant) -> None:
         targets = loaded_frame_targets(hass)
         config_entry_id = msg.get("config_entry_id")
         if config_entry_id:
-            targets = [
-                target
-                for target in targets
-                if target.entry.entry_id == config_entry_id
-            ]
-            if not targets:
+            target = loaded_frame_target(hass, config_entry_id)
+            if target is None:
                 connection.send_error(
                     msg["id"],
                     "frame_not_loaded",
                     "The selected Samsung Frame is not loaded",
                 )
                 return
+            targets = [target]
         elif len(targets) != 1:
             connection.send_error(
                 msg["id"],
@@ -838,9 +836,11 @@ async def async_setup_entry(
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
-        client.set_db_path(
-            await async_prepare_entry_database(hass, entry.entry_id)
+        entry_db_path, local_db_path = await async_prepare_entry_database(
+            hass, entry.entry_id
         )
+        client.set_db_path(entry_db_path)
+        client.set_local_db_path(local_db_path)
         await client.async_initialize_database()
     except Exception as err:  # noqa: BLE001
         raise ConfigEntryNotReady(

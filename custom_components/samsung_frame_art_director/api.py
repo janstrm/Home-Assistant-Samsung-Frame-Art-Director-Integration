@@ -105,6 +105,7 @@ class SamsungFrameClient:
         self._art_lock: asyncio.Lock = asyncio.Lock()
         # DB path (set on demand by caller)
         self._db_path: Optional[str] = None
+        self._local_db_path: Optional[str] = None
         # Loop-safe callback to persist a refreshed token (set by the integration)
         self._token_persister = None
         # Image preprocessing preference: "crop" (center-crop) or "fit" (letterbox)
@@ -112,6 +113,12 @@ class SamsungFrameClient:
 
     def set_db_path(self, path: str) -> None:
         self._db_path = path
+        if self._local_db_path is None:
+            self._local_db_path = path
+
+    def set_local_db_path(self, path: str) -> None:
+        """Set the shared local-art metadata database path."""
+        self._local_db_path = path
 
     def set_resize_mode(self, mode: str) -> None:
         """Set image preprocessing mode: 'crop' (center-crop) or 'fit' (pad)."""
@@ -382,6 +389,11 @@ class SamsungFrameClient:
         """Open a sqlite connection to the library DB."""
         import sqlite3
         conn = sqlite3.connect(self._db_path)
+        if self._local_db_path and self._local_db_path != self._db_path:
+            conn.execute(
+                "ATTACH DATABASE ? AS shared_local",
+                (self._local_db_path,),
+            )
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -392,9 +404,41 @@ class SamsungFrameClient:
             
         def _init_db():
             import sqlite3
+
+            def _ensure_local_art_schema(conn) -> None:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS local_art (
+                        file_path TEXT PRIMARY KEY,
+                        tags TEXT,
+                        description TEXT,
+                        processed_at TIMESTAMP,
+                        width INTEGER,
+                        height INTEGER,
+                        file_size INTEGER
+                    )
+                """)
+                local_cols = [
+                    row[1]
+                    for row in conn.execute("PRAGMA table_info(local_art)")
+                ]
+                if "is_favorite" not in local_cols:
+                    _LOGGER.info(
+                        "DB Sync: adding 'is_favorite' column to local_art"
+                    )
+                    conn.execute(
+                        "ALTER TABLE local_art "
+                        "ADD COLUMN is_favorite INTEGER DEFAULT 0"
+                    )
+
             try:
                 os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
-                with sqlite3.connect(self._db_path) as conn:
+                local_db_path = self._local_db_path or self._db_path
+                os.makedirs(os.path.dirname(local_db_path), exist_ok=True)
+                if local_db_path != self._db_path:
+                    with sqlite3.connect(local_db_path) as local_conn:
+                        _ensure_local_art_schema(local_conn)
+
+                with self._get_db() as conn:
                     # Create table if not exists (current schema).
                     # NOTE: keep this column set in sync with every column the
                     # rest of api.py reads/writes (track, rotate, cleanup,
@@ -417,18 +461,8 @@ class SamsungFrameClient:
             )
         """)
 
-                    # New table for Local Files (AI Tagged)
-                    conn.execute("""
-            CREATE TABLE IF NOT EXISTS local_art (
-                file_path TEXT PRIMARY KEY,
-                tags TEXT,
-                description TEXT,
-                processed_at TIMESTAMP,
-                width INTEGER,
-                height INTEGER,
-                file_size INTEGER
-            )
-        """)
+                    if local_db_path == self._db_path:
+                        _ensure_local_art_schema(conn)
 
                     # Migration: bring older art_library tables up to the full
                     # schema. Each ALTER is guarded so it only runs when missing,
@@ -512,12 +546,6 @@ class SamsungFrameClient:
                             f"PRAGMA user_version = {ART_LIBRARY_SCHEMA_VERSION}"
                         )
 
-                    # Migration: local_art
-                    local_cols = [row[1] for row in conn.execute("PRAGMA table_info(local_art)")]
-                    if "is_favorite" not in local_cols:
-                         _LOGGER.info("DB Sync: adding 'is_favorite' column to local_art")
-                         conn.execute("ALTER TABLE local_art ADD COLUMN is_favorite INTEGER DEFAULT 0")
-
                     conn.commit()
             except Exception as e:
                 _LOGGER.error("DB Init failed: %s", e)
@@ -545,10 +573,9 @@ class SamsungFrameClient:
         await self._ensure_db()
 
         def _track():
-            import sqlite3
             from datetime import datetime
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with self._get_db() as conn:
                     now_ts = datetime.now().isoformat()
                     # Upsert: if exists, just update last_displayed, on_tv, tags, and source_file
                     conn.execute(
@@ -577,8 +604,7 @@ class SamsungFrameClient:
         await self._ensure_db()
 
         def _toggle():
-             import sqlite3
-             with sqlite3.connect(self._db_path) as conn:
+             with self._get_db() as conn:
                  # Check art_library first
                  curr = conn.execute("SELECT is_favorite FROM art_library WHERE content_id=?", (content_id,)).fetchone()
                  if curr:
@@ -624,10 +650,9 @@ class SamsungFrameClient:
         await self._ensure_db()
 
         def _delete():
-            import sqlite3
 
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with self._get_db() as conn:
                     rows = conn.execute("SELECT file_path FROM local_art").fetchall()
                     if is_local_media_identifier(media_id):
                         tracked_path = _local_art_path_for_media_id(conn, media_id)
@@ -677,10 +702,9 @@ class SamsungFrameClient:
         await self._ensure_db()
 
         def _get():
-            import sqlite3
 
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with self._get_db() as conn:
                     tracked_path = _local_art_path_for_media_id(conn, media_id)
                 if tracked_path:
                     path = ensure_allowed_local_path(self.hass, tracked_path)
@@ -715,10 +739,9 @@ class SamsungFrameClient:
         await self._ensure_db()
         
         def _fetch():
-            import sqlite3
             items = []
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with self._get_db() as conn:
                     # FETCH ONLY LOCAL ART (User Request)
                     # Check columns first
                     cols_local = [info[1] for info in conn.execute("PRAGMA table_info(local_art)").fetchall()]
@@ -758,12 +781,11 @@ class SamsungFrameClient:
 
         # 1. Gather Candidates from both tables
         def _get_candidates():
-            import sqlite3
             candidates = [] 
             # Format: {'id': str, 'type': 'tv'|'local', 'tags': str, 'path': str|None}
             
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with self._get_db() as conn:
                     cursor = conn.cursor()
                     
                     # 1a. TV Candidates (Already uploaded)
@@ -834,8 +856,7 @@ class SamsungFrameClient:
             # Filter down to only favorites
             fav_filtered = []
             try:
-                import sqlite3
-                with sqlite3.connect(self._db_path) as conn:
+                with self._get_db() as conn:
                     cursor = conn.cursor()
                     # Get all favorite content_ids or paths
                     rows_fav = cursor.execute("SELECT content_id FROM art_library WHERE is_favorite=1").fetchall()
@@ -1240,8 +1261,7 @@ class SamsungFrameClient:
                     # NEW: Lookup local file path first for high-res instant preview
                     if results["content_id"] and self._db_path:
                         try:
-                            import sqlite3
-                            with sqlite3.connect(self._db_path) as conn:
+                            with self._get_db() as conn:
                                 row = conn.execute(
                                     """
                                     SELECT art_library.source_file
@@ -1525,10 +1545,9 @@ class SamsungFrameClient:
             await self._ensure_db()
 
             def _find_existing_content_ids() -> list[str]:
-                import sqlite3
 
                 try:
-                    with sqlite3.connect(self._db_path) as conn:
+                    with self._get_db() as conn:
                         rows = conn.execute(
                             """
                             SELECT content_id
@@ -1884,7 +1903,6 @@ class SamsungFrameClient:
             )
 
         if self._db_path:
-            import sqlite3
             def _db_fetch(ids: list[str]) -> dict[str, dict]:
                 if not ids:
                     return {}
@@ -1897,7 +1915,7 @@ class SamsungFrameClient:
                 )
                 out: dict[str, dict] = {}
                 try:
-                    conn = sqlite3.connect(self._db_path)
+                    conn = self._get_db()
                     try:
                         cur = conn.cursor()
                         for row in cur.execute(q, ids):
@@ -2082,10 +2100,9 @@ class SamsungFrameClient:
 
         # 5. Update DB flags if we have a DB
         if self._db_path:
-            import sqlite3
             def _sync_db_with_tv(deleted_ids: list[str], current_ids: list[str]) -> None:
                 try:
-                    conn = sqlite3.connect(self._db_path)
+                    conn = self._get_db()
                     try:
                         cur = conn.cursor()
                         now_iso = __import__("datetime").datetime.now().isoformat()
@@ -2185,9 +2202,8 @@ class SamsungFrameClient:
             return
 
         def _purge():
-            import sqlite3
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with self._get_db() as conn:
                     conn.execute("DELETE FROM art_library")
                     conn.execute("DELETE FROM local_art")
                     conn.commit()

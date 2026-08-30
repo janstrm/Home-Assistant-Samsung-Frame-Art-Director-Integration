@@ -29,6 +29,20 @@ def loaded_frame_targets(hass: HomeAssistant) -> list[FrameActionTarget]:
     ]
 
 
+def loaded_frame_target(
+    hass: HomeAssistant, config_entry_id: str
+) -> FrameActionTarget | None:
+    """Resolve one loaded Frame runtime by config-entry identity."""
+    return next(
+        (
+            target
+            for target in loaded_frame_targets(hass)
+            if target.entry.entry_id == config_entry_id
+        ),
+        None,
+    )
+
+
 def entry_entity_id(
     hass: HomeAssistant,
     entry: SamsungFrameConfigEntry,

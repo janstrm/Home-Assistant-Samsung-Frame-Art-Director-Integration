@@ -20,7 +20,11 @@ from homeassistant.components.media_source import (
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
-from .targets import FrameActionTarget, loaded_frame_targets
+from .targets import (
+    FrameActionTarget,
+    loaded_frame_target,
+    loaded_frame_targets,
+)
 
 # MediaClass/MediaType are StrEnums; use the literal values to avoid importing
 # the media_player integration just for the enum members.
@@ -82,17 +86,7 @@ class ArtLibraryMediaSource(MediaSource):
         config_entry_id, media_id = split_media_identifier(identifier)
         targets = loaded_frame_targets(self.hass)
         if config_entry_id:
-            return (
-                next(
-                    (
-                        target
-                        for target in targets
-                        if target.entry.entry_id == config_entry_id
-                    ),
-                    None,
-                ),
-                media_id,
-            )
+            return loaded_frame_target(self.hass, config_entry_id), media_id
         return (targets[0] if len(targets) == 1 else None, media_id)
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:

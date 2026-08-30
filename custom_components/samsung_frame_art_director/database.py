@@ -13,7 +13,11 @@ from .const import DB_DIR, DB_FILE
 def _prepare_entry_database(legacy_path: str, entry_path: str) -> None:
     """Create the database directory and migrate legacy data once."""
     os.makedirs(os.path.dirname(entry_path), exist_ok=True)
-    if os.path.exists(entry_path) or not os.path.exists(legacy_path):
+    if os.path.exists(entry_path):
+        with sqlite3.connect(entry_path) as connection:
+            connection.execute("DROP TABLE IF EXISTS local_art")
+        return
+    if not os.path.exists(legacy_path):
         return
 
     migration_path = f"{entry_path}.migrating"
@@ -23,6 +27,7 @@ def _prepare_entry_database(legacy_path: str, entry_path: str) -> None:
             sqlite3.connect(migration_path) as destination,
         ):
             source.backup(destination)
+            destination.execute("DROP TABLE IF EXISTS local_art")
         os.replace(migration_path, entry_path)
     finally:
         if os.path.exists(migration_path):
@@ -31,7 +36,7 @@ def _prepare_entry_database(legacy_path: str, entry_path: str) -> None:
 
 async def async_prepare_entry_database(
     hass: HomeAssistant, entry_id: str
-) -> str:
+) -> tuple[str, str]:
     """Return an isolated DB path, preserving data from the shared legacy DB."""
     legacy_path = hass.config.path(f"{DB_DIR}/{DB_FILE}")
     db_stem, db_extension = os.path.splitext(DB_FILE)
@@ -42,4 +47,4 @@ async def async_prepare_entry_database(
         legacy_path,
         entry_path,
     )
-    return entry_path
+    return entry_path, legacy_path
