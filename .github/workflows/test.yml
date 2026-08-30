@@ -27,4 +27,8 @@ jobs:
       - name: Ruff
         run: ruff check custom_components tests
       - name: Pytest
-        run: pytest
+        run: >-
+          pytest
+          --cov=custom_components.samsung_frame_art_director
+          --cov-report=term-missing
+          --cov-report=xml
