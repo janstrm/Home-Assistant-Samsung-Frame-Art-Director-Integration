@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: minimum HA 2024.6
+          - name: minimum HA 2024.7
             python-version: "3.12"
             requirements: requirements_test_minimum.lock
           - name: current HA 2026.8

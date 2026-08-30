@@ -17,19 +17,19 @@ aiohttp-cors==0.7.0
     # via homeassistant
 aiohttp-fast-url-dispatcher==0.3.0
     # via homeassistant
-aiohttp-fast-zlib==0.1.0
+aiohttp-fast-zlib==0.1.1
     # via homeassistant
 aiooui==0.1.9
     # via bluetooth-adapters
 aiosignal==1.4.0
     # via aiohttp
-aiozoneinfo==0.1.0
+aiozoneinfo==0.2.1
     # via homeassistant
 anyio==4.14.2
     # via httpx
 astral==2.2
     # via homeassistant
-async-interrupt==1.1.1
+async-interrupt==1.1.2
     # via
     #   habluetooth
     #   homeassistant
@@ -91,11 +91,11 @@ ciso8601==2.3.1
     # via
     #   hass-nabucasa
     #   homeassistant
-coverage==7.5.0
+coverage==7.5.3
     # via
     #   pytest-cov
     #   pytest-homeassistant-custom-component
-cryptography==42.0.5
+cryptography==42.0.8
     # via
     #   acme
     #   bluetooth-data-tools
@@ -135,9 +135,9 @@ habluetooth==6.1.0
     # via home-assistant-bluetooth
 hass-nabucasa==0.81.1
     # via homeassistant
-home-assistant-bluetooth==1.12.0
+home-assistant-bluetooth==1.12.2
     # via homeassistant
-homeassistant==2024.6.0
+homeassistant==2024.7.0
     # via pytest-homeassistant-custom-component
 httpcore==1.0.9
     # via httpx
@@ -162,9 +162,7 @@ jmespath==1.1.0
     #   boto3
     #   botocore
 josepy==1.15.0
-    # via
-    #   -r requirements_test_minimum.txt
-    #   acme
+    # via acme
 lru-dict==1.3.0
     # via homeassistant
 markupsafe==3.0.3
@@ -177,7 +175,7 @@ multidict==6.7.1
     #   yarl
 numpy==1.26.0
     # via pytest-homeassistant-custom-component
-orjson==3.10.3
+orjson==3.9.15
     # via homeassistant
 packaging==26.3
     # via
@@ -207,7 +205,7 @@ pycognito==2024.5.1
     # via hass-nabucasa
 pycparser==3.0
     # via cffi
-pydantic==1.10.15
+pydantic==1.10.17
     # via pytest-homeassistant-custom-component
 pyjwt==2.8.0
     # via
@@ -252,7 +250,7 @@ pytest-freezer==0.4.8
     # via pytest-homeassistant-custom-component
 pytest-github-actions-annotate-failures==0.2.0
     # via pytest-homeassistant-custom-component
-pytest-homeassistant-custom-component==0.13.132
+pytest-homeassistant-custom-component==0.13.144
     # via -r requirements_test_minimum.txt
 pytest-picked==0.5.0
     # via pytest-homeassistant-custom-component
@@ -278,7 +276,7 @@ pytz==2026.3.post1
     #   astral
 pyyaml==6.0.1
     # via homeassistant
-requests==2.31.0
+requests==2.32.3
     # via
     #   acme
     #   homeassistant
@@ -300,7 +298,7 @@ sniffio==1.3.1
     # via httpx
 snitun==0.39.1
     # via hass-nabucasa
-sqlalchemy==2.0.30
+sqlalchemy==2.0.31
     # via
     #   homeassistant
     #   pytest-homeassistant-custom-component
@@ -334,12 +332,15 @@ usb-devices==0.5.1
     # via
     #   bluetooth-adapters
     #   bluetooth-auto-recovery
-uv==0.1.43
+uv==0.2.13
     # via pytest-homeassistant-custom-component
 voluptuous==0.13.1
     # via
     #   homeassistant
+    #   voluptuous-openapi
     #   voluptuous-serialize
+voluptuous-openapi==0.0.4
+    # via homeassistant
 voluptuous-serialize==2.6.0
     # via homeassistant
 yarl==1.9.4

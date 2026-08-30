@@ -8,7 +8,7 @@ Thanks for your interest in improving **Samsung Frame Art Director**!
   exists. The Samsung Art Mode API is undocumented and varies by model/firmware,
   so prefer *adding* a guarded path over removing one.
 - This is a config‑entry‑only integration (no YAML). It targets **Home Assistant
-  2024.6+** (the options flow uses collapsible form sections).
+  2024.7+** (the options flow uses collapsible form sections introduced in that release).
 
 ## Dev setup & checks
 ```bash
@@ -20,7 +20,7 @@ pytest --cov=custom_components.samsung_frame_art_director --cov-fail-under=68
 
 `requirements_test.txt` contains the direct test tools. The generated
 `requirements_test.lock` pins the current stable test stack. The parallel
-`requirements_test_minimum.lock` pins the declared Home Assistant 2024.6 / Python
+`requirements_test_minimum.lock` pins the declared Home Assistant 2024.7 / Python
 3.12 compatibility floor. Regenerate them intentionally with:
 
 ```bash
