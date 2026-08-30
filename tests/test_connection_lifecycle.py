@@ -75,6 +75,7 @@ async def test_startup_reuses_saved_token_without_token_file_pairing(
 ):
     """A normal HA restart validates the existing identity without re-pairing."""
     constructor_calls = []
+    remote_open_calls = 0
     art_clients = []
     tv_clients = []
 
@@ -102,6 +103,11 @@ async def test_startup_reuses_saved_token_without_token_file_pairing(
             self.close_calls = 0
             self._art = FakeArt()
             tv_clients.append(self)
+
+        def open(self):
+            nonlocal remote_open_calls
+            remote_open_calls += 1
+            return object()
 
         def art(self):
             return self._art
@@ -136,10 +142,64 @@ async def test_startup_reuses_saved_token_without_token_file_pairing(
         }
     ]
     assert "token_file" not in constructor_calls[0]
+    assert remote_open_calls == 1
     assert len(art_clients) == len(tv_clients) == 1
     assert art_clients[0].close_calls == 1
     assert tv_clients[0].close_calls == 1
     assert obsolete_pairing_file.exists() is False
+
+
+async def test_startup_authenticates_remote_but_opens_art_without_remote_token(hass):
+    """Newer Frames can stall Art handshakes that include the remote token."""
+    events = []
+
+    class FakeArt:
+        def __init__(self, token):
+            self.token = token
+            self.token_file = "obsolete-token-file"
+
+        def open(self):
+            events.append(("art-open", self.token, self.token_file))
+            if self.token or self.token_file:
+                raise TimeoutError("The read operation timed out")
+            return object()
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **kwargs):
+            assert kwargs["token"] == "SAVED"
+            self._art = FakeArt(kwargs["token"])
+
+        def open(self):
+            events.append("remote-open")
+            return object()
+
+        def art(self):
+            return self._art
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:newer-frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(
+        hass,
+        "frame.local",
+        token="SAVED",
+        port=8002,
+    )
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is True
+    assert client.duid == "uuid:newer-frame"
+    assert events == ["remote-open", ("art-open", None, None)]
 
 
 async def test_offline_tv_is_a_transient_setup_failure(hass):
@@ -166,21 +226,14 @@ async def test_rejected_saved_token_is_an_auth_failure(hass):
     class UnauthorizedError(Exception):
         pass
 
-    class FakeArt:
-        def open(self):
-            raise UnauthorizedError("rejected")
-
-        def close(self):
-            return None
-
     class FakeTV:
         token = "SAVED"
 
         def __init__(self, *_args, **_kwargs):
-            self._art = FakeArt()
+            pass
 
-        def art(self):
-            return self._art
+        def open(self):
+            raise UnauthorizedError("rejected")
 
         def close(self):
             return None
@@ -202,21 +255,14 @@ async def test_rest_duid_does_not_replace_authenticated_validation(hass):
     class ConnectionFailure(Exception):
         pass
 
-    class FakeArt:
-        def open(self):
-            raise ConnectionFailure("art channel failed")
-
-        def close(self):
-            return None
-
     class FakeTV:
         token = "SAVED"
 
         def __init__(self, *_args, **_kwargs):
-            self._art = FakeArt()
+            pass
 
-        def art(self):
-            return self._art
+        def open(self):
+            raise ConnectionFailure("remote channel failed")
 
         def rest_device_info(self):
             return {"device": {"duid": "uuid:public-rest-only"}}
@@ -263,6 +309,9 @@ async def test_timed_out_port_finishes_before_fallback_starts(hass):
                 events.append("fallback-start")
             self._art = FakeArt(port)
 
+        def open(self):
+            return object()
+
         def art(self):
             return self._art
 
@@ -278,7 +327,7 @@ async def test_timed_out_port_finishes_before_fallback_starts(hass):
         patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
         patch(
             "custom_components.samsung_frame_art_director.api.CONNECTION_ATTEMPT_TIMEOUT_SECONDS",
-            0.01,
+            0.03,
         ),
     ):
         await client.async_connect_and_pair()
@@ -300,7 +349,7 @@ async def test_timed_out_art_call_holds_serialization_until_worker_finishes(hass
             current = call_count
             events.append(f"start-{current}")
             if current == 1:
-                time.sleep(0.05)
+                time.sleep(0.15)
             events.append(f"end-{current}")
             return current
 
@@ -326,7 +375,7 @@ async def test_timed_out_art_call_holds_serialization_until_worker_finishes(hass
         patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
         patch(
             "custom_components.samsung_frame_art_director.api.ART_OPERATION_TIMEOUT_SECONDS",
-            0.01,
+            0.05,
         ),
     ):
         first = asyncio.create_task(client.async_get_brightness())
@@ -336,7 +385,7 @@ async def test_timed_out_art_call_holds_serialization_until_worker_finishes(hass
         assert await second == 2
 
     assert events == ["start-1", "end-1", "start-2", "end-2"]
-    assert socket_timeouts == [0.01, 0.01]
+    assert socket_timeouts == [0.05, 0.05]
 
 
 def test_shared_close_helper_closes_each_object_once(hass):
@@ -366,12 +415,15 @@ async def test_status_poll_closes_art_and_parent_exactly_once(hass):
 
     class FakeArt:
         token = "SAVED"
+        token_file = "obsolete-token-file"
 
         def __init__(self):
             self.close_calls = 0
             art_clients.append(self)
 
         def get_artmode(self):
+            assert self.token is None
+            assert self.token_file is None
             return "on"
 
         def close(self):

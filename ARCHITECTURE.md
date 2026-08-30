@@ -82,8 +82,9 @@ Two external boundaries dominate the design:
    short-lived, created per-operation, and wrapped in timeouts/retries. The
    library is partly synchronous, so blocking calls are pushed to threads. Device-info
    discovery uses the REST client directly so it cannot trigger WebSocket
-   pairing. `SamsungTVWS.art()` creates a separate child connection; capture
-   its refreshed token and close it before closing the parent TV client.
+   pairing. `SamsungTVWS.art()` creates a separate Art App child connection;
+   that channel is intentionally opened without the remote-control token and
+   closed before the parent TV client.
 2. **The AI provider** — Gemini (default) or OpenAI, reached over HTTPS for
    image → tag analysis. Optional; only used by the curator.
 
@@ -464,26 +465,29 @@ manual cleanup action unless that action explicitly overrides a value.
 
 Patterns you will see repeated, and why they exist:
 
-- **Stable connection identity (avoids recurring pairing popups).** The Frame
-  ties authorization to the `(client name, token)` pair. The integration opens a
-  short-lived connection per operation, so every one of them must present the
-  same name and token or the TV treats it as a *new device* and re-shows the
-  "Allow access" dialog. All sync clients are therefore built through
+- **Stable remote identity (avoids recurring pairing popups).** The Frame's
+  remote-control channel ties authorization to the `(client name, token)` pair.
+  All sync parent clients are therefore built through
   `SamsungFrameClient._make_tv()` (always passes `name` + `token`), and
   `_capture_token()` runs on close to **persist any token the TV re-issues** (via
   a loop-safe `set_token_persister` callback wired in `__init__.py`) so
-  authorization doesn't drift. Never construct a bare `SamsungTVWS(host)`.
-- **Connection model.** Every art operation opens a short-lived, properly
-  identified `SamsungTVWS` and uses its synchronous `art()` API off the event
-  loop via `asyncio.to_thread` (`async_get_state`, `_async_art`,
-  `async_upload_image`, `async_set_artmode`, …). Each parent creates exactly one
-  Art child; `_close_art_connection()` captures the child's freshest token and
-  closes child then parent exactly once. There is no long-lived connection;
-  the `_art_lock` serializes reads and writes alike.
+  authorization doesn't drift. The separate `com.samsung.art-app` child is
+  built through `_make_art()` and deliberately has `token` and `token_file`
+  cleared: newer Frame firmware can stall that handshake when it receives the
+  remote-control token. Never construct either client outside these helpers.
+- **Connection model.** Every art operation opens a short-lived `SamsungTVWS`
+  parent and uses a tokenless synchronous `art()` child off the event loop via
+  `asyncio.to_thread` (`async_get_state`, `_async_art`, `async_upload_image`,
+  `async_set_artmode`, …). Each parent creates exactly one Art child;
+  `_close_art_connection()` captures any refreshed token and closes child then
+  parent exactly once. There is no long-lived connection; the `_art_lock`
+  serializes reads and writes alike. Startup first authenticates the remote
+  parent and then verifies that the tokenless Art child is usable.
 - **Pairing vs. art operations.** `bridge.py` uses the official async/encrypted
-  clients for discovery and pairing. Runtime Art API calls use short-lived sync
-  clients in worker threads because the full Art Mode settings API is exposed
-  there.
+  remote client for pairing and an authenticated sync remote client only as a
+  compatibility fallback. Runtime Art API calls use short-lived tokenless sync
+  Art clients in worker threads because the full Art Mode settings API is
+  exposed there.
 - **Port selection.** Pairing probes the ports supported by the TV; art uploads
   use the authenticated SSL WebSocket on port 8002.
 - **Retries + exponential backoff.** Upload retries 5× on transient

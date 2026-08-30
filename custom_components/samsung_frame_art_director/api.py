@@ -140,14 +140,13 @@ class SamsungFrameClient:
         port: int | None = None,
         timeout: float | None = None,
     ):
-        """Create a sync SamsungTVWS client that ALWAYS identifies with our
-        client name and token (when known).
+        """Create a sync SamsungTVWS parent with our stable remote identity.
 
-        The Frame ties authorization to the (name, token) pair. Connecting
-        without them — or under a different name — makes the TV treat us as a
-        new device and pop the "Allow access" dialog again, which is the root
-        cause of recurring pairing prompts. Routing every connection through
-        here guarantees a stable identity.
+        The remote-control channel ties authorization to the (name, token)
+        pair. Connecting there without them — or under a different name — can
+        make the TV treat us as a new device and show the approval dialog
+        again. The separate Art App child is deliberately made tokenless by
+        :meth:`_make_art`.
         """
         from samsungtvws import SamsungTVWS  # type: ignore
 
@@ -160,6 +159,29 @@ class SamsungFrameClient:
         if timeout is not None:
             kwargs["timeout"] = timeout
         return SamsungTVWS(self._host, **kwargs)
+
+    def _make_art(self, tv):
+        """Create the TV's separate, unauthenticated Art App connection.
+
+        The remote-control websocket uses the persisted token to authenticate
+        Home Assistant. Samsung's ``com.samsung.art-app`` channel is separate
+        and does not use that token. Some newer Frame firmware stalls the Art
+        handshake when the remote-control token is included, so remove both
+        token sources before the child opens its socket.
+        """
+        art = tv.art()
+        for attribute in ("token", "token_file"):
+            try:
+                if hasattr(art, attribute):
+                    setattr(art, attribute, None)
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Could not clear %s on Art client for host=%s",
+                    attribute,
+                    self._host,
+                    exc_info=True,
+                )
+        return art
 
     @staticmethod
     async def _async_run_blocking_contained(fn, timeout: float):
@@ -277,9 +299,9 @@ class SamsungFrameClient:
 
         Brightness / color-temperature / motion / brightness-sensor settings
         live on the synchronous ``SamsungTVArt`` client (``tv.art()``) in the
-        official samsungtvws package. We open a short-lived, properly-identified
+        official samsungtvws package. We open a short-lived tokenless Art App
         connection, invoke the method off the event loop, persist any refreshed
-        token, and close. Returns the result, or None on failure.
+        parent token, and close. Returns the result, or None on failure.
         """
         try:
             from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
@@ -290,7 +312,7 @@ class SamsungFrameClient:
             tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
             art = None
             try:
-                art = tv.art()
+                art = self._make_art(tv)
                 fn = getattr(art, fn_name, None)
                 if fn is None:
                     return None
@@ -345,7 +367,7 @@ class SamsungFrameClient:
             status = None
             content_id = None
             try:
-                art = tv.art()
+                art = self._make_art(tv)
                 try:
                     status = art.get_artmode()
                 except Exception:  # noqa: BLE001
@@ -955,7 +977,7 @@ class SamsungFrameClient:
             tv = self._make_tv(timeout=30)
             art_client = None
             try:
-                art_client = tv.art()
+                art_client = self._make_art(tv)
                 if require_available:
                     available_ids: set[str] = set()
                     for item in art_client.available() or []:
@@ -1130,10 +1152,11 @@ class SamsungFrameClient:
                     port=port,
                     timeout=CONNECTION_ATTEMPT_TIMEOUT_SECONDS,
                 )
-                art = tv.art()
-                # Opening the Art websocket proves the saved token is accepted.
-                # ``art.supported()`` and device info are both public REST and
-                # therefore cannot be used as authentication evidence.
+                # Authenticate on the remote-control channel. The Art App is a
+                # distinct, unauthenticated channel and must not receive this
+                # token on newer Frame firmware.
+                tv.open()
+                art = self._make_art(tv)
                 art.open()
                 info = tv.rest_device_info()
                 device = info.get("device") if isinstance(info, dict) else None
@@ -1220,7 +1243,7 @@ class SamsungFrameClient:
                 _LOGGER.debug("get_artmode: connection error on %s: %r", self._host, e)
                 return None
             try:
-                art = tv.art()
+                art = self._make_art(tv)
                 status = art.get_artmode()
                 return str(status).lower() if status is not None else None
             except (ConnectionError, TimeoutError, ValueError, OSError) as e:
@@ -1255,7 +1278,7 @@ class SamsungFrameClient:
             art_client = None
             try:
                 tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
-                art_client = tv.art()
+                art_client = self._make_art(tv)
                 # Prime the art channel
                 try:
                     art_client.supported()
@@ -1410,7 +1433,7 @@ class SamsungFrameClient:
             # Precompute selection candidate once to reduce available() calls
             selection_candidate = None
             try:
-                art_client = tv_local.art()
+                art_client = self._make_art(tv_local)
                 try:
                     current = art_client.get_current()
                 except Exception:
@@ -1637,7 +1660,7 @@ class SamsungFrameClient:
             try:
                 _LOGGER.debug("Upload: starting art.upload on %s (matte=%s)", self._host, matte)
                 # Pass matte to upload so it applies immediately if supported
-                art_client = tv.art()
+                art_client = self._make_art(tv)
                 remote_filename = art_client.upload(processed, file_type="JPEG", matte=matte)
                 _LOGGER.debug("Upload: art.upload returned filename=%s on %s", remote_filename, self._host)
                 return remote_filename
@@ -1652,7 +1675,7 @@ class SamsungFrameClient:
                 # For change_matte and 3.0.5, "none" is the literal string
                 # expected, while select_image prefers None to clear it.
                 tv_matte = matte if matte else "none"
-                art_client = tv.art()
+                art_client = self._make_art(tv)
                 try:
                     sel_matte = None if tv_matte == "none" else tv_matte
                     art_client.select_image(remote_filename, show=True, matte=sel_matte)
@@ -1689,7 +1712,7 @@ class SamsungFrameClient:
                             )
                             art_client = None
                             try:
-                                art_client = tvp.art()
+                                art_client = self._make_art(tvp)
                                 try:
                                     art_client.supported()
                                 except Exception:
@@ -1795,7 +1818,7 @@ class SamsungFrameClient:
             result: dict = {"host": self._host}
             try:
                 try:
-                    art = tv.art()
+                    art = self._make_art(tv)
                 except Exception as e:  # noqa: BLE001
                     result["connection_error"] = repr(e)
                     return result
@@ -1855,7 +1878,7 @@ class SamsungFrameClient:
             current_id = None
             available: list = []
             try:
-                art = tv.art()
+                art = self._make_art(tv)
                 cur = art.get_current()
                 if isinstance(cur, dict):
                     current_id = cur.get("content_id") or cur.get("contentId")
@@ -2020,7 +2043,7 @@ class SamsungFrameClient:
                     )
                     art = None
                     try:
-                        art = tv.art()
+                        art = self._make_art(tv)
                         current = art.get_current()
                         if isinstance(current, dict):
                             return current.get("content_id") or current.get(
@@ -2083,7 +2106,7 @@ class SamsungFrameClient:
                 tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
                 art = None
                 try:
-                    art = tv.art()
+                    art = self._make_art(tv)
                     batch = list(ids)
                     # Prefer delete_list if present
                     try:

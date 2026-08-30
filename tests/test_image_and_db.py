@@ -265,13 +265,14 @@ async def test_preprocess_fit_outputs_target_size(hass):
 
 
 async def test_upload_image_returns_tv_content_id(hass):
-    """Upload returns the TV ID, keeps the Art token, and closes Art sockets."""
+    """Upload returns the TV ID, persists a refreshed token, and closes sockets."""
     art_clients = []
     persisted_tokens = []
 
     class FakeArt:
         def __init__(self):
-            self.token = "NEW"
+            self.token = "OLD"
+            self.token_file = "obsolete-token-file"
             self.closed = False
             art_clients.append(self)
 
@@ -288,6 +289,9 @@ async def test_upload_image_returns_tv_content_id(hass):
             return []
 
         def upload(self, _image, **_kwargs):
+            assert self.token is None
+            assert self.token_file is None
+            self.token = "NEW"
             return "MY-CONTENT-123"
 
         def select_image(self, _content_id, *, show=True):
@@ -300,9 +304,8 @@ async def test_upload_image_returns_tv_content_id(hass):
             self.closed = True
 
     class FakeTV:
-        token = "OLD"
-
-        def __init__(self, *_args, **_kwargs):
+        def __init__(self, *_args, **kwargs):
+            self.token = kwargs.get("token")
             self._art = FakeArt()
 
         def art(self):
