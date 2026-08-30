@@ -1,6 +1,6 @@
 {
   "config": {
-    "flow_title": "{device}",
+    "flow_title": "{name}",
     "step": {
       "user": {
         "description": "Enter your Samsung Frame TV IP address. If this is the first connection you should see a popup on your TV asking for authorization.",
