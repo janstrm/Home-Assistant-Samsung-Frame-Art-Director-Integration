@@ -126,14 +126,19 @@ def _normalized_analysis(text: str) -> tuple[list[str], str]:
     """Normalize structured output, retaining legacy comma output as a fallback."""
     cleaned = text.strip()
     if cleaned.startswith("```"):
-        cleaned = cleaned.removeprefix("```json").removeprefix("```")
-        cleaned = cleaned.removesuffix("```").strip()
+        fenced_lines = cleaned.splitlines()
+        fenced_lines = fenced_lines[1:]
+        if fenced_lines and fenced_lines[-1].strip().startswith("```"):
+            fenced_lines = fenced_lines[:-1]
+        cleaned = "\n".join(fenced_lines).strip()
 
     tags_source: Any = None
     description = ""
     try:
         parsed = json.loads(cleaned)
     except (json.JSONDecodeError, TypeError):
+        if cleaned.startswith(("{", "[")):
+            raise ValueError("Provider returned incomplete or invalid JSON") from None
         parsed = None
     if isinstance(parsed, dict):
         tags_source = parsed.get("tags")
@@ -217,6 +222,14 @@ class GeminiAnalyzer(ImageAnalyzer):
         """Analyze an image using the Gemini Vision REST API."""
         start_time = time.monotonic()
         structured_prompt = _tagging_prompt(prompt)
+        generation_config: dict[str, Any] = {
+            "maxOutputTokens": 2048,
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        }
+        if self.model_name.startswith("gemini-2.5-flash"):
+            generation_config["thinkingConfig"] = {"thinkingBudget": 0}
+
         payload = {
             "contents": [
                 {
@@ -231,7 +244,7 @@ class GeminiAnalyzer(ImageAnalyzer):
                     ]
                 }
             ],
-            "generationConfig": {"maxOutputTokens": 500, "temperature": 0.4},
+            "generationConfig": generation_config,
         }
 
         provider = "Google Gemini (REST)"

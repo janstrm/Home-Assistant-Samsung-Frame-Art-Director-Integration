@@ -224,6 +224,59 @@ async def test_gemini_provider_failure_does_not_expose_key(caplog):
     assert secret not in caplog.text
 
 
+async def test_gemini_2_5_requests_json_without_thinking_tokens():
+    """Simple tagging must reserve the output budget for the JSON result."""
+    session = _FakeSession()
+    analyzer, error = create_analyzer(
+        "gemini",
+        model="gemini-2.5-flash",
+        session=session,
+    )
+    assert error is None
+
+    await analyzer.analyze_image(
+        _png_bytes(),
+        prompt="Describe this image",
+        api_key="key",
+    )
+
+    generation_config = session.json["generationConfig"]
+    assert generation_config["responseMimeType"] == "application/json"
+    assert generation_config["thinkingConfig"] == {"thinkingBudget": 0}
+    assert generation_config["maxOutputTokens"] >= 1024
+
+
+async def test_truncated_provider_json_is_rejected_instead_of_stored_as_tags():
+    """A cut-off JSON object must not fall back to comma-separated parsing."""
+    response = _FakeGeminiResponse()
+    response.json = AsyncMock(
+        return_value={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"text": '{"tags":["minimalist","abstract","stylized'}
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    analyzer, error = create_analyzer("gemini", session=_FakeSession(response))
+    assert error is None
+
+    result = await analyzer.analyze_image(
+        _png_bytes(),
+        prompt="Describe this image",
+        api_key="key",
+    )
+
+    assert result == {
+        "error": "AI provider returned no usable tags",
+        "provider": "Google Gemini (REST)",
+    }
+
+
 @pytest.mark.parametrize(
     ("status", "category"),
     [(401, "authentication"), (404, "configuration"), (429, "rate_limited"), (503, "unavailable")],
