@@ -36,15 +36,19 @@ from .const import (
     CONF_ENABLE_ART_SETTINGS,
     CONF_GEMINI_API_KEY,
     CONF_INBOX_DIR,
+    CONF_IP_CONTROL_PORT,
+    CONF_IP_CONTROL_TOKEN,
     CONF_LIBRARY_DIR,
     CONF_OPENAI_API_KEY,
     CONF_RESIZE_MODE,
+    DATA_REAUTH_CONNECTION,
     DEFAULT_CLEANUP_MAX_ITEMS,
     DEFAULT_ENABLE_ART_SETTINGS,
     DEFAULT_INBOX_DIR,
     DEFAULT_LIBRARY_DIR,
     DEFAULT_RESIZE_MODE,
     ENCRYPTED_WEBSOCKET_PORT,
+    REAUTH_CONNECTION_IP_CONTROL,
     RESIZE_MODE_CROP,
     RESIZE_MODE_FIT,
     RESULT_AUTH_MISSING,
@@ -53,6 +57,13 @@ from .const import (
     RESULT_NOT_SUPPORTED,
     RESULT_SUCCESS,
 )
+from .ip_control import (
+    IPControlAuthError,
+    IPControlProtocolError,
+    IPControlTransportError,
+    IPControlUnavailableError,
+)
+from .ip_control_pairing import async_pair_ip_control
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -235,6 +246,9 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
 
     async def async_step_reauth(self, entry_data: dict[str, Any]):
         """Handle re-authentication when the stored token is no longer valid."""
+        if entry_data.get(DATA_REAUTH_CONNECTION) == REAUTH_CONNECTION_IP_CONTROL:
+            return await self.async_step_ip_control()
+
         self._host = entry_data.get(CONF_HOST)
         self._port = entry_data.get(CONF_PORT)
         self._name = entry_data.get(CONF_NAME)
@@ -337,6 +351,17 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
         )
 
     async def async_step_reconfigure(self, user_input: dict | None = None):
+        """Choose which per-TV connection should be reconfigured."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        self.context["title_placeholders"] = {
+            "device": entry.data.get(CONF_NAME, entry.title) if entry else "Samsung Frame"
+        }
+        return self.async_show_menu(
+            step_id="reconfigure",
+            menu_options=["reconfigure_connection", "ip_control"],
+        )
+
+    async def async_step_reconfigure_connection(self, user_input: dict | None = None):
         """Change the TV's IP/name without removing the integration."""
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         errors: dict[str, str] = {}
@@ -362,7 +387,49 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 vol.Optional(CONF_NAME, default=(entry.data.get(CONF_NAME, "Samsung Frame") if entry else "Samsung Frame")): str,
             }
         )
-        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="reconfigure_connection", data_schema=schema, errors=errors
+        )
+
+    async def async_step_ip_control(self, user_input: dict | None = None):
+        """Pair Samsung IP Control after an explicit user submission."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        if entry is None:
+            return self.async_abort(reason=RESULT_CANNOT_CONNECT)
+
+        device = entry.data.get(CONF_NAME, entry.title)
+        self.context["title_placeholders"] = {"device": device}
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                token, port = await async_pair_ip_control(
+                    self.hass, entry.data[CONF_HOST]
+                )
+            except IPControlTransportError:
+                errors = {"base": RESULT_CANNOT_CONNECT}
+            except IPControlAuthError:
+                errors = {"base": "ip_control_rejected"}
+            except IPControlUnavailableError:
+                errors = {"base": "ip_control_unavailable"}
+            except IPControlProtocolError:
+                errors = {"base": "ip_control_pairing_failed"}
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={
+                        **entry.data,
+                        CONF_IP_CONTROL_TOKEN: token,
+                        CONF_IP_CONTROL_PORT: port,
+                    },
+                    reason="ip_control_pairing_successful",
+                )
+
+        return self.async_show_form(
+            step_id="ip_control",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={"device": device},
+        )
 
 
 # Options flow: section key -> the flat option keys it contains. Single source
