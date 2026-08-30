@@ -69,6 +69,8 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
     _register_domain_actions(hass)
     _register_domain_websocket(hass)
     return True
+
+
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,13 +84,9 @@ MAX_KEY_HOLD_SECONDS = 30.0
 def _cleanup_params(entry: ConfigEntry, overrides=None) -> dict:
     """Build one cleanup policy from config-entry options and call overrides."""
     params = {
-        "max_items": entry.options.get(
-            "cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS
-        ),
+        "max_items": entry.options.get("cleanup_max_items", DEFAULT_CLEANUP_MAX_ITEMS),
         "max_age_days": entry.options.get("cleanup_max_age_days") or None,
-        "preserve_current": entry.options.get(
-            "cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT
-        ),
+        "preserve_current": entry.options.get("cleanup_preserve_current", DEFAULT_CLEANUP_PRESERVE_CURRENT),
         "only_integration_managed": entry.options.get(
             "cleanup_only_integration_managed",
             DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
@@ -158,11 +156,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Legacy slideshow_source_dir -> library_dir (only if customised).
     legacy_dir = new_options.pop(CONF_SLIDESHOW_SOURCE_PATH, None)
-    if (
-        legacy_dir
-        and legacy_dir != DEFAULT_LIBRARY_DIR
-        and not new_options.get(CONF_LIBRARY_DIR)
-    ):
+    if legacy_dir and legacy_dir != DEFAULT_LIBRARY_DIR and not new_options.get(CONF_LIBRARY_DIR):
         new_options[CONF_LIBRARY_DIR] = legacy_dir
 
     hass.config_entries.async_update_entry(entry, options=new_options, version=3)
@@ -211,10 +205,7 @@ def _validate_remote_image_url(hass: HomeAssistant, url: str) -> None:
     if parsed.username is not None or parsed.password is not None:
         raise ServiceValidationError("Remote image URL must not include credentials")
     if not hass.config.is_allowed_external_url(url):
-        raise ServiceValidationError(
-            "Remote image URL is not trusted; add it to Home Assistant's "
-            "allowlist_external_urls"
-        )
+        raise ServiceValidationError("Remote image URL is not trusted; add it to Home Assistant's allowlist_external_urls")
 
 
 async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
@@ -250,46 +241,28 @@ async def _async_read_image_bytes(hass: HomeAssistant, path: str) -> bytes:
                         if resp.status in redirect_statuses:
                             location = resp.headers.get("Location")
                             if not location:
-                                raise ServiceValidationError(
-                                    "Remote image redirect is missing a destination"
-                                )
+                                raise ServiceValidationError("Remote image redirect is missing a destination")
                             if redirect_count >= MAX_REMOTE_REDIRECTS:
-                                raise ServiceValidationError(
-                                    "Remote image exceeded the redirect limit"
-                                )
+                                raise ServiceValidationError("Remote image exceeded the redirect limit")
                             current_url = urljoin(current_url, location)
                             _validate_remote_image_url(hass, current_url)
                             continue
 
                         _remote_filename(current_url)
                         resp.raise_for_status()
-                        if (
-                            resp.content_length is not None
-                            and resp.content_length > MAX_REMOTE_IMAGE_BYTES
-                        ):
-                            raise ServiceValidationError(
-                                "Remote image exceeds the 20 MiB limit"
-                            )
+                        if resp.content_length is not None and resp.content_length > MAX_REMOTE_IMAGE_BYTES:
+                            raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
                         image_bytes = bytearray()
                         async for chunk in resp.content.iter_chunked(64 * 1024):
-                            if (
-                                len(image_bytes) + len(chunk)
-                                > MAX_REMOTE_IMAGE_BYTES
-                            ):
-                                raise ServiceValidationError(
-                                    "Remote image exceeds the 20 MiB limit"
-                                )
+                            if len(image_bytes) + len(chunk) > MAX_REMOTE_IMAGE_BYTES:
+                                raise ServiceValidationError("Remote image exceeds the 20 MiB limit")
                             image_bytes.extend(chunk)
                         return bytes(image_bytes)
         except TimeoutError as err:
-            raise ServiceValidationError(
-                "Remote image download timed out after 30 seconds"
-            ) from err
+            raise ServiceValidationError("Remote image download timed out after 30 seconds") from err
 
     if parsed_scheme and "://" in path:
-        raise ServiceValidationError(
-            "Unsupported image URL scheme; use HTTP or HTTPS"
-        )
+        raise ServiceValidationError("Unsupported image URL scheme; use HTTP or HTTPS")
 
     def _read() -> bytes:
         try:
@@ -356,9 +329,7 @@ def _register_domain_websocket(hass: HomeAssistant) -> None:
         from .media_source import signed_thumbnail_url
 
         for item in data.get("items", []):
-            item["thumbnail"] = signed_thumbnail_url(
-                hass, target.entry.entry_id, item["id"]
-            )
+            item["thumbnail"] = signed_thumbnail_url(hass, target.entry.entry_id, item["id"])
         connection.send_result(msg["id"], data)
 
     websocket_api.async_register_command(hass, websocket_get_library)
@@ -366,6 +337,7 @@ def _register_domain_websocket(hass: HomeAssistant) -> None:
 
 def _register_domain_actions(hass: HomeAssistant) -> None:
     """Register action handlers shared by every loaded Frame."""
+
     async def _svc_set_artmode(call: ServiceCall) -> None:
         enabled = bool(call.data.get("enabled"))
         _LOGGER.debug("Action set_artmode called: enabled=%s, data=%s", enabled, dict(call.data))
@@ -442,9 +414,7 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                 if artwork := await target.runtime.client.async_read_local_art(path):
                     break
             if not artwork:
-                raise ServiceValidationError(
-                    "Artwork is not in the tracked local library"
-                )
+                raise ServiceValidationError("Artwork is not in the tracked local library")
             image_bytes = artwork["data"]
             source_file = artwork["path"]
         else:
@@ -471,11 +441,11 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                     content_ids.append(str(content_id))
 
                 # Run automatic cleanup (defaults from const)
-                # We do this asynchronously to not block the service return too long, 
+                # We do this asynchronously to not block the service return too long,
                 # though here we await it for simplicity as the user expects "done" state.
                 # If performance is an issue, we could fire a task.
                 await client.async_cleanup_storage(**_cleanup_params(target.entry))
-                
+
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
         if call.return_response:
@@ -498,9 +468,7 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
         key = call.data["key"]
         hold_seconds = call.data.get("hold_seconds")
         for target in targets:
-            await target.runtime.client.async_send_key(
-                key, hold_seconds=hold_seconds
-            )
+            await target.runtime.client.async_send_key(key, hold_seconds=hold_seconds)
 
     hass.services.async_register(
         DOMAIN,
@@ -508,9 +476,7 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
         _svc_send_key,
         schema=vol.Schema(
             {
-                vol.Required("key"): vol.All(
-                    str, vol.Match(r"^KEY_[A-Z0-9_]+$")
-                ),
+                vol.Required("key"): vol.All(str, vol.Match(r"^KEY_[A-Z0-9_]+$")),
                 vol.Optional("hold_seconds"): vol.All(
                     vol.Coerce(float),
                     vol.Range(
@@ -537,21 +503,21 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
             DOMAIN,
             action,
             _svc_ip_control,
-            schema=vol.Schema(
-                {vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}
-            ),
+            schema=vol.Schema({vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}),
         )
 
     hass.services.async_register(
         DOMAIN,
         "upload_art",
         _svc_upload_art,
-        schema=vol.Schema({
-            vol.Required("path"): str,
-            vol.Optional("matte"): str,
-            vol.Optional("tags"): str,
-            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
-        }),
+        schema=vol.Schema(
+            {
+                vol.Required("path"): str,
+                vol.Optional("matte"): str,
+                vol.Optional("tags"): str,
+                vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
+            }
+        ),
         supports_response=SupportsResponse.OPTIONAL,
     )
 
@@ -572,9 +538,9 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
         match_all = call.data.get("match_all", False)
         source = call.data.get("source", "library")
         requested_path = call.data.get("path")
-        
+
         _LOGGER.debug("Action rotate_art_now called: tags=%s match_all=%s source=%s path=%s", tags, match_all, source, requested_path)
-        
+
         tag_list = [t.strip() for t in tags.split(",")] if tags else None
 
         targets = await async_resolve_action_targets(hass, call)
@@ -583,11 +549,7 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
             matte = resolve_matte(target.entry.options)
             try:
                 if source == "folder":
-                    path = (
-                        requested_path
-                        or target.entry.options.get(CONF_LIBRARY_DIR)
-                        or DEFAULT_LIBRARY_DIR
-                    )
+                    path = requested_path or target.entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR
                     success = await client.async_rotate_from_folder(path, matte=matte)
                     if success:
                         _LOGGER.info("rotate_art_now(folder) success on host=%s", getattr(client, "host", "?"))
@@ -598,7 +560,9 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                     if success:
                         _LOGGER.info("rotate_art_now(library) success on host=%s", getattr(client, "host", "?"))
                     else:
-                        _LOGGER.warning("rotate_art_now(library) found no matches on host=%s for tags=%s", getattr(client, "host", "?"), tags)
+                        _LOGGER.warning(
+                            "rotate_art_now(library) found no matches on host=%s for tags=%s", getattr(client, "host", "?"), tags
+                        )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("rotate_art_now failed on host=%s: %r", getattr(client, "host", "?"), err)
 
@@ -606,13 +570,15 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
         DOMAIN,
         "rotate_art_now",
         _svc_rotate_art_now,
-        schema=vol.Schema({
-            vol.Optional("tags"): str,
-            vol.Optional("match_all"): bool,
-            vol.Optional("source"): vol.In(["library", "folder"]),
-            vol.Optional("path"): str,
-            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
-        }),
+        schema=vol.Schema(
+            {
+                vol.Optional("tags"): str,
+                vol.Optional("match_all"): bool,
+                vol.Optional("source"): vol.In(["library", "folder"]),
+                vol.Optional("path"): str,
+                vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
+            }
+        ),
     )
 
     async def _svc_cleanup_storage(call: ServiceCall) -> None:
@@ -635,14 +601,16 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
         DOMAIN,
         "cleanup_storage",
         _svc_cleanup_storage,
-        schema=vol.Schema({
-            vol.Optional("max_items"): int,
-            vol.Optional("max_age_days"): int,
-            vol.Optional("preserve_current"): bool,
-            vol.Optional("only_integration_managed"): bool,
-            vol.Optional("dry_run"): bool,
-            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
-        }),
+        schema=vol.Schema(
+            {
+                vol.Optional("max_items"): int,
+                vol.Optional("max_age_days"): int,
+                vol.Optional("preserve_current"): bool,
+                vol.Optional("only_integration_managed"): bool,
+                vol.Optional("dry_run"): bool,
+                vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
+            }
+        ),
     )
 
     # Register Services
@@ -660,13 +628,13 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                 if result.get("error"):
                     persistent_notification.async_create(
                         hass,
-                        f"Inbox Processing Failed: {result['error']}",
+                        f"Inbox processing stopped: {result['error']} ({result['count']} processed, {result.get('skipped', 0)} skipped).",
                         title="Art Director",
                     )
                 else:
                     persistent_notification.async_create(
                         hass,
-                        f"Processed {result['count']} images from Inbox.",
+                        f"Processed {result['count']} images from Inbox; {result.get('skipped', 0)} skipped.",
                         title="Art Director",
                     )
             elif call.service == "sync_library":
@@ -678,17 +646,20 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                 if result.get("error"):
                     persistent_notification.async_create(
                         hass,
-                        f"Library Sync Failed: {result['error']}",
+                        f"Library sync stopped: {result['error']} ({result['added']} added, {result.get('skipped', 0)} skipped).",
                         title="Art Director",
                     )
                 else:
                     duplicates = result["duplicates_removed"]
+                    warning = f" Warning: {result['warning']}" if result.get("warning") else ""
                     persistent_notification.async_create(
                         hass,
                         f"Library sync complete: {result['added']} added, "
+                        f"{result.get('skipped', 0)} skipped, "
                         f"{result['stale_removed']} stale removed, "
                         f"{duplicates} "
-                        f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
+                        f"{'duplicate' if duplicates == 1 else 'duplicates'} removed."
+                        f"{warning}",
                         title="Art Director",
                     )
             elif call.service == "purge_database":
@@ -730,9 +701,7 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                         title="Art Director",
                     )
                 else:
-                    _LOGGER.warning(
-                        "toggle_favorite: no content_id provided and no current artwork detected"
-                    )
+                    _LOGGER.warning("toggle_favorite: no content_id provided and no current artwork detected")
             elif call.service == "delete_art":
                 content_id = call.data.get("content_id")
                 if content_id:
@@ -744,13 +713,11 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                             title="Art Director",
                         )
                     else:
-                        raise ServiceValidationError(
-                            "Artwork is not a tracked local artwork or could not be deleted"
-                        )
+                        raise ServiceValidationError("Artwork is not a tracked local artwork or could not be deleted")
             elif call.service == "rotate_favorites":
                 matte = resolve_matte(target.entry.options)
                 await client.async_rotate_art(source="favorites", matte=matte)
-            
+
     hass.services.async_register(DOMAIN, "toggle_favorite", async_fav_handler)
     hass.services.async_register(DOMAIN, "delete_art", async_fav_handler)
     hass.services.async_register(DOMAIN, "rotate_favorites", async_fav_handler)
@@ -759,18 +726,10 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
     async def async_change_page(call: ServiceCall) -> None:
         step = call.data.get("step", 0)
         for target in await async_resolve_action_targets(hass, call):
-            page_entity_id = entry_entity_id(
-                hass, target.entry, "number", "gallery_page"
-            )
-            library_entity_id = entry_entity_id(
-                hass, target.entry, "sensor", "art_library"
-            )
-            page_state = (
-                hass.states.get(page_entity_id) if page_entity_id else None
-            )
-            library_state = (
-                hass.states.get(library_entity_id) if library_entity_id else None
-            )
+            page_entity_id = entry_entity_id(hass, target.entry, "number", "gallery_page")
+            library_entity_id = entry_entity_id(hass, target.entry, "sensor", "art_library")
+            page_state = hass.states.get(page_entity_id) if page_entity_id else None
+            library_state = hass.states.get(library_entity_id) if library_entity_id else None
 
             total_items = 0
             if library_state and library_state.state not in (
@@ -796,14 +755,11 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                     )
                 except ValueError:
                     pass
-    
+
     hass.services.async_register(DOMAIN, "change_gallery_page", async_change_page)
 
 
-
-async def async_setup_entry(
-    hass: HomeAssistant, entry: SamsungFrameConfigEntry
-) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: SamsungFrameConfigEntry) -> bool:
     """Set up Samsung Frame Art Director from a config entry."""
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
 
@@ -816,6 +772,7 @@ async def async_setup_entry(
     # Compatibility Patch: fix missing is_true in samsungtvws.helper
     try:
         import samsungtvws.helper as _helper
+
         if not hasattr(_helper, "is_true"):
             _LOGGER.debug("Patching samsungtvws.helper.is_true")
             _helper.is_true = lambda val: str(val).lower() in ("true", "1", "on", "yes")
@@ -826,6 +783,7 @@ async def async_setup_entry(
     try:
         import os as _os
         import sys as _sys
+
         deps_base = hass.config.path("deps")
         candidates = [
             deps_base,
@@ -841,6 +799,7 @@ async def async_setup_entry(
     # Log samsungtvws version and whether async_art is available
     try:
         import samsungtvws  # type: ignore
+
         ver = getattr(samsungtvws, "__version__", "unknown")
         _LOGGER.info("samsungtvws package version: %s", ver)
     except Exception as e:  # noqa: BLE001
@@ -857,6 +816,7 @@ async def async_setup_entry(
     # immediately without first running a service.
     try:
         import os as _os
+
         for _d in (
             entry.options.get(CONF_INBOX_DIR) or DEFAULT_INBOX_DIR,
             entry.options.get(CONF_LIBRARY_DIR) or DEFAULT_LIBRARY_DIR,
@@ -883,6 +843,7 @@ async def async_setup_entry(
             if cur and new_token and new_token != cur.data.get("token"):
                 _LOGGER.info("Persisting refreshed token for host=%s", host)
                 hass.config_entries.async_update_entry(cur, data={**cur.data, "token": new_token})
+
         hass.loop.call_soon_threadsafe(_update)
 
     client.set_token_persister(_persist_token)
@@ -890,16 +851,12 @@ async def async_setup_entry(
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
-        entry_db_path, local_db_path = await async_prepare_entry_database(
-            hass, entry.entry_id
-        )
+        entry_db_path, local_db_path = await async_prepare_entry_database(hass, entry.entry_id)
         client.set_db_path(entry_db_path)
         client.set_local_db_path(local_db_path)
         await client.async_initialize_database()
     except Exception as err:  # noqa: BLE001
-        raise ConfigEntryNotReady(
-            f"Library database initialization failed: {err}"
-        ) from err
+        raise ConfigEntryNotReady(f"Library database initialization failed: {err}") from err
     try:
         # Validate the saved token without opening a new pairing flow. Only an
         # explicit authentication failure starts reauth; reachability and
@@ -936,29 +893,23 @@ async def async_setup_entry(
     return True
 
 
-async def async_update_options(
-    hass: HomeAssistant, entry: SamsungFrameConfigEntry
-) -> None:
+async def async_update_options(hass: HomeAssistant, entry: SamsungFrameConfigEntry) -> None:
     """Update options."""
     # Check if we need a full reload (e.g. if non-slideshow options changed)
     # For now, we assume most option changes are slideshow related and can be hot-reloaded.
     # If connection-critical options were in 'options', we would check them here.
-    
+
     # Re-apply runtime client preferences
-    entry.runtime_data.client.set_resize_mode(
-        entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE)
-    )
+    entry.runtime_data.client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
 
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)
-    
+
     # We do NOT request a config entry reload, which prevents the "unavailable" blip.
     # Note: If you add options that require restart (like mac address), handle them here.
 
 
-async def _reload_slideshow_timer(
-    hass: HomeAssistant, entry: SamsungFrameConfigEntry
-) -> None:
+async def _reload_slideshow_timer(hass: HomeAssistant, entry: SamsungFrameConfigEntry) -> None:
     """Start or stop the slideshow timer based on options."""
     runtime = entry.runtime_data
 
@@ -969,7 +920,7 @@ async def _reload_slideshow_timer(
 
     interval = entry.options.get(CONF_SLIDESHOW_INTERVAL) or DEFAULT_SLIDESHOW_INTERVAL
     enabled = entry.options.get(CONF_SLIDESHOW_ENABLED, False)
-    
+
     if interval > 0 and enabled:
         _LOGGER.info("Starting slideshow timer for %s every %s minutes", entry.title, interval)
         from datetime import timedelta
@@ -979,14 +930,10 @@ async def _reload_slideshow_timer(
         async def _tick(now):
             await _run_slideshow_job(hass, entry)
 
-        runtime.timer_unsub = async_track_time_interval(
-            hass, _tick, timedelta(minutes=interval)
-        )
+        runtime.timer_unsub = async_track_time_interval(hass, _tick, timedelta(minutes=interval))
 
 
-async def _run_slideshow_job(
-    hass: HomeAssistant, entry: SamsungFrameConfigEntry
-) -> None:
+async def _run_slideshow_job(hass: HomeAssistant, entry: SamsungFrameConfigEntry) -> None:
     """Pick a random image from source_dir and upload it."""
     runtime = entry.runtime_data
     client = runtime.client
@@ -1045,10 +992,7 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
     if fav_only or tags_filter or neg_filter:
         _LOGGER.debug(f"Slideshow: Using Dashboard filters (Fav={fav_only}, Tags={tags_filter}, Exclude={neg_filter})")
         await client.async_rotate_art(
-            tags=tags_filter,
-            negative_tags=neg_filter,
-            source="favorites" if fav_only else "library",
-            matte=matte
+            tags=tags_filter, negative_tags=neg_filter, source="favorites" if fav_only else "library", matte=matte
         )
         # Cleanup and exit early (skip default logic)
         try:
@@ -1070,9 +1014,9 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
     elif source_type == SLIDESHOW_SOURCE_TAGS:
         tags = [t.strip() for t in filter_val.split(",")] if filter_val else []
         if tags:
-             await client.async_rotate_art(tags=tags, matte=matte)
+            await client.async_rotate_art(tags=tags, matte=matte)
         else:
-             _LOGGER.warning("Slideshow: Tags source selected but no tags configured")
+            _LOGGER.warning("Slideshow: Tags source selected but no tags configured")
     else:
         # All Library
         await client.async_rotate_art(match_all=True, matte=matte)
@@ -1085,12 +1029,10 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
         _LOGGER.warning("Slideshow cleanup failed: %s", e)
 
 
-async def async_unload_entry(
-    hass: HomeAssistant, entry: SamsungFrameConfigEntry
-) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: SamsungFrameConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.info("Unloading Samsung Frame Art Director")
-    
+
     runtime = entry.runtime_data
     if runtime.timer_unsub:
         runtime.timer_unsub()
@@ -1104,5 +1046,3 @@ async def async_unload_entry(
             entry.runtime_data = None
 
     return unload_ok
-
-

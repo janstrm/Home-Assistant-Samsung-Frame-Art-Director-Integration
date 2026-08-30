@@ -10,7 +10,7 @@
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=janstrm&repository=Home-Assistant-Samsung-Frame-Art-Director-Integration&category=integration)
 
-Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload local images or fetch them from trusted HTTP(S) URLs with automatic resizing, rotate art on a schedule, manage TV storage, and build gallery dashboards. Optionally integrates with Google Gemini to auto-tag images dropped into an inbox folder.
+Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload local images or fetch them from trusted HTTP(S) URLs with automatic resizing, rotate art on a schedule, manage TV storage, and build gallery dashboards. Optional cloud classification through Google Gemini, OpenAI, or Anthropic can auto-tag images placed in an inbox folder.
 
 ---
 
@@ -19,7 +19,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 - **Home Assistant** (Core, Supervised, or OS)
 - **HACS** (Home Assistant Community Store) installed.
 - A **Samsung Frame TV** connected to the same local network.
-- (Optional) A **Google Gemini API Key** for automatic image tagging.
+- (Optional) A **Google Gemini, OpenAI, or Anthropic API key** for automatic image tagging.
 
 ---
 
@@ -27,7 +27,7 @@ Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload lo
 
 - **State Verification:** Toggles Art Mode ON/OFF and verifies the state to ensure the screen displays art rather than just being powered down.
 - **Image Uploads:** Upload local images or fetch them from a trusted HTTP(S) URL. Images are resized to 3840×2160 before upload (choose **crop** to fill or **fit** to letterbox in the options).
-- **Auto-Tagging (Optional):** Drop images into an inbox folder and run Process Inbox — Gemini analyzes, tags, and catalogs them to your local library.
+- **Auto-Tagging (Optional):** Drop images into an inbox folder and run Process Inbox — the selected provider analyzes, tags, and catalogs them to your local library.
 - **Gallery Sensor:** Exposes a database of your local art, allowing you to build dashboard views with the provided example YAML.
 - **Media Browser:** Browse your tagged library in Home Assistant's **Media** panel and "play" any image to the Frame (it uploads and displays it).
 - **Auto-Rotation:** Rotates art from local storage or limits selection based on assigned tags, favorites, and filters.
@@ -70,7 +70,7 @@ After pairing, 3 explicit targeted actions are available: **Power On (IP Control
 
 ### Options Flow (Configure)
 **Nothing here is required** — the integration works out of the box after pairing. Click **Configure** to adjust optional settings, grouped into collapsible sections:
-- **AI Image Tagging:** Add a Gemini (or OpenAI) API key to enable Process Inbox / Sync Library auto-tagging. This is the only thing most users will set.
+- **AI Image Tagging:** Select Google Gemini, OpenAI, or Anthropic; enter that provider's API key and optionally choose its model. Process Inbox and Sync Library send the full image to the selected cloud provider.
 - **Storage Cleanup:** Max items / age to keep on the TV, preserve-current, dry-run.
 - **Folders & Image:** Inbox/library folder paths and the image fit mode (crop vs. fit/letterbox).
 - **Connection & Power:** Wake-on-LAN MAC and power-key fallback.
@@ -91,7 +91,7 @@ The integration uses two folders on your HA filesystem:
 
 ### Workflow
 1. Drop images into `/media/frame/inbox/`
-2. Run **Process Inbox** → Gemini tags each image, then moves it to `/media/frame/library/`
+2. Run **Process Inbox** → the selected provider tags each image, then the integration moves it to `/media/frame/library/`
 3. Images appear in the Gallery sensor and are available for rotation
 4. If you add images directly to `/media/frame/library/`, run **Sync Library** to tag and register them
 
@@ -246,29 +246,32 @@ target:
 ### Library Services
 
 #### process_inbox
-Scan `/media/frame/inbox`, analyze each image with Gemini, move to `/media/frame/library`, and register in the database with tags.
+Scan `/media/frame/inbox`, analyze each image with the configured Gemini, OpenAI, or Anthropic provider, move it to `/media/frame/library`, and register it with normalized tags.
 ```yaml
 service: samsung_frame_art_director.process_inbox
 target:
   entity_id: media_player.samsung_frame
 ```
-> **Note:** Requires a Gemini API key in the integration options. JPEG, PNG and
-> WebP inputs are validated before upload to the provider and limited to 20 MiB,
-> 40 megapixels and 16,384 pixels on either side. If rate-limited (HTTP 429),
-> processing pauses and logs how many images were completed. Provider errors do
-> not include API keys or response bodies.
+> **Note:** Requires the selected provider's API key in the integration options.
+> The full image leaves Home Assistant and is sent to that provider. JPEG, PNG
+> and WebP inputs are validated before submission and normally limited to 20 MiB,
+> 40 megapixels and 16,384 pixels on either side. Anthropic's direct API has a
+> stricter request limit, so its inputs are capped at 7 MiB and 8,000 pixels per
+> side. Authentication, model, rate-limit, timeout, and provider-wide failures
+> stop the batch instead of retrying every remaining image. API keys and provider
+> response bodies are never included in logs or returned errors.
 
 #### sync_library
 Full bidirectional sync of the library database:
 1. **Deduplicates** the database (removes duplicate entries, keeps newest)
 2. **Removes stale entries** — DB records whose files no longer exist on disk
-3. **Adds untracked images** — files in `/media/frame/library/` not yet in the DB (tagged via Gemini AI)
+3. **Adds untracked images** — files in `/media/frame/library/` not yet in the DB (tagged by the selected provider)
 ```yaml
 service: samsung_frame_art_director.sync_library
 target:
   entity_id: media_player.samsung_frame
 ```
-> **Note:** Phases 1 & 2 (cleanup) always run, even without a Gemini key. Phase 3 (adding new images) requires the API key.
+> **Note:** Phases 1 & 2 (cleanup) always run without AI. Phase 3 requires the selected provider's API key.
 
 #### purge_database
 Wipe the local SQLite database (art history, tags, favorites). **Does NOT delete image files** from `/media/frame/library/`.
@@ -412,10 +415,10 @@ trigger:
 |---|---|
 | Art uploads stall or fail | Ensure the TV is paired. Try turning on manually and watching for permission popups. |
 | The TV repeatedly asks to allow Home Assistant | Update the integration, restart HA, and confirm the TV's **Device Connection Manager → Access Notification** setting is **First Time Only**. A normal restart reuses the saved token and must not show a prompt; a single new prompt is expected only when HA starts reauthentication for an explicitly rejected/expired token. |
-| "No Gemini API key" warning | Add your API key in **Settings → Devices → Samsung Frame Art Director → Configure**. |
+| "No … API key" warning | Select a provider and add its API key in **Settings → Devices → Samsung Frame Art Director → Configure**. |
 | "Local file missing" warnings during rotation | Run **Purge Database** then **Sync Library** to clean up stale entries. |
 | Gallery shows no images | Ensure images exist in `/media/frame/library/` and run **Sync Library**. |
-| Rate limit (429) during inbox processing | Gemini free tier has request limits. Wait a few minutes and try again. |
+| Rate limit (429) during inbox processing | Provider tiers have request limits. Wait a few minutes and try again. |
 
 Check HA logs filtered by `samsung_frame_art_director` for detailed error messages.
 

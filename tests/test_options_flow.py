@@ -1,4 +1,5 @@
 """Tests for the options flow: section flattening and label coverage."""
+
 import json
 import pathlib
 from unittest.mock import MagicMock
@@ -36,11 +37,7 @@ from custom_components.samsung_frame_art_director.switch import (
     async_setup_entry as async_setup_switch,
 )
 
-_COMPONENT_DIR = (
-    pathlib.Path(__file__).parent.parent
-    / "custom_components"
-    / "samsung_frame_art_director"
-)
+_COMPONENT_DIR = pathlib.Path(__file__).parent.parent / "custom_components" / "samsung_frame_art_director"
 
 
 async def test_flatten_preserves_entity_managed_keys(hass):
@@ -60,7 +57,15 @@ async def test_flatten_preserves_entity_managed_keys(hass):
     handler.hass = hass
 
     user_input = {
-        "ai_tagging": {"ai_provider": "gemini", "gemini_api_key": "NEW", "openai_api_key": ""},
+        "ai_tagging": {
+            "ai_provider": "anthropic",
+            "gemini_api_key": "NEW",
+            "openai_api_key": "",
+            "anthropic_api_key": "ANTHROPIC",
+            "gemini_model": "gemini-custom",
+            "openai_model": "gpt-custom",
+            "anthropic_model": "claude-custom",
+        },
         "cleanup": {
             "cleanup_max_items": 50,
             "cleanup_max_age_days": 0,
@@ -69,7 +74,7 @@ async def test_flatten_preserves_entity_managed_keys(hass):
         },
         "folders": {"inbox_dir": "/i", "library_dir": "/l", "resize_mode": "crop"},
         "power": {"mac_address": "", "use_wol_before_on": False, "use_power_key_on_off": False},
-        "advanced": {"ai_model": "", "diagnostics_verbose": False},
+        "advanced": {"diagnostics_verbose": False},
     }
 
     result = await handler.async_step_init(user_input)
@@ -78,6 +83,9 @@ async def test_flatten_preserves_entity_managed_keys(hass):
     data = result["data"]
     # Form value applied
     assert data["gemini_api_key"] == "NEW"
+    assert data["anthropic_api_key"] == "ANTHROPIC"
+    assert data["anthropic_model"] == "claude-custom"
+    assert data["ai_provider"] == "anthropic"
     assert data["library_dir"] == "/l"
     # Entity-managed keys preserved (not in the form)
     assert data["matte_style"] == "modern"
@@ -112,11 +120,7 @@ async def test_art_setting_entity_default(
     expected,
 ):
     """Art-setting entities default on and remain explicitly disableable."""
-    options = (
-        {}
-        if option_value is None
-        else {CONF_ENABLE_ART_SETTINGS: option_value}
-    )
+    options = {} if option_value is None else {CONF_ENABLE_ART_SETTINGS: option_value}
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={"host": "1.2.3.4"},

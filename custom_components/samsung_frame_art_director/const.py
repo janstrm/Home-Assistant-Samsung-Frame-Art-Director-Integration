@@ -56,18 +56,24 @@ CONF_SLIDESHOW_FILTER = "slideshow_filter"
 DEFAULT_SLIDESHOW_INTERVAL = 15
 CONF_GEMINI_API_KEY = "gemini_api_key"
 CONF_OPENAI_API_KEY = "openai_api_key"
+CONF_ANTHROPIC_API_KEY = "anthropic_api_key"
 CONF_AI_PROVIDER = "ai_provider"
-CONF_AI_MODEL = "ai_model"
+CONF_AI_MODEL = "ai_model"  # Legacy shared override; read for migration only.
+CONF_GEMINI_MODEL = "gemini_model"
+CONF_OPENAI_MODEL = "openai_model"
+CONF_ANTHROPIC_MODEL = "anthropic_model"
 CONF_MATTE_ENABLED = "matte_enabled"
 
 # AI vision providers used for auto-tagging
 AI_PROVIDER_GEMINI = "gemini"
 AI_PROVIDER_OPENAI = "openai"
+AI_PROVIDER_ANTHROPIC = "anthropic"
 
 # Default models per provider. gemini-2.0-flash is being shut down (2026-06-01),
 # so default to a current model; users can override via the AI Model option.
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_OPENAI_MODEL = "gpt-4o"
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
 SLIDESHOW_SOURCE_FOLDER = "folder"
 SLIDESHOW_SOURCE_TAGS = "Tags"

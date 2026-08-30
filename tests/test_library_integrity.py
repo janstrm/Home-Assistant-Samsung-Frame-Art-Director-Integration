@@ -71,7 +71,7 @@ async def test_sync_library_action_reports_curator_result(hass):
 
     create_notification.assert_called_once_with(
         hass,
-        "Library sync complete: 2 added, 3 stale removed, 1 duplicate removed.",
+        "Library sync complete: 2 added, 0 skipped, 3 stale removed, 1 duplicate removed.",
         title="Art Director",
     )
 

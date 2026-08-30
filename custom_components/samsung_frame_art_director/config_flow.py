@@ -28,24 +28,32 @@ from homeassistant.helpers.selector import (
 
 from .bridge import async_encrypted_start_pairing, async_encrypted_try_pin, async_probe_device_info, async_try_connect
 from .const import (
+    AI_PROVIDER_ANTHROPIC,
     AI_PROVIDER_GEMINI,
     AI_PROVIDER_OPENAI,
     CONF_AI_MODEL,
     CONF_AI_PROVIDER,
+    CONF_ANTHROPIC_API_KEY,
+    CONF_ANTHROPIC_MODEL,
     CONF_DUID,
     CONF_ENABLE_ART_SETTINGS,
     CONF_GEMINI_API_KEY,
+    CONF_GEMINI_MODEL,
     CONF_INBOX_DIR,
     CONF_IP_CONTROL_PORT,
     CONF_IP_CONTROL_TOKEN,
     CONF_LIBRARY_DIR,
     CONF_OPENAI_API_KEY,
+    CONF_OPENAI_MODEL,
     CONF_RESIZE_MODE,
     DATA_REAUTH_CONNECTION,
+    DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_CLEANUP_MAX_ITEMS,
     DEFAULT_ENABLE_ART_SETTINGS,
+    DEFAULT_GEMINI_MODEL,
     DEFAULT_INBOX_DIR,
     DEFAULT_LIBRARY_DIR,
+    DEFAULT_OPENAI_MODEL,
     DEFAULT_RESIZE_MODE,
     ENCRYPTED_WEBSOCKET_PORT,
     REAUTH_CONNECTION_IP_CONTROL,
@@ -139,13 +147,9 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 model = (self._device_info or {}).get("device", {}).get("modelName")
                 if model and isinstance(model, str) and model.upper().startswith(("H", "J")):
                     self._port = ENCRYPTED_WEBSOCKET_PORT
-                    self.context["title_placeholders"] = {
-                        "device": self._name or self._host
-                    }
+                    self.context["title_placeholders"] = {"device": self._name or self._host}
                     return await self.async_step_encrypted_pairing()
-                self.context["title_placeholders"] = {
-                    "device": self._name or self._host
-                }
+                self.context["title_placeholders"] = {"device": self._name or self._host}
                 return await self.async_step_pairing()
 
         return self.async_show_form(
@@ -271,15 +275,11 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             except Exception:  # noqa: BLE001
                 pass
             # Re-pair without the old token to force a fresh acceptance + token.
-            result = await async_try_connect(
-                self._host, self._port or 8002, None, token_file_path=token_file_path
-            )
+            result = await async_try_connect(self._host, self._port or 8002, None, token_file_path=token_file_path)
             if result.result == RESULT_SUCCESS:
                 entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
                 _LOGGER.info("Reauth success: host=%s", self._host)
-                return self.async_update_reload_and_abort(
-                    entry, data={**entry.data, "token": result.token or entry.data.get("token")}
-                )
+                return self.async_update_reload_and_abort(entry, data={**entry.data, "token": result.token or entry.data.get("token")})
             if result.result == RESULT_AUTH_MISSING:
                 errors = {"base": RESULT_AUTH_MISSING}
             elif result.result == RESULT_CANNOT_CONNECT:
@@ -309,9 +309,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             for entry in self._async_current_entries():
                 if entry.data.get(CONF_HOST) == ip and not entry.options.get("mac_address"):
                     _LOGGER.debug("DHCP: storing MAC %s for %s", mac, ip)
-                    self.hass.config_entries.async_update_entry(
-                        entry, options={**entry.options, "mac_address": mac}
-                    )
+                    self.hass.config_entries.async_update_entry(entry, options={**entry.options, "mac_address": mac})
                     break
         return self.async_abort(reason="already_configured")
 
@@ -391,9 +389,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 vol.Optional(CONF_NAME, default=(entry.data.get(CONF_NAME, "Samsung Frame") if entry else "Samsung Frame")): str,
             }
         )
-        return self.async_show_form(
-            step_id="reconfigure_connection", data_schema=schema, errors=errors
-        )
+        return self.async_show_form(step_id="reconfigure_connection", data_schema=schema, errors=errors)
 
     async def async_step_ip_control(self, user_input: dict | None = None):
         """Pair Samsung IP Control after an explicit user submission."""
@@ -406,9 +402,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                token, port = await async_pair_ip_control(
-                    self.hass, entry.data[CONF_HOST]
-                )
+                token, port = await async_pair_ip_control(self.hass, entry.data[CONF_HOST])
             except IPControlTransportError:
                 errors = {"base": RESULT_CANNOT_CONNECT}
             except IPControlAuthError:
@@ -439,7 +433,15 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
 # Options flow: section key -> the flat option keys it contains. Single source
 # of truth used to flatten the nested section payload on save.
 OPTION_SECTIONS: dict[str, list[str]] = {
-    "ai_tagging": [CONF_AI_PROVIDER, CONF_GEMINI_API_KEY, CONF_OPENAI_API_KEY],
+    "ai_tagging": [
+        CONF_AI_PROVIDER,
+        CONF_GEMINI_API_KEY,
+        CONF_GEMINI_MODEL,
+        CONF_OPENAI_API_KEY,
+        CONF_OPENAI_MODEL,
+        CONF_ANTHROPIC_API_KEY,
+        CONF_ANTHROPIC_MODEL,
+    ],
     "cleanup": [
         "cleanup_max_items",
         "cleanup_max_age_days",
@@ -448,7 +450,7 @@ OPTION_SECTIONS: dict[str, list[str]] = {
     ],
     "folders": [CONF_INBOX_DIR, CONF_LIBRARY_DIR, CONF_RESIZE_MODE],
     "power": ["mac_address", "use_wol_before_on", "use_power_key_on_off"],
-    "advanced": [CONF_AI_MODEL, CONF_ENABLE_ART_SETTINGS, "diagnostics_verbose"],
+    "advanced": [CONF_ENABLE_ART_SETTINGS, "diagnostics_verbose"],
 }
 
 _TEXT = TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))
@@ -474,6 +476,15 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=merged)
 
         opts = self._entry.options or {}
+        selected_provider = opts.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)
+        legacy_model = opts.get(CONF_AI_MODEL, "")
+
+        def _model_default(provider: str, option: str, fallback: str) -> str:
+            """Carry a legacy shared model into only its selected provider field."""
+            return opts.get(
+                option,
+                legacy_model if selected_provider == provider and legacy_model else fallback,
+            )
 
         ai_schema = vol.Schema(
             {
@@ -482,12 +493,41 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                         options=[
                             SelectOptionDict(value=AI_PROVIDER_GEMINI, label="Google Gemini"),
                             SelectOptionDict(value=AI_PROVIDER_OPENAI, label="OpenAI"),
+                            SelectOptionDict(value=AI_PROVIDER_ANTHROPIC, label="Anthropic"),
                         ],
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
                 vol.Optional(CONF_GEMINI_API_KEY, default=opts.get(CONF_GEMINI_API_KEY, "")): _PASSWORD,
+                vol.Optional(
+                    CONF_GEMINI_MODEL,
+                    default=_model_default(
+                        AI_PROVIDER_GEMINI,
+                        CONF_GEMINI_MODEL,
+                        DEFAULT_GEMINI_MODEL,
+                    ),
+                ): _TEXT,
                 vol.Optional(CONF_OPENAI_API_KEY, default=opts.get(CONF_OPENAI_API_KEY, "")): _PASSWORD,
+                vol.Optional(
+                    CONF_OPENAI_MODEL,
+                    default=_model_default(
+                        AI_PROVIDER_OPENAI,
+                        CONF_OPENAI_MODEL,
+                        DEFAULT_OPENAI_MODEL,
+                    ),
+                ): _TEXT,
+                vol.Optional(
+                    CONF_ANTHROPIC_API_KEY,
+                    default=opts.get(CONF_ANTHROPIC_API_KEY, ""),
+                ): _PASSWORD,
+                vol.Optional(
+                    CONF_ANTHROPIC_MODEL,
+                    default=_model_default(
+                        AI_PROVIDER_ANTHROPIC,
+                        CONF_ANTHROPIC_MODEL,
+                        DEFAULT_ANTHROPIC_MODEL,
+                    ),
+                ): _TEXT,
             }
         )
 
@@ -530,12 +570,9 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
         advanced_schema = vol.Schema(
             {
-                vol.Optional(CONF_AI_MODEL, default=opts.get(CONF_AI_MODEL, "")): _TEXT,
                 vol.Optional(
                     CONF_ENABLE_ART_SETTINGS,
-                    default=opts.get(
-                        CONF_ENABLE_ART_SETTINGS, DEFAULT_ENABLE_ART_SETTINGS
-                    ),
+                    default=opts.get(CONF_ENABLE_ART_SETTINGS, DEFAULT_ENABLE_ART_SETTINGS),
                 ): BooleanSelector(),
                 vol.Optional("diagnostics_verbose", default=opts.get("diagnostics_verbose", False)): BooleanSelector(),
             }
