@@ -3,9 +3,13 @@ target-version = "py312"
 line-length = 140
 
 [tool.ruff.lint]
-# Start conservative: pyflakes (unused imports, undefined names) — the
-# high-value correctness checks. Style/import-order rules can be added later.
-select = ["F"]
+# Correctness-first rules aligned with Home Assistant's Python baseline:
+# imports, modernization, likely bugs, and blocking/async mistakes.
+select = ["ASYNC", "B", "F", "I", "UP"]
+ignore = [
+    # Timeouts are valid public parameters throughout the TV boundary.
+    "ASYNC109",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

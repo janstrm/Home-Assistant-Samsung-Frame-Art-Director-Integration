@@ -34,7 +34,7 @@ _MEDIA_TYPE_IMAGE = "image"
 _FALLBACK_MIME = "application/octet-stream"
 
 
-async def async_get_media_source(hass: HomeAssistant) -> "ArtLibraryMediaSource":
+async def async_get_media_source(hass: HomeAssistant) -> ArtLibraryMediaSource:
     """Set up the Samsung Frame art library media source."""
     return ArtLibraryMediaSource(hass)
 

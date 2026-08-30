@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import entity_registry as er, service as ha_service
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import service as ha_service
 
 from .const import DOMAIN
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData

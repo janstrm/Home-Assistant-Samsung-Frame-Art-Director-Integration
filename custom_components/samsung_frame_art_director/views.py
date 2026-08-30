@@ -2,7 +2,6 @@ import logging
 from http import HTTPStatus
 
 from aiohttp import web
-
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 

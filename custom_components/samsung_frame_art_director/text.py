@@ -3,12 +3,12 @@ import logging
 
 from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
 from homeassistant.const import EntityCategory
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_SLIDESHOW_FILTER, DOMAIN, CONF_DUID
+from .const import CONF_DUID, CONF_SLIDESHOW_FILTER, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 

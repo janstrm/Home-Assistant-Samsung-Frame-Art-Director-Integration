@@ -1,16 +1,16 @@
 """Tests for image preprocessing and the local-art DB helpers."""
 import asyncio
 import io
-from pathlib import Path
 import sqlite3
 import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from PIL import Image
 import pytest
+from PIL import Image
 
 from custom_components.samsung_frame_art_director.api import (
     DeviceUnavailableError,

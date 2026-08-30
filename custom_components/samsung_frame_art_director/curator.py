@@ -6,9 +6,9 @@ This module handles:
 3. Saving metadata (tags) to the local database.
 4. Moving processed files to the library folder.
 """
+import logging
 import os
 import shutil
-import logging
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -20,12 +20,12 @@ from .api import SamsungFrameClient
 from .const import (
     AI_PROVIDER_GEMINI,
     AI_PROVIDER_OPENAI,
-    CONF_AI_PROVIDER,
     CONF_AI_MODEL,
+    CONF_AI_PROVIDER,
     CONF_GEMINI_API_KEY,
-    CONF_OPENAI_API_KEY,
     CONF_INBOX_DIR,
     CONF_LIBRARY_DIR,
+    CONF_OPENAI_API_KEY,
     DEFAULT_INBOX_DIR,
     DEFAULT_LIBRARY_DIR,
 )
@@ -201,16 +201,16 @@ class ContentCurator:
                 _LOGGER.info("Process Inbox: AI tagged '%s' -> Tags: %s", filename, tags)
 
                 # 2. Move to Library (Executor)
-                def _move():
-                    trusted_source = ensure_allowed_local_path(self.hass, source_path)
+                def _move(source: Path, original_filename: str):
+                    trusted_source = ensure_allowed_local_path(self.hass, source)
                     # Ensure unique filename in library
-                    dest_filename = filename
+                    dest_filename = original_filename
                     counter = 1
                     dest_path = ensure_allowed_local_path(
                         self.hass, library_dir / dest_filename
                     )
                     while dest_path.exists():
-                        name, ext = os.path.splitext(filename)
+                        name, ext = os.path.splitext(original_filename)
                         dest_filename = f"{name}_{counter}{ext}"
                         counter += 1
                         dest_path = ensure_allowed_local_path(
@@ -221,7 +221,11 @@ class ContentCurator:
                     return str(dest_path)
 
                 # CRITICAL: We move the file ONLY after AI analysis is successful
-                dest_path = await self.hass.async_add_executor_job(_move)
+                dest_path = await self.hass.async_add_executor_job(
+                    _move,
+                    source_path,
+                    filename,
+                )
 
             except Exception as e:
                 _LOGGER.error("Process Inbox: Failed to analyze/move '%s': %s", filename, e)

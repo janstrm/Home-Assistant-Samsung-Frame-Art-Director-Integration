@@ -16,8 +16,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpda
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_DUID, DOMAIN, resolve_matte
-from .runtime import SamsungFrameConfigEntry
 from .media_source import split_media_identifier
+from .runtime import SamsungFrameConfigEntry
 from .targets import loaded_frame_target
 
 _LOGGER = logging.getLogger(__name__)

@@ -5,27 +5,27 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    CONF_SLIDESHOW_SOURCE_TYPE,
-    DOMAIN,
+    ART_MOTION_TIMER_OPTIONS,
     CONF_DUID,
-    SLIDESHOW_SOURCE_FOLDER,
-    SLIDESHOW_SOURCE_TAGS,
-    SLIDESHOW_SOURCE_LIBRARY,
-    CONF_MATTE_STYLE,
+    CONF_ENABLE_ART_SETTINGS,
     CONF_MATTE_COLOR,
     CONF_MATTE_ENABLED,
-    MATTE_STYLES,
+    CONF_MATTE_STYLE,
+    CONF_SLIDESHOW_SOURCE_TYPE,
+    DEFAULT_ENABLE_ART_SETTINGS,
+    DEFAULT_MATTE_COLOR,
+    DEFAULT_MATTE_STYLE,
+    DOMAIN,
     MATTE_COLORS,
     MATTE_STYLE_NONE,
-    DEFAULT_MATTE_STYLE,
-    DEFAULT_MATTE_COLOR,
-    ART_MOTION_TIMER_OPTIONS,
-    CONF_ENABLE_ART_SETTINGS,
-    DEFAULT_ENABLE_ART_SETTINGS,
+    MATTE_STYLES,
+    SLIDESHOW_SOURCE_FOLDER,
+    SLIDESHOW_SOURCE_LIBRARY,
+    SLIDESHOW_SOURCE_TAGS,
 )
 from .runtime import SamsungFrameConfigEntry
 

@@ -6,8 +6,9 @@ Inspired by the official samsungtv integration, minimized for Frame Art Mode.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional, Tuple
 import logging
+from pathlib import Path
+from typing import Any
 
 # Suppress local HTTPS cert warnings from TV endpoints during pairing/info calls
 try:  # pragma: no cover - best-effort suppression
@@ -21,9 +22,9 @@ from .const import (
     CLIENT_NAME,
     RESULT_AUTH_MISSING,
     RESULT_CANNOT_CONNECT,
+    RESULT_INVALID_PIN,
     RESULT_SUCCESS,
     WEBSOCKET_PORTS,
-    RESULT_INVALID_PIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -31,17 +32,25 @@ _LOGGER = logging.getLogger(__name__)
 PROBE_TIMEOUT = 10
 
 
+def _read_token_file(path: str) -> str | None:
+    """Read a pairing token from disk without exposing it in logs."""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 class PairResult:
     """Simple container for pair attempt results."""
 
-    def __init__(self, result: str, token: Optional[str] = None, info: Optional[dict[str, Any]] = None, session_id: Optional[str] = None) -> None:
+    def __init__(self, result: str, token: str | None = None, info: dict[str, Any] | None = None, session_id: str | None = None) -> None:
         self.result = result
         self.token = token
         self.info = info or {}
         self.session_id = session_id
 
 
-async def async_probe_device_info(host: str) -> Tuple[int | None, dict[str, Any] | None]:
+async def async_probe_device_info(host: str) -> tuple[int | None, dict[str, Any] | None]:
     """Try to fetch device info to determine a working port.
 
     Returns (port, info) where port may be 8002 or 8001, or None if unreachable.
@@ -76,7 +85,7 @@ async def async_probe_device_info(host: str) -> Tuple[int | None, dict[str, Any]
     return None, None
 
 
-async def async_try_connect(host: str, port: int, token: Optional[str], token_file_path: Optional[str] = None) -> PairResult:
+async def async_try_connect(host: str, port: int, token: str | None, token_file_path: str | None = None) -> PairResult:
     """Try a connection and return result semantics similar to official bridge.
 
     RESULT_SUCCESS when token is valid or user accepted pairing and token became available.
@@ -122,16 +131,10 @@ async def async_try_connect(host: str, port: int, token: Optional[str], token_fi
                 new_token = getattr(remote, "token", None)
                 # Fallback to token file if provided
                 if not new_token and token_file_path:
-                    try:
-                        import os
-
-                        if os.path.exists(token_file_path):
-                            with open(token_file_path, "r", encoding="utf-8") as f:
-                                file_token = f.read().strip()
-                                if file_token:
-                                    new_token = file_token
-                    except Exception:  # noqa: BLE001
-                        new_token = None
+                    new_token = await asyncio.to_thread(
+                        _read_token_file,
+                        token_file_path,
+                    )
 
                 if new_token:
                     _LOGGER.info("Connect success (AsyncRemote): host=%s token_captured=True", host)
@@ -196,16 +199,7 @@ async def async_try_connect(host: str, port: int, token: Optional[str], token_fi
             new_token = getattr(art, "token", None) or getattr(tv, "token", None)
             # If token not set on object, try reading token_file if provided
             if not new_token and token_file_path:
-                try:
-                    import os
-
-                    if os.path.exists(token_file_path):
-                        with open(token_file_path, "r", encoding="utf-8") as f:
-                            file_token = f.read().strip()
-                            if file_token:
-                                new_token = file_token
-                except Exception:  # noqa: BLE001
-                    new_token = None
+                new_token = _read_token_file(token_file_path)
             if new_token:
                 _LOGGER.info(
                     "Connect success: host=%s port=%s token_captured=%s",
