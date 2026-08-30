@@ -7,10 +7,10 @@ from urllib.parse import quote
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
+from custom_components.samsung_frame_art_director.compat import create_entry_coordinator
 from custom_components.samsung_frame_art_director.const import DOMAIN
 from custom_components.samsung_frame_art_director.media_player import (
     SamsungFrameMediaPlayer,
@@ -21,9 +21,10 @@ from custom_components.samsung_frame_art_director.runtime import (
 
 
 def _media_player(hass, entry, client):
-    coordinator = DataUpdateCoordinator(
+    coordinator = create_entry_coordinator(
         hass,
         logging.getLogger(__name__),
+        entry,
         name="test-frame",
     )
     entry.runtime_data = SamsungFrameRuntimeData(
