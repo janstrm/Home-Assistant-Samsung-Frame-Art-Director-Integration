@@ -1,4 +1,6 @@
 """Tests for the config flow (user pairing, reconfigure guard)."""
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -17,6 +19,21 @@ from custom_components.samsung_frame_art_director.ip_control import (
 )
 
 _CF = "custom_components.samsung_frame_art_director.config_flow"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        Path("custom_components/samsung_frame_art_director/strings.json"),
+        Path(
+            "custom_components/samsung_frame_art_director/translations/en.json"
+        ),
+    ],
+)
+def test_flow_title_does_not_require_runtime_placeholders(path):
+    strings = json.loads(path.read_text(encoding="utf-8"))
+    assert strings["config"]["flow_title"] == "Samsung Frame Art Director"
+    assert "{" not in strings["config"]["step"]["reconfigure"]["title"]
 
 
 async def test_user_flow_success(hass):
@@ -139,6 +156,7 @@ async def test_ip_control_pairing_preserves_entry_data_and_replaces_stale_token(
         )
         assert result["type"] == FlowResultType.MENU
         assert result["menu_options"] == ["reconfigure_connection", "ip_control"]
+        assert result["description_placeholders"] == {"device": "Frame"}
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"next_step_id": "ip_control"}

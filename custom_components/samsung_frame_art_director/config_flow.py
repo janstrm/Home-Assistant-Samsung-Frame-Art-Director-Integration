@@ -139,9 +139,13 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
                 model = (self._device_info or {}).get("device", {}).get("modelName")
                 if model and isinstance(model, str) and model.upper().startswith(("H", "J")):
                     self._port = ENCRYPTED_WEBSOCKET_PORT
-                    self.context["title_placeholders"] = {"device": self._name or self._host}
+                    self.context["title_placeholders"] = {
+                        "device": self._name or self._host
+                    }
                     return await self.async_step_encrypted_pairing()
-                self.context["title_placeholders"] = {"device": self._name or self._host}
+                self.context["title_placeholders"] = {
+                    "device": self._name or self._host
+                }
                 return await self.async_step_pairing()
 
         return self.async_show_form(
@@ -353,12 +357,12 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
     async def async_step_reconfigure(self, user_input: dict | None = None):
         """Choose which per-TV connection should be reconfigured."""
         entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
-        self.context["title_placeholders"] = {
-            "device": entry.data.get(CONF_NAME, entry.title) if entry else "Samsung Frame"
-        }
+        device = entry.data.get(CONF_NAME, entry.title) if entry else "Samsung Frame"
+        self.context["title_placeholders"] = {"device": device}
         return self.async_show_menu(
             step_id="reconfigure",
             menu_options=["reconfigure_connection", "ip_control"],
+            description_placeholders={"device": device},
         )
 
     async def async_step_reconfigure_connection(self, user_input: dict | None = None):

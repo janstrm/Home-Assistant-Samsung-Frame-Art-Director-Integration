@@ -45,6 +45,10 @@ from .file_access import (
     is_local_media_identifier,
     resolve_upload_source,
 )
+from .ip_control_actions import (
+    IP_CONTROL_ACTIONS,
+    async_execute_ip_control_action,
+)
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
 from .targets import (
     async_resolve_action_targets,
@@ -518,6 +522,25 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
             }
         ),
     )
+
+    async def _svc_ip_control(call: ServiceCall) -> None:
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            await async_execute_ip_control_action(
+                hass,
+                target,
+                call.service,
+            )
+
+    for action in IP_CONTROL_ACTIONS:
+        hass.services.async_register(
+            DOMAIN,
+            action,
+            _svc_ip_control,
+            schema=vol.Schema(
+                {vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}
+            ),
+        )
 
     hass.services.async_register(
         DOMAIN,

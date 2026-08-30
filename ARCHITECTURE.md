@@ -23,9 +23,9 @@ WebSocket API**, via the
 PyPI release `samsungtvws[async,encrypted]>=3.0.5`). An isolated
 `ip_control.py` boundary implements the separate HTTPS JSON-RPC power protocol
 on ports 1516/1515. Its user-initiated pairing and per-entry persistence are
-available; public power actions remain a separate rollout package. There is no
-supported public Samsung consumer-TV API; these paths are
-reverse-engineered and model-dependent. The established WebSocket behavior is
+available, and explicit targeted power-on, power-off, and reboot actions use
+that boundary. There is no supported public Samsung consumer-TV API; these
+paths are reverse-engineered and model-dependent. The established WebSocket behavior is
 confirmed on the **Q65LS03DAU**; other models/years may differ.
 
 Core capabilities:
@@ -36,6 +36,7 @@ Core capabilities:
 - Maintain a **local SQLite library** of art with AI-generated tags.
 - **Rotate** displayed art on a schedule, filtered by tags / favorites / folder.
 - **Clean up** the TV's limited internal storage.
+- Request explicit IP Control panel power-on, power-off, or reboot after pairing.
 - Expose a **gallery sensor** + dashboard for browsing/managing art.
 
 ---
@@ -55,7 +56,8 @@ Core capabilities:
 │ (media_player, (set_artmode,    timer         (process_inbox,   │
 │  image, switch, upload_art,    (_run_         sync_library)     │
 │  select, number, rotate_*,      slideshow_         │            │
-│  text, sensor)  cleanup, ...)   job)               ▼            │
+│  text, sensor)  cleanup, IP     job)               ▼            │
+│                 power/reboot)                      │            │
 │      │             │                │         ai.py             │
 │      └─────────────┴────────────────┘      (Gemini / OpenAI)    │
 │                    │                               │            │
@@ -76,7 +78,7 @@ Two external boundaries dominate the design:
 
 1. **The TV** — runtime operations currently reach it through `samsungtvws`.
    IP Control is a separate dependency-free protocol boundary, constructed only
-   by its explicit Reconfigure pairing step for now. Connections are
+   by explicit pairing and power actions. Connections are
    short-lived, created per-operation, and wrapped in timeouts/retries. The
    library is partly synchronous, so blocking calls are pushed to threads. Device-info
    discovery uses the REST client directly so it cannot trigger WebSocket
@@ -97,6 +99,7 @@ custom_components/samsung_frame_art_director/
 ├── bridge.py          # Pairing/handshake + port/method selection (used by config_flow)
 ├── ip_control.py      # Isolated HTTPS JSON-RPC power client
 ├── ip_control_pairing.py # User-initiated port fallback + token acquisition
+├── ip_control_actions.py # Explicit targeted power actions + HA error mapping
 ├── config_flow.py     # Pairing UI, zeroconf discovery, reauth, reconfigure, options
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
 ├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
@@ -171,8 +174,10 @@ only after the user submits **Reconfigure → IP Control**, tries port 1515 only
 after a transport failure on 1516, and returns the token plus successful port.
 The config flow persists those values as `ip_control_token` and
 `ip_control_port` on that TV's entry. Startup and polling never invoke pairing;
-public power actions are a separate rollout package. It does not replace or
-modify any WebSocket Art Mode behavior.
+`ip_control_actions.py` constructs the client with only the selected entry's
+credential and exposes explicit power-on, power-off, and reboot operations.
+Authentication rejection starts a linked IP reauth repair. It does not replace
+or modify any WebSocket Art Mode behavior.
 
 ### `config_flow.py`
 
@@ -329,10 +334,25 @@ network. `createAccessToken` runs only after form submission. The resulting
 credential is stored per entry and separately from the WebSocket token; a later
 submission safely replaces a stale IP token without changing other entry data.
 Transport failure may fall back from 1516 to 1515, but an application-level TV
-response never triggers a second endpoint or approval prompt. A future runtime
-token rejection can start Home Assistant reauth with
+response never triggers a second endpoint or approval prompt. An action token
+rejection starts Home Assistant reauth with
 `reauth_connection=ip_control`; the flow then links directly to the same safe
 pairing form instead of entering WebSocket reauth.
+
+### Explicit IP Control power actions
+
+The domain actions `power_on`, `power_off`, and `reboot` resolve targets through
+`async_resolve_action_targets()` and build a short-lived IP Control client from
+only that selected entry's `ip_control_token` and `ip_control_port`. An unpaired
+entry fails validation before any network call. A rejected token starts the
+linked IP Control repair flow; transport, state/model, and protocol failures
+remain distinct user-facing validation errors without exposing raw responses.
+
+These actions are deliberately separate from the media-player power methods.
+`media_player.turn_on` and `turn_off` still enter and leave Art Mode through the
+established WebSocket client. When explicit power-on finds the paired IP Control
+port asleep, it may fall back to the entry's already configured Wake-on-LAN MAC
+address. There is no IP Control polling or Art Mode routing.
 
 ### Set Art Mode (with verification)
 
