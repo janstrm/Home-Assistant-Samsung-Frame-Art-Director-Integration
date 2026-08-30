@@ -245,7 +245,9 @@ pytest-asyncio==0.23.6
     #   pytest-aiohttp
     #   pytest-homeassistant-custom-component
 pytest-cov==5.0.0
-    # via pytest-homeassistant-custom-component
+    # via
+    #   -r requirements_test_minimum.txt
+    #   pytest-homeassistant-custom-component
 pytest-freezer==0.4.8
     # via pytest-homeassistant-custom-component
 pytest-github-actions-annotate-failures==0.2.0
@@ -255,7 +257,9 @@ pytest-homeassistant-custom-component==0.13.144
 pytest-picked==0.5.0
     # via pytest-homeassistant-custom-component
 pytest-socket==0.7.0
-    # via pytest-homeassistant-custom-component
+    # via
+    #   -r requirements_test_minimum.txt
+    #   pytest-homeassistant-custom-component
 pytest-sugar==1.0.0
     # via pytest-homeassistant-custom-component
 pytest-timeout==2.3.1

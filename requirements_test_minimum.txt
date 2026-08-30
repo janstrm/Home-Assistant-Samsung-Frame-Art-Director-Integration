@@ -1,2 +1,4 @@
 pytest-homeassistant-custom-component==0.13.144
+pytest-cov==5.0.0
+pytest-socket==0.7.0
 ruff==0.16.4

@@ -297,7 +297,9 @@ pytest-asyncio==1.4.0
     #   pytest-aiohttp
     #   pytest-homeassistant-custom-component
 pytest-cov==7.1.0
-    # via pytest-homeassistant-custom-component
+    # via
+    #   -r requirements_test.txt
+    #   pytest-homeassistant-custom-component
 pytest-freezer==0.4.9
     # via pytest-homeassistant-custom-component
 pytest-github-actions-annotate-failures==0.4.2
@@ -307,7 +309,9 @@ pytest-homeassistant-custom-component==0.13.357
 pytest-picked==0.5.1
     # via pytest-homeassistant-custom-component
 pytest-socket==0.8.0
-    # via pytest-homeassistant-custom-component
+    # via
+    #   -r requirements_test.txt
+    #   pytest-homeassistant-custom-component
 pytest-timeout==2.4.0
     # via pytest-homeassistant-custom-component
 pytest-unordered==0.8.0

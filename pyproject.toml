@@ -16,5 +16,5 @@ ignore = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "-q"
+addopts = "-q --allow-hosts=127.0.0.1,::1 --allow-unix-socket"
 testpaths = ["tests"]

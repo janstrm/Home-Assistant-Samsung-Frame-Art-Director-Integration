@@ -30,7 +30,8 @@ uv pip compile --python-version 3.12 requirements_test_minimum.txt -o requiremen
 
 CI runs Ruff once and pytest against both compatibility lines, plus **hassfest**
 and **HACS** validation. Feature branches run through their pull request only;
-direct `main` pushes still run CI.
+direct `main` pushes still run CI. Pytest permits only loopback and Unix-domain
+socket connections, so tests cannot contact a real TV or an internet endpoint.
 
 ### Coverage gate
 
