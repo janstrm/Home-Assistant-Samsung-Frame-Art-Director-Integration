@@ -132,6 +132,30 @@ data:
   enabled: true
 ```
 
+#### send_key
+Send a Samsung remote-control key to one Frame. `hold_seconds` is optional;
+when present, the integration sends a real press, waits for the requested
+duration, and then releases the key. Valid durations are 0.1–30 seconds.
+
+Tap HDMI:
+```yaml
+action: samsung_frame_art_director.send_key
+target:
+  entity_id: media_player.samsung_frame
+data:
+  key: KEY_HDMI
+```
+
+Hold volume up for 0.8 seconds:
+```yaml
+action: samsung_frame_art_director.send_key
+target:
+  entity_id: media_player.samsung_frame
+data:
+  key: KEY_VOLUP
+  hold_seconds: 0.8
+```
+
 #### upload_art
 Upload and immediately display an image from your HA filesystem, an opaque
 `local-…` gallery ID, or a trusted HTTP(S) URL. Remote downloads have a

@@ -224,11 +224,20 @@ class SamsungFrameClient:
                 except Exception:  # noqa: BLE001
                     pass
 
-    async def async_send_key(self, key: str) -> None:
-        """Send a remote key over a properly-identified connection."""
+    async def async_send_key(
+        self, key: str, *, hold_seconds: float | None = None
+    ) -> None:
+        """Tap or hold a remote key over a properly identified connection."""
         def _send():
-            tv = self._make_tv()
+            tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
             try:
+                if hold_seconds is not None:
+                    hold_fn = getattr(tv, "hold_key", None)
+                    if not callable(hold_fn):
+                        raise RuntimeError("TV client exposes no hold_key()")
+                    hold_fn(key, hold_seconds)
+                    return
+
                 # samsungtvws exposes send_key() directly on SamsungTVWS; there
                 # is no remote() accessor in the official library, so that
                 # path always raised AttributeError and every key silently
@@ -243,14 +252,15 @@ class SamsungFrameClient:
                     raise RuntimeError("TV client exposes no send_key()")
                 send_fn(key)
             finally:
-                self._capture_token(tv)
-                closer = getattr(tv, "close", None)
-                if callable(closer):
-                    try:
-                        closer()
-                    except Exception:  # noqa: BLE001
-                        pass
-        await asyncio.to_thread(_send)
+                self._close_art_connection(tv)
+
+        aggregate_timeout = ART_OPERATION_TIMEOUT_SECONDS
+        if hold_seconds is not None:
+            # A hold has two network legs (Press and Release) around the sleep.
+            aggregate_timeout = (
+                2 * ART_OPERATION_TIMEOUT_SECONDS + hold_seconds
+            )
+        await self._async_run_blocking_contained(_send, aggregate_timeout)
 
     def _fire_art_changed(self, content_id) -> None:
         """Fire an HA event when the displayed artwork changes (automation hook)."""

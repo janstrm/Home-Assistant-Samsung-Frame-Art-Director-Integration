@@ -12,6 +12,34 @@ set_artmode:
       selector:
         boolean:
 
+send_key:
+  name: Send Remote Key
+  description: >-
+    Send a Samsung remote-control key to the selected Frame. Optionally hold
+    the key using a real press/release sequence instead of repeating taps.
+  target:
+    entity:
+      domain: media_player
+  fields:
+    key:
+      name: Key
+      description: Samsung remote key name, for example KEY_HDMI or KEY_VOLUP.
+      example: KEY_HDMI
+      required: true
+      selector:
+        text:
+    hold_seconds:
+      name: Hold duration
+      description: Optional duration to hold the key, from 0.1 to 30 seconds.
+      example: 0.8
+      selector:
+        number:
+          min: 0.1
+          max: 30
+          step: 0.1
+          unit_of_measurement: seconds
+          mode: box
+
 rotate_art_now:
   name: Rotate Art
   description: Selects a new piece of art based on tags or source folder.

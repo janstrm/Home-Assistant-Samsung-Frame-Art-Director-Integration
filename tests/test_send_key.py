@@ -1,9 +1,33 @@
 """Tests for SamsungFrameClient.async_send_key."""
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from custom_components.samsung_frame_art_director.api import SamsungFrameClient
+from custom_components.samsung_frame_art_director.api import (
+    ART_OPERATION_TIMEOUT_SECONDS,
+    SamsungFrameClient,
+)
+
+
+async def test_send_key_holds_through_official_client_boundary():
+    """A requested hold uses samsungtvws' Press/Sleep/Release command path."""
+    client = SamsungFrameClient(SimpleNamespace(), "1.2.3.4", token="TOK")
+    tv = MagicMock(spec=["hold_key", "close", "token"])
+    tv.token = "TOK"
+    client._make_tv = MagicMock(return_value=tv)
+    client._async_run_blocking_contained = AsyncMock(
+        side_effect=lambda operation, _timeout: operation()
+    )
+
+    await client.async_send_key("KEY_HDMI", hold_seconds=0.8)
+
+    tv.hold_key.assert_called_once_with("KEY_HDMI", 0.8)
+    client._make_tv.assert_called_once_with(timeout=ART_OPERATION_TIMEOUT_SECONDS)
+    assert client._async_run_blocking_contained.await_args.args[1] == (
+        2 * ART_OPERATION_TIMEOUT_SECONDS + 0.8
+    )
+    tv.close.assert_called_once()
 
 
 async def test_send_key_uses_direct_send_key(hass):

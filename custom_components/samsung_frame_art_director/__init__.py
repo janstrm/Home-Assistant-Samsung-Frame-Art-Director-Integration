@@ -71,6 +71,8 @@ _LOGGER = logging.getLogger(__name__)
 
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_REMOTE_REDIRECTS = 5
+MIN_KEY_HOLD_SECONDS = 0.1
+MAX_KEY_HOLD_SECONDS = 30.0
 
 
 def _cleanup_params(entry: ConfigEntry, overrides=None) -> dict:
@@ -486,6 +488,37 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
         _svc_set_artmode,
         schema=vol.Schema({vol.Required("enabled"): bool, vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}),
     )
+
+    async def _svc_send_key(call: ServiceCall) -> None:
+        targets = await async_resolve_action_targets(hass, call)
+        key = call.data["key"]
+        hold_seconds = call.data.get("hold_seconds")
+        for target in targets:
+            await target.runtime.client.async_send_key(
+                key, hold_seconds=hold_seconds
+            )
+
+    hass.services.async_register(
+        DOMAIN,
+        "send_key",
+        _svc_send_key,
+        schema=vol.Schema(
+            {
+                vol.Required("key"): vol.All(
+                    str, vol.Match(r"^KEY_[A-Z0-9_]+$")
+                ),
+                vol.Optional("hold_seconds"): vol.All(
+                    vol.Coerce(float),
+                    vol.Range(
+                        min=MIN_KEY_HOLD_SECONDS,
+                        max=MAX_KEY_HOLD_SECONDS,
+                    ),
+                ),
+                vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
+            }
+        ),
+    )
+
     hass.services.async_register(
         DOMAIN,
         "upload_art",
