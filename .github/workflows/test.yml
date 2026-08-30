@@ -14,21 +14,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Lint & pytest
+  lint:
+    name: Ruff
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.13"
-      - name: Install test dependencies
-        run: pip install -r requirements_test.lock
-      - name: Ruff
-        run: ruff check custom_components tests
+          python-version: "3.14"
+      - run: pip install ruff==0.16.4
+      - run: ruff check custom_components tests
+
+  test:
+    name: Pytest (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimum HA 2024.6
+            python-version: "3.12"
+            requirements: requirements_test_minimum.lock
+          - name: current HA 2026.8
+            python-version: "3.14"
+            requirements: requirements_test.lock
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install ${{ matrix.name }} test dependencies
+        run: pip install -r ${{ matrix.requirements }}
       - name: Pytest
         run: >-
           pytest
           --cov=custom_components.samsung_frame_art_director
           --cov-report=term-missing
           --cov-report=xml
+          --cov-fail-under=68
