@@ -9,9 +9,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from .const import DOMAIN
+from .database import sqlite_connection
 from .file_access import (
     UnsafeLocalPathError,
     ensure_allowed_local_path,
@@ -385,17 +387,19 @@ class SamsungFrameClient:
     async def async_set_brightness_sensor(self, enabled: bool) -> None:
         await self._async_art("set_brightness_sensor_setting", "on" if enabled else "off")
 
+    @contextmanager
     def _get_db(self):
-        """Open a sqlite connection to the library DB."""
+        """Yield a library DB connection and always close it on exit."""
         import sqlite3
-        conn = sqlite3.connect(self._db_path)
-        if self._local_db_path and self._local_db_path != self._db_path:
-            conn.execute(
-                "ATTACH DATABASE ? AS shared_local",
-                (self._local_db_path,),
-            )
-        conn.row_factory = sqlite3.Row
-        return conn
+
+        with sqlite_connection(self._db_path) as conn:
+            if self._local_db_path and self._local_db_path != self._db_path:
+                conn.execute(
+                    "ATTACH DATABASE ? AS shared_local",
+                    (self._local_db_path,),
+                )
+            conn.row_factory = sqlite3.Row
+            yield conn
 
     async def _ensure_db(self) -> None:
         """Ensure the art_library table exists and has necessary columns."""
@@ -403,8 +407,6 @@ class SamsungFrameClient:
             return
             
         def _init_db():
-            import sqlite3
-
             def _ensure_local_art_schema(conn) -> None:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS local_art (
@@ -435,7 +437,7 @@ class SamsungFrameClient:
                 local_db_path = self._local_db_path or self._db_path
                 os.makedirs(os.path.dirname(local_db_path), exist_ok=True)
                 if local_db_path != self._db_path:
-                    with sqlite3.connect(local_db_path) as local_conn:
+                    with sqlite_connection(local_db_path) as local_conn:
                         _ensure_local_art_schema(local_conn)
 
                 with self._get_db() as conn:
@@ -1916,8 +1918,7 @@ class SamsungFrameClient:
                 )
                 out: dict[str, dict] = {}
                 try:
-                    conn = self._get_db()
-                    try:
+                    with self._get_db() as conn:
                         cur = conn.cursor()
                         for row in cur.execute(q, ids):
                             out[str(row[0])] = {
@@ -1927,8 +1928,6 @@ class SamsungFrameClient:
                                 "on_tv": bool(row[4]),
                                 "source_file": row[5],
                             }
-                    finally:
-                        conn.close()
                 except Exception as e:  # noqa: BLE001
                     _LOGGER.debug("Cleanup: DB fetch failed: %r", e)
                 return out
@@ -2103,8 +2102,7 @@ class SamsungFrameClient:
         if self._db_path:
             def _sync_db_with_tv(deleted_ids: list[str], current_ids: list[str]) -> None:
                 try:
-                    conn = self._get_db()
-                    try:
+                    with self._get_db() as conn:
                         cur = conn.cursor()
                         now_iso = __import__("datetime").datetime.now().isoformat()
                         
@@ -2125,8 +2123,6 @@ class SamsungFrameClient:
                             )
                         
                         conn.commit()
-                    finally:
-                        conn.close()
                 except Exception as e:  # noqa: BLE001
                     _LOGGER.debug("Cleanup: DB sync failed: %r", e)
             

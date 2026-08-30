@@ -4,17 +4,29 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from contextlib import contextmanager
 
 from homeassistant.core import HomeAssistant
 
 from .const import DB_DIR, DB_FILE
 
 
+@contextmanager
+def sqlite_connection(*args, **kwargs):
+    """Yield a transactional SQLite connection and always close it."""
+    connection = sqlite3.connect(*args, **kwargs)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
 def _prepare_entry_database(legacy_path: str, entry_path: str) -> None:
     """Create the database directory and migrate legacy data once."""
     os.makedirs(os.path.dirname(entry_path), exist_ok=True)
     if os.path.exists(entry_path):
-        with sqlite3.connect(entry_path) as connection:
+        with sqlite_connection(entry_path) as connection:
             connection.execute("DROP TABLE IF EXISTS local_art")
         return
     if not os.path.exists(legacy_path):
@@ -23,8 +35,8 @@ def _prepare_entry_database(legacy_path: str, entry_path: str) -> None:
     migration_path = f"{entry_path}.migrating"
     try:
         with (
-            sqlite3.connect(f"file:{legacy_path}?mode=ro", uri=True) as source,
-            sqlite3.connect(migration_path) as destination,
+            sqlite_connection(f"file:{legacy_path}?mode=ro", uri=True) as source,
+            sqlite_connection(migration_path) as destination,
         ):
             source.backup(destination)
             destination.execute("DROP TABLE IF EXISTS local_art")
