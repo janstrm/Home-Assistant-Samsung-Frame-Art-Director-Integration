@@ -9,6 +9,9 @@ select = ["ASYNC", "B", "F", "I", "UP"]
 ignore = [
     # Timeouts are valid public parameters throughout the TV boundary.
     "ASYNC109",
+    # Match Home Assistant core: ordinary path checks and test-fixture setup
+    # remain synchronous while actual blocking integration I/O is off-loop.
+    "ASYNC240",
 ]
 
 [tool.pytest.ini_options]
