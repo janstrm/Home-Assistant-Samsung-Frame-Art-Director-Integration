@@ -59,11 +59,11 @@ Core capabilities:
 │  text, sensor)  cleanup, IP     job)               ▼            │
 │                 power/reboot)                      │            │
 │      │             │                │         ai.py             │
-│      └─────────────┴────────────────┘      (Gemini / OpenAI)    │
+│      └─────────────┴────────────────┘   (Gemini/OpenAI/Claude)  │
 │                    │                               │            │
 │                    ▼                               ▼            │
-│         api.py: SamsungFrameClient        Google Gemini /       │
-│         (async facade + SQLite DB)        OpenAI REST APIs      │
+│         api.py: SamsungFrameClient        Gemini / OpenAI /     │
+│         (async facade + SQLite DB)        Anthropic REST APIs   │
 │                    │                                            │
 └────────────────────┼────────────────────────────────────────────┘
                      │  samsungtvws (sync art() in executor)
@@ -85,8 +85,8 @@ Two external boundaries dominate the design:
    pairing. `SamsungTVWS.art()` creates a separate Art App child connection;
    that channel is intentionally opened without the remote-control token and
    closed before the parent TV client.
-2. **The AI provider** — Gemini (default) or OpenAI, reached over HTTPS for
-   image → tag analysis. Optional; only used by the curator.
+2. **The AI provider** — Gemini (default), OpenAI, or Anthropic, reached over
+   HTTPS for image → tag analysis. Optional; only used by the curator.
 
 ---
 
@@ -103,7 +103,7 @@ custom_components/samsung_frame_art_director/
 ├── ip_control_actions.py # Explicit targeted power actions + HA error mapping
 ├── config_flow.py     # Pairing UI, zeroconf discovery, reauth, reconfigure, options
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
-├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
+├── ai.py              # Provider registry + Gemini/OpenAI/Anthropic analyzer adapters
 ├── const.py           # Constants, option keys, defaults
 ├── file_access.py     # Canonical local-path boundary, opaque IDs, image MIME types
 ├── views.py           # HTTP view serving local thumbnails to the dashboard
@@ -205,9 +205,10 @@ service call. See [§6 flows](#process-inbox).
 
 ### `ai.py`
 
-Vision tagging. `ImageAnalyzer` is the ABC; `GeminiAnalyzer` (REST, default) and
-`OpenAIAnalyzer` are implementations. `create_analyzer()` is the **single wiring
-point** between options and implementations — see [§8](#8-ai-tagging-layer).
+Vision tagging. `ImageAnalyzer` is the interface; `GeminiAnalyzer` (default),
+`OpenAIAnalyzer`, and `AnthropicAnalyzer` are adapters. `AI_PROVIDER_SPECS` and
+`create_analyzer()` are the single wiring point between options and adapters —
+see [§8](#8-ai-tagging-layer).
 
 ### Entity platforms
 
@@ -411,9 +412,10 @@ The `upload_art` service obtains the source bytes, then calls
 1. Build the analyzer via `_build_analyzer()`; bail with a notification if no
    key/provider is configured.
 2. List images in `/media/frame/inbox`.
-3. For each: **analyze first** (Gemini/OpenAI). On HTTP **429** stop early
-   (rate limit); on other errors skip the file.
-4. Only after a successful analysis: probe dimensions, **move** the file to
+3. For each: validate bytes/dimensions and **analyze first** through the selected
+   provider. Provider-wide authentication, configuration, rate-limit, timeout,
+   and availability failures stop the batch; image-specific failures skip one file.
+4. Only after a successful analysis: **move** the file to
    `/media/frame/library` (unique-name collision handling), then write the row
    into `local_art`. This ordering guarantees a file is never moved without a
    successful tag, and never lost if the DB write fails (recoverable via Sync).
@@ -529,8 +531,16 @@ and keep the debug logging — it is the only diagnostic tool users have.
   session, default model `gemini-2.5-flash`. The API key travels in the
   `x-goog-api-key` header, never in the request URL or analyzer state.
   Prompts for ~15 keywords including weather/lighting/mood.
-- `OpenAIAnalyzer` — GPT-4o vision via REST over the same shared aiohttp session.
-- `create_analyzer(provider, model, session=...)` — the **factory** and the only
+- `OpenAIAnalyzer` — OpenAI vision through Chat Completions over the same shared
+  aiohttp session; the configured model defaults to `gpt-4o`.
+- `AnthropicAnalyzer` — Claude vision through the Messages endpoint, defaulting
+  to `claude-haiku-4-5-20251001`; Anthropic's smaller direct-request image limit
+  is enforced before submission.
+- All adapters receive one shared JSON tag/description contract and normalize
+  responses to the same result shape.
+- `AI_PROVIDER_SPECS` records each provider's credential option, model option,
+  default model, and adapter. `create_analyzer(provider, model, session=...)` is
+  the **factory** and the only
   place that maps the `ai_provider` option to a concrete class. Returns
   `(analyzer, error)`. The curator supplies the selected credential only to the
   individual `analyze_image` call; analyzer objects never retain it. Both
@@ -607,9 +617,9 @@ the [README](README.md#-services).
 - **`async_rotate_art_now()` legacy modes.** Its `library` and `aware` modes are
   unimplemented no-ops; the live rotation path is `async_rotate_art()` /
   `async_rotate_from_folder()`. Don't confuse the two.
-- **Hardcoded media paths.** `/media/frame/inbox` and `/media/frame/library` are
-  hardcoded in `curator.py`; the `slideshow_source_path` option is only a
-  fallback for folder rotation.
+- **Configured media paths.** `/media/frame/inbox` and `/media/frame/library`
+  are defaults. The options flow can override both; every resolved path still
+  has to remain under Home Assistant's allowed config/media roots.
 - **Verbose logging on by default.** `diagnostics_verbose` defaults to `True`
   and bumps several loggers to DEBUG; this is deliberate for field debugging.
 - **Per-model variance.** Anything in [§7](#7-the-resilience-layer) may behave

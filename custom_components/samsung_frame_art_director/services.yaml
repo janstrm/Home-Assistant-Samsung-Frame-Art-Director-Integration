@@ -165,9 +165,9 @@ upload_art:
   name: Upload Art
   description: >-
     Upload an image and display it on the Frame. The integration preprocesses the
-    image to 3840x2160 and uses the official synchronous Art API off the event
-    loop. When a response is requested, it returns the exact TV content ID (and
-    the list of IDs for multiple targets).
+    image to 3840 × 2160 before sending it through the TV's internal Art API. When
+    a response is requested, it returns the exact TV content ID and the list of
+    IDs for multiple targets.
   target:
     entity:
       domain: media_player
@@ -211,14 +211,14 @@ art_diagnostics:
 
 process_inbox:
   name: "Process Inbox"
-  description: "Scans the inbox folder (/media/frame/inbox), analyzes images with Gemini AI, tags them, and moves them to the library folder (/media/frame/library)."
+  description: "Scans the configured inbox, sends each validated image to the selected AI provider (Gemini, OpenAI, or Anthropic), tags it, and moves it to the library."
   target:
     entity:
       domain: media_player
 
 sync_library:
   name: "Sync Library"
-  description: "Scans the library folder for untracked images and registers them in the database with AI-generated tags. Useful after manually adding files or after a database reset."
+  description: "Scans the library for untracked images and registers them with tags from the selected AI provider. Useful after manually adding files or after a database reset."
   target:
     entity:
       domain: media_player

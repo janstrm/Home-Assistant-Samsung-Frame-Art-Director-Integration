@@ -1,0 +1,168 @@
+{
+  "config": {
+    "flow_title": "Samsung Frame Art Director",
+    "step": {
+      "user": {
+        "title": "Mit deinem Samsung Frame TV verbinden",
+        "description": "Gib die IP-Adresse deines TVs ein. Bei der ersten Verbindung erscheint auf dem TV eine Aufforderung zur Autorisierung.",
+        "data": {
+          "host": "IP-Adresse deines TVs",
+          "name": "Name"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname deines TVs, zum Beispiel 192.168.1.50.",
+          "name": "Anzeigename des Geräts in Home Assistant."
+        }
+      },
+      "pairing": {
+        "title": "Verbindung am TV erlauben",
+        "description": "Auf {device} sollte eine Verbindungsanfrage sichtbar sein. Wähle Erlauben, vorzugsweise Immer erlauben. Klicke danach hier auf Absenden. Falls keine Anfrage erscheint, stelle sicher, dass der TV wach ist, und prüfe Gerätemanager → Zugriffsbenachrichtigung.",
+        "data": {}
+      },
+      "encrypted_pairing": {
+        "title": "PIN vom TV eingeben",
+        "description": "Gib die auf {device} angezeigte PIN ein.",
+        "data": {
+          "pin": "PIN"
+        },
+        "data_description": {
+          "pin": "Die auf deinem TV angezeigte PIN."
+        }
+      },
+      "reauth_confirm": {
+        "title": "{device} erneut autorisieren",
+        "description": "Die gespeicherte Autorisierung für {device} ist nicht mehr gültig. Schalte den TV ein, bestätige die Verbindungsanfrage auf dem TV und klicke danach auf Absenden.",
+        "data": {}
+      },
+      "discovery_confirm": {
+        "title": "{device} einrichten",
+        "description": "Ein Samsung TV ({device}) wurde in deinem Netzwerk gefunden. Möchtest du ihn mit Samsung Frame Art Director einrichten? Im nächsten Schritt musst du die Verbindungsanfrage auf dem TV bestätigen."
+      },
+      "reconfigure": {
+        "title": "Samsung Frame neu konfigurieren",
+        "description": "Wähle die Verbindung aus, die du konfigurieren möchtest.",
+        "menu_options": {
+          "reconfigure_connection": "TV-Verbindung",
+          "ip_control": "IP Control"
+        }
+      },
+      "reconfigure_connection": {
+        "title": "TV-Verbindung",
+        "description": "Aktualisiere die IP-Adresse des TVs, zum Beispiel nach einer DHCP-Änderung. Die Adresse muss zum bereits eingerichteten TV gehören.",
+        "data": {
+          "host": "Host",
+          "name": "Name"
+        }
+      },
+      "ip_control": {
+        "title": "IP Control koppeln",
+        "description": "Aktiviere IP Remote am TV und wechsle zur normalen TV-Wiedergabe, nicht in den Art Mode. Klicke dann auf Absenden und bestätige die Verbindungsanfrage auf {device}. Das Token wird nur für diesen TV gespeichert. Verwende IP Control nur in einem vertrauenswürdigen lokalen Netzwerk.",
+        "data": {}
+      }
+    },
+    "error": {
+      "auth_missing": "Autorisierung erforderlich. Bestätige die Verbindungsanfrage auf deinem TV und sende das Formular erneut ab.",
+      "cannot_connect": "Verbindung zum TV nicht möglich. Prüfe die IP-Adresse, das Netzwerk und ob der TV wach ist.",
+      "invalid_pin": "Die PIN ist ungültig. Versuche es erneut.",
+      "not_supported": "Dieses Samsung-Gerät wird derzeit nicht unterstützt.",
+      "ip_control_rejected": "Der TV hat die IP-Control-Kopplung abgelehnt. Öffne erneut Neu konfigurieren → IP Control und bestätige die Anfrage auf dem TV.",
+      "ip_control_unavailable": "IP Control ist im aktuellen Zustand des TVs nicht verfügbar. Aktiviere IP Remote, verlasse den Art Mode und versuche es erneut.",
+      "ip_control_pairing_failed": "Der TV hat eine unerwartete IP-Control-Antwort gesendet. Es wurde kein Token gespeichert."
+    },
+    "abort": {
+      "already_in_progress": "Eine Konfiguration läuft bereits.",
+      "already_configured": "Dieses Gerät ist bereits eingerichtet.",
+      "reauth_successful": "Die erneute Autorisierung war erfolgreich.",
+      "reconfigure_successful": "Die TV-Adresse wurde erfolgreich aktualisiert.",
+      "cannot_connect": "Verbindung zum TV nicht möglich. Prüfe, ob er eingeschaltet und im Netzwerk erreichbar ist.",
+      "wrong_device": "Diese Adresse gehört zu einem anderen TV als dem bereits eingerichteten Gerät.",
+      "ip_control_pairing_successful": "IP Control wurde erfolgreich mit diesem TV gekoppelt."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen für Samsung Frame Art Director",
+        "description": "Alle Einstellungen sind optional und vorkonfiguriert. Füge nur dann einen KI-Schlüssel hinzu, wenn du automatische Tags verwenden möchtest. Diashow, Passepartout und Favoriten werden über eigene Entitäten gesteuert.",
+        "sections": {
+          "ai_tagging": {
+            "name": "KI-Bildanalyse",
+            "description": "Optionale Cloud-Analyse. Posteingang verarbeiten und Bibliothek synchronisieren senden jedes Bild an den ausgewählten Anbieter, um Tags zu erzeugen. Dabei können Kosten beim Anbieter entstehen.",
+            "data": {
+              "ai_provider": "Anbieter",
+              "gemini_api_key": "Gemini-API-Schlüssel",
+              "gemini_model": "Gemini-Modell",
+              "openai_api_key": "OpenAI-API-Schlüssel",
+              "openai_model": "OpenAI-Modell",
+              "anthropic_api_key": "Anthropic-API-Schlüssel",
+              "anthropic_model": "Anthropic-Modell"
+            },
+            "data_description": {
+              "ai_provider": "Das vollständige Bild wird zur Analyse von Home Assistant an diesen Anbieter gesendet.",
+              "gemini_api_key": "Für Gemini erforderlich. Du erhältst einen Schlüssel in Google AI Studio.",
+              "gemini_model": "Standard ist gemini-2.5-flash. Ein anderes Modell muss Bildeingaben unterstützen.",
+              "openai_api_key": "Für die Bildanalyse mit OpenAI erforderlich. Home Assistant sendet die Anfrage direkt über seinen HTTP-Client.",
+              "openai_model": "Standard ist gpt-4o. Ein anderes Modell muss Bildeingaben unterstützen.",
+              "anthropic_api_key": "Für die Bildanalyse mit Anthropic erforderlich. Home Assistant sendet die Anfrage direkt über seinen HTTP-Client.",
+              "anthropic_model": "Standard ist claude-haiku-4-5-20251001. Ein anderes Modell muss Bildeingaben unterstützen."
+            }
+          },
+          "cleanup": {
+            "name": "Speicherbereinigung",
+            "description": "Steuert, wie der begrenzte interne Speicher des TVs bereinigt wird.",
+            "data": {
+              "cleanup_max_items": "Maximale Anzahl auf dem TV",
+              "cleanup_max_age_days": "Maximales Alter",
+              "cleanup_preserve_current": "Aktuelles Bild behalten",
+              "cleanup_dry_run": "Testlauf, nur protokollieren"
+            },
+            "data_description": {
+              "cleanup_max_items": "Maximale Anzahl von Bildern auf dem TV. Die ältesten werden zuerst gelöscht.",
+              "cleanup_max_age_days": "Löscht Bilder, die älter als diese Anzahl Tage sind. 0 deaktiviert die Altersgrenze.",
+              "cleanup_dry_run": "Zeigt die geplante Bereinigung in den Protokollen, ohne Bilder zu löschen."
+            }
+          },
+          "folders": {
+            "name": "Ordner und Bildanpassung",
+            "description": "Legt fest, wo Bilder gespeichert sind und wie sie an den Bildschirm angepasst werden.",
+            "data": {
+              "inbox_dir": "Posteingangsordner",
+              "library_dir": "Bibliotheksordner",
+              "resize_mode": "Bildanpassung"
+            },
+            "data_description": {
+              "inbox_dir": "Ordner, der beim Ausführen von Posteingang verarbeiten gescannt wird. Er wird nicht dauerhaft überwacht.",
+              "library_dir": "Dauerhafter Ordner für verarbeitete Bilder, die für Rotation und Galerie verwendet werden.",
+              "resize_mode": "Zuschneiden füllt den Bildschirm und kann Ränder entfernen. Einpassen zeigt das gesamte Bild mit schwarzen Balken und eignet sich für Hochformatbilder."
+            }
+          },
+          "power": {
+            "name": "Verbindung und Einschalten",
+            "description": "Optionale Wake-on-LAN- und Ein/Aus-Tasten-Ausweichlösungen.",
+            "data": {
+              "mac_address": "MAC-Adresse des TVs",
+              "use_wol_before_on": "Vor dem Aktivieren des Art Mode Wake-on-LAN senden",
+              "use_power_key_on_off": "Ein/Aus-Taste als Ausweichlösung verwenden"
+            },
+            "data_description": {
+              "mac_address": "Nur erforderlich, wenn du Wake-on-LAN aktivierst.",
+              "use_power_key_on_off": "Sendet die Ein/Aus-Taste, wenn der TV nach dem Aktivieren des Art Mode ausgeschaltet bleibt oder nach dem Deaktivieren eingeschaltet bleibt."
+            }
+          },
+          "advanced": {
+            "name": "Erweitert",
+            "description": "Diese Einstellungen musst du normalerweise nicht ändern.",
+            "data": {
+              "enable_art_mode_settings": "Art-Mode-Einstellungsentitäten anzeigen",
+              "diagnostics_verbose": "Ausführliche Debug-Protokollierung"
+            },
+            "data_description": {
+              "enable_art_mode_settings": "Entitäten für Helligkeit, Farbtemperatur, Bewegung und automatische Helligkeit. Standardmäßig aktiviert. Deaktiviere sie, wenn dein TV oder dessen Firmware diese Einstellungen ablehnt, und lade danach die Integration neu.",
+              "diagnostics_verbose": "Aktiviert ausführliche Debug-Protokolle zur Fehlerbehebung."
+            }
+          }
+        }
+      }
+    }
+  }
+}

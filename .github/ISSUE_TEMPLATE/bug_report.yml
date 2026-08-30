@@ -25,7 +25,7 @@ body:
     id: integration_version
     attributes:
       label: Integration version
-      placeholder: "e.g. 1.9.0 (see manifest.json / HACS)"
+      placeholder: "e.g. 1.11.0 (shown in HACS or the integration details)"
     validations:
       required: true
   - type: textarea

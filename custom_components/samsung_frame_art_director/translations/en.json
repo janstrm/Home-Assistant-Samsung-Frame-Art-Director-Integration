@@ -87,16 +87,24 @@
         "sections": {
           "ai_tagging": {
             "name": "AI Image Tagging",
-            "description": "Optional. Used to auto-tag images dropped into the inbox.",
+            "description": "Optional cloud classification. Process Inbox and Sync Library send each image to the selected provider to generate tags. Provider usage may incur charges.",
             "data": {
               "ai_provider": "Provider",
               "gemini_api_key": "Gemini API key",
-              "openai_api_key": "OpenAI API key"
+              "gemini_model": "Gemini model",
+              "openai_api_key": "OpenAI API key",
+              "openai_model": "OpenAI model",
+              "anthropic_api_key": "Anthropic API key",
+              "anthropic_model": "Anthropic model"
             },
             "data_description": {
-              "ai_provider": "Which AI vision service tags images dropped into the inbox.",
+              "ai_provider": "The full image is sent from Home Assistant to this provider for classification.",
               "gemini_api_key": "Required for Gemini. Get a free key at aistudio.google.com.",
-              "openai_api_key": "Required for OpenAI image tagging. Sent directly through Home Assistant's HTTP client."
+              "gemini_model": "Defaults to gemini-2.5-flash. A custom model must accept image input.",
+              "openai_api_key": "Required for OpenAI image tagging. Sent directly through Home Assistant's HTTP client.",
+              "openai_model": "Defaults to gpt-4o. A custom model must accept image input.",
+              "anthropic_api_key": "Required for Anthropic image tagging. Sent directly through Home Assistant's HTTP client.",
+              "anthropic_model": "Defaults to claude-haiku-4-5-20251001. A custom model must accept image input."
             }
           },
           "cleanup": {
@@ -123,7 +131,7 @@
               "resize_mode": "Image fit"
             },
             "data_description": {
-              "inbox_dir": "Folder watched by Process Inbox for new images to tag.",
+              "inbox_dir": "Folder scanned when you run Process Inbox; it is not monitored continuously.",
               "library_dir": "Permanent folder for processed images used by rotation and the gallery.",
               "resize_mode": "'Crop' fills the screen and may trim edges; 'Fit' shows the whole image with black bars (better for portraits)."
             }
@@ -145,12 +153,10 @@
             "name": "Advanced",
             "description": "You usually don't need to change these.",
             "data": {
-              "ai_model": "AI model override",
               "enable_art_mode_settings": "Show Art-Mode setting entities",
               "diagnostics_verbose": "Verbose debug logging"
             },
             "data_description": {
-              "ai_model": "Leave blank for the recommended default (gemini-2.5-flash / gpt-4o).",
               "enable_art_mode_settings": "Brightness / color temp / motion / auto-brightness entities. Enabled by default; turn off if your TV or firmware rejects these settings. Reload the integration after changing.",
               "diagnostics_verbose": "Enable detailed debug logging for troubleshooting."
             }
