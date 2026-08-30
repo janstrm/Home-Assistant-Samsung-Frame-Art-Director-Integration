@@ -10,7 +10,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.samsung_frame_art_director import async_setup, async_setup_entry
 from custom_components.samsung_frame_art_director.const import DOMAIN
 
-
 _DEFAULT_CONTENT_LENGTH = object()
 
 

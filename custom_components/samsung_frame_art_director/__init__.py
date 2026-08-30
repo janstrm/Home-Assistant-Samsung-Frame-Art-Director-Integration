@@ -1,47 +1,50 @@
 """Samsung Frame Art Director integration."""
 
-import logging
 import asyncio
+import logging
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
-from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed, ServiceValidationError
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components import persistent_notification
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady, ServiceValidationError
 
 from .const import (
-    DOMAIN,
-    CONF_SLIDESHOW_INTERVAL,
-    CONF_SLIDESHOW_SOURCE_PATH,
-    CONF_SLIDESHOW_ENABLED,
-    CONF_SLIDESHOW_SOURCE_TYPE,
-    CONF_SLIDESHOW_FILTER,
-    SLIDESHOW_SOURCE_FOLDER,
-    SLIDESHOW_SOURCE_TAGS,
-    DEFAULT_SLIDESHOW_INTERVAL,
-    CONF_RESIZE_MODE,
-    DEFAULT_RESIZE_MODE,
     CONF_INBOX_DIR,
-    DEFAULT_INBOX_DIR,
     CONF_LIBRARY_DIR,
-    DEFAULT_LIBRARY_DIR,
+    CONF_MATTE_COLOR,
     CONF_MATTE_ENABLED,
     CONF_MATTE_STYLE,
-    CONF_MATTE_COLOR,
-    DEFAULT_MATTE_STYLE,
+    CONF_RESIZE_MODE,
+    CONF_SLIDESHOW_ENABLED,
+    CONF_SLIDESHOW_FILTER,
+    CONF_SLIDESHOW_INTERVAL,
+    CONF_SLIDESHOW_SOURCE_PATH,
+    CONF_SLIDESHOW_SOURCE_TYPE,
+    DEFAULT_CLEANUP_DRY_RUN,
+    DEFAULT_CLEANUP_MAX_ITEMS,
+    DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED,
+    DEFAULT_CLEANUP_PRESERVE_CURRENT,
+    DEFAULT_INBOX_DIR,
+    DEFAULT_LIBRARY_DIR,
     DEFAULT_MATTE_COLOR,
+    DEFAULT_MATTE_STYLE,
+    DEFAULT_RESIZE_MODE,
+    DEFAULT_SLIDESHOW_INTERVAL,
+    DOMAIN,
     MATTE_STYLE_NONE,
+    SLIDESHOW_SOURCE_FOLDER,
+    SLIDESHOW_SOURCE_TAGS,
     resolve_matte,
 )
-from .const import DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+from .database import async_prepare_entry_database
 from .file_access import (
     UnsafeLocalPathError,
     is_local_media_identifier,
     resolve_upload_source,
 )
-from .database import async_prepare_entry_database
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
 from .targets import (
     async_resolve_action_targets,
@@ -49,7 +52,6 @@ from .targets import (
     loaded_frame_target,
     loaded_frame_targets,
 )
-
 
 # This integration is configured via the UI only (config entries), not YAML.
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -766,8 +768,8 @@ async def async_setup_entry(
 
     # Ensure /config/deps is on sys.path so HA can see manually installed deps
     try:
-        import sys as _sys
         import os as _os
+        import sys as _sys
         deps_base = hass.config.path("deps")
         candidates = [
             deps_base,
@@ -914,8 +916,9 @@ async def _reload_slideshow_timer(
     
     if interval > 0 and enabled:
         _LOGGER.info("Starting slideshow timer for %s every %s minutes", entry.title, interval)
-        from homeassistant.helpers.event import async_track_time_interval
         from datetime import timedelta
+
+        from homeassistant.helpers.event import async_track_time_interval
 
         async def _tick(now):
             await _run_slideshow_job(hass, entry)

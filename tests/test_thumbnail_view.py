@@ -13,11 +13,11 @@ from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
     signed_thumbnail_url,
 )
-from custom_components.samsung_frame_art_director.views import (
-    SamsungFrameThumbnailView,
-)
 from custom_components.samsung_frame_art_director.runtime import (
     SamsungFrameRuntimeData,
+)
+from custom_components.samsung_frame_art_director.views import (
+    SamsungFrameThumbnailView,
 )
 
 

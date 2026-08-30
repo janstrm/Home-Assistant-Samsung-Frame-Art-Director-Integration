@@ -16,18 +16,24 @@ from custom_components.samsung_frame_art_director.const import (
 )
 from custom_components.samsung_frame_art_director.number import (
     SamsungFrameBrightness,
+)
+from custom_components.samsung_frame_art_director.number import (
     async_setup_entry as async_setup_number,
+)
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
 )
 from custom_components.samsung_frame_art_director.select import (
     SamsungFrameMotionTimerSelect,
+)
+from custom_components.samsung_frame_art_director.select import (
     async_setup_entry as async_setup_select,
 )
 from custom_components.samsung_frame_art_director.switch import (
     SamsungFrameBrightnessSensorSwitch,
-    async_setup_entry as async_setup_switch,
 )
-from custom_components.samsung_frame_art_director.runtime import (
-    SamsungFrameRuntimeData,
+from custom_components.samsung_frame_art_director.switch import (
+    async_setup_entry as async_setup_switch,
 )
 
 _COMPONENT_DIR = (

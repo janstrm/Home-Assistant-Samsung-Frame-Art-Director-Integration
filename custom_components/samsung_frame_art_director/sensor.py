@@ -7,11 +7,12 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
+from .compat import create_entry_coordinator
 from .const import CONF_DUID, DOMAIN
 from .media_source import signed_thumbnail_url
 from .runtime import SamsungFrameConfigEntry
@@ -143,11 +144,11 @@ async def async_setup_entry(
             "top_tags": top_tags
         }
 
-    coordinator = DataUpdateCoordinator(
+    coordinator = create_entry_coordinator(
         hass,
         _LOGGER,
+        entry,
         name="samsung_frame_library",
-        config_entry=entry,
         update_method=_fetch_library,
         update_interval=dt_util.dt.timedelta(seconds=15), # Faster update for filters
     )

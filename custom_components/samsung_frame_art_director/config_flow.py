@@ -7,10 +7,9 @@ import os
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant import config_entries
-from homeassistant.core import callback
 from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.selector import (
@@ -27,32 +26,32 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .bridge import async_probe_device_info, async_try_connect, async_encrypted_start_pairing, async_encrypted_try_pin
+from .bridge import async_encrypted_start_pairing, async_encrypted_try_pin, async_probe_device_info, async_try_connect
 from .const import (
-    CONF_DUID,
-    RESULT_AUTH_MISSING,
-    RESULT_CANNOT_CONNECT,
-    RESULT_NOT_SUPPORTED,
-    RESULT_SUCCESS,
-    RESULT_INVALID_PIN,
-    ENCRYPTED_WEBSOCKET_PORT,
-    CONF_GEMINI_API_KEY,
-    CONF_OPENAI_API_KEY,
-    CONF_AI_PROVIDER,
-    CONF_AI_MODEL,
     AI_PROVIDER_GEMINI,
     AI_PROVIDER_OPENAI,
-    DEFAULT_CLEANUP_MAX_ITEMS,
+    CONF_AI_MODEL,
+    CONF_AI_PROVIDER,
+    CONF_DUID,
+    CONF_ENABLE_ART_SETTINGS,
+    CONF_GEMINI_API_KEY,
     CONF_INBOX_DIR,
     CONF_LIBRARY_DIR,
+    CONF_OPENAI_API_KEY,
+    CONF_RESIZE_MODE,
+    DEFAULT_CLEANUP_MAX_ITEMS,
+    DEFAULT_ENABLE_ART_SETTINGS,
     DEFAULT_INBOX_DIR,
     DEFAULT_LIBRARY_DIR,
-    CONF_RESIZE_MODE,
+    DEFAULT_RESIZE_MODE,
+    ENCRYPTED_WEBSOCKET_PORT,
     RESIZE_MODE_CROP,
     RESIZE_MODE_FIT,
-    DEFAULT_RESIZE_MODE,
-    CONF_ENABLE_ART_SETTINGS,
-    DEFAULT_ENABLE_ART_SETTINGS,
+    RESULT_AUTH_MISSING,
+    RESULT_CANNOT_CONNECT,
+    RESULT_INVALID_PIN,
+    RESULT_NOT_SUPPORTED,
+    RESULT_SUCCESS,
 )
 
 _LOGGER = logging.getLogger(__name__)

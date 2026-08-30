@@ -1,9 +1,9 @@
 """AI vision providers used to generate artwork tags."""
 
-from abc import ABC, abstractmethod
 import base64
 import logging
 import time
+from abc import ABC, abstractmethod
 from typing import Any
 
 from aiohttp import ClientTimeout

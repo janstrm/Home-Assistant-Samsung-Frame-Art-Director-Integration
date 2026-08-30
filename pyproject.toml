@@ -3,11 +3,18 @@ target-version = "py312"
 line-length = 140
 
 [tool.ruff.lint]
-# Start conservative: pyflakes (unused imports, undefined names) — the
-# high-value correctness checks. Style/import-order rules can be added later.
-select = ["F"]
+# Correctness-first rules aligned with Home Assistant's Python baseline:
+# imports, modernization, likely bugs, and blocking/async mistakes.
+select = ["ASYNC", "B", "F", "I", "UP"]
+ignore = [
+    # Timeouts are valid public parameters throughout the TV boundary.
+    "ASYNC109",
+    # Match Home Assistant core: ordinary path checks and test-fixture setup
+    # remain synchronous while actual blocking integration I/O is off-loop.
+    "ASYNC240",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "-q"
+addopts = "-q --allow-hosts=127.0.0.1,::1 --allow-unix-socket"
 testpaths = ["tests"]

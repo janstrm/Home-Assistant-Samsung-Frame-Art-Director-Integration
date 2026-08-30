@@ -8,25 +8,39 @@ Thanks for your interest in improving **Samsung Frame Art Director**!
   exists. The Samsung Art Mode API is undocumented and varies by model/firmware,
   so prefer *adding* a guarded path over removing one.
 - This is a config‑entry‑only integration (no YAML). It targets **Home Assistant
-  2024.6+** (the options flow uses collapsible form sections).
+  2024.7+** (the options flow uses collapsible form sections introduced in that release).
 
 ## Dev setup & checks
 ```bash
 # from the repo root
-pip install -r requirements_test.lock  # fully pinned Python 3.13/Linux test stack
-ruff check custom_components tests     # lint (pyflakes-level)
-pytest                                 # unit tests
+pip install -r requirements_test.lock  # current HA 2026.8 / Python 3.14 stack
+ruff check custom_components tests
+pytest --cov=custom_components.samsung_frame_art_director --cov-fail-under=68
 ```
 
 `requirements_test.txt` contains the direct test tools. The generated
-`requirements_test.lock` pins their complete dependency graph so fresh local
-and CI installs use the same Home Assistant test environment. Regenerate the
-lock on Linux/WSL with `uv pip compile --python-version 3.13.14
-requirements_test.txt -o requirements_test.lock` when intentionally upgrading
-the test stack.
+`requirements_test.lock` pins the current stable test stack. The parallel
+`requirements_test_minimum.lock` pins the declared Home Assistant 2024.7 / Python
+3.12 compatibility floor. Regenerate them intentionally with:
 
-CI runs the same `ruff` + `pytest`, plus **hassfest** and **HACS** validation on
-every push/PR. Please make sure all four are green.
+```bash
+uv pip compile --python-version 3.14.2 requirements_test.txt -o requirements_test.lock
+uv pip compile --python-version 3.12 requirements_test_minimum.txt -o requirements_test_minimum.lock
+```
+
+CI runs Ruff once and pytest against both compatibility lines, plus **hassfest**
+and **HACS** validation. Feature branches run through their pull request only;
+direct `main` pushes still run CI. Pytest permits only loopback and Unix-domain
+socket connections, so tests cannot contact a real TV or an internet endpoint.
+
+### Coverage gate
+
+The initial measured floor is **68%** and must not be lowered to make a change
+pass. Raise it as behavior tests land: first 75%, then 85%, and finally above
+95%, which is the Home Assistant
+[Silver test-coverage target](https://developers.home-assistant.io/docs/core/integration-quality-scale/rules/test-coverage/).
+Prioritize public Home Assistant seams (actions, config flows, entities, media,
+and authenticated views) over tests coupled to private helpers.
 
 ### Conventions
 - Keep new code in the style of the surrounding file.

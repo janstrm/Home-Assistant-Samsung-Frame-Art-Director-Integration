@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from .const import DOMAIN
 from .file_access import (
@@ -19,7 +20,6 @@ from .file_access import (
     media_identifier,
     resolve_upload_source,
 )
-from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -92,20 +92,20 @@ class PairingTimeoutError(AuthenticationRejectedError):
 class SamsungFrameClient:
     """Thin async client facade for Samsung TV WS API."""
 
-    def __init__(self, hass: HomeAssistant, host: str, token: Optional[str] = None, token_file_path: Optional[str] = None, port: Optional[int] = None) -> None:
+    def __init__(self, hass: HomeAssistant, host: str, token: str | None = None, token_file_path: str | None = None, port: int | None = None) -> None:
         self.hass = hass
         self._host = host
         self._token = token
         self._connected = False
-        self._duid: Optional[str] = None
+        self._duid: str | None = None
         self._client_name = "Home Assistant Art Director"
         self._token_file_path = token_file_path
-        self._port: Optional[int] = port
+        self._port: int | None = port
         # Serialize art channel operations to avoid contention (upload vs set_artmode, etc.)
         self._art_lock: asyncio.Lock = asyncio.Lock()
         # DB path (set on demand by caller)
-        self._db_path: Optional[str] = None
-        self._local_db_path: Optional[str] = None
+        self._db_path: str | None = None
+        self._local_db_path: str | None = None
         # Loop-safe callback to persist a refreshed token (set by the integration)
         self._token_persister = None
         # Image preprocessing preference: "crop" (center-crop) or "fit" (letterbox)
@@ -135,8 +135,8 @@ class SamsungFrameClient:
 
     def _make_tv(
         self,
-        port: Optional[int] = None,
-        timeout: Optional[float] = None,
+        port: int | None = None,
+        timeout: float | None = None,
     ):
         """Create a sync SamsungTVWS client that ALWAYS identifies with our
         client name and token (when known).
@@ -305,7 +305,7 @@ class SamsungFrameClient:
         except (ValueError, TypeError):
             return None
 
-    async def async_get_brightness(self) -> Optional[int]:
+    async def async_get_brightness(self) -> int | None:
         """Return Art Mode brightness (0-10) or None."""
         return self._coerce_int(await self._async_art("get_brightness"))
 
@@ -313,7 +313,7 @@ class SamsungFrameClient:
         """Set Art Mode brightness (0-10)."""
         await self._async_art("set_brightness", str(int(value)))
 
-    async def async_get_color_temperature(self) -> Optional[int]:
+    async def async_get_color_temperature(self) -> int | None:
         """Return Art Mode color temperature (-5..5) or None."""
         return self._coerce_int(await self._async_art("get_color_temperature"))
 
@@ -559,7 +559,7 @@ class SamsungFrameClient:
 
 
 
-    async def async_track_art(self, content_id: str, tags: Optional[str] = None, source_file: Optional[str] = None) -> None:
+    async def async_track_art(self, content_id: str, tags: str | None = None, source_file: str | None = None) -> None:
         """Track a new upload in the local DB with optional tags and source_file."""
         if not self._db_path or not content_id:
             return
@@ -772,7 +772,7 @@ class SamsungFrameClient:
         
         return await asyncio.to_thread(_fetch)
 
-    async def async_rotate_art(self, tags: Optional[list[str]] = None, negative_tags: Optional[list[str]] = None, match_all: bool = False, matte: str = "none", source: str = "library") -> bool:
+    async def async_rotate_art(self, tags: list[str] | None = None, negative_tags: list[str] | None = None, match_all: bool = False, matte: str = "none", source: str = "library") -> bool:
         """Rotate art by selecting from DB (TV or Local), filtering by tags (fuzzy match)."""
         if not self._db_path:
             return False
@@ -880,7 +880,7 @@ class SamsungFrameClient:
         # 3. Select Winner (with retry for stale local entries)
         import random
         max_attempts = min(10, len(filtered))
-        for attempt in range(max_attempts):
+        for _attempt in range(max_attempts):
             winner = random.choice(filtered)
             _LOGGER.info("Rotate: selected %s (%s)", winner.get('path') or winner.get('id'), winner['type'])
 
@@ -932,7 +932,7 @@ class SamsungFrameClient:
         content_ids: str | list[str],
         matte: str = "none",
         require_available: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Select the first matching image ID (best effort)."""
         candidate_ids = (
             [content_ids] if isinstance(content_ids, str) else content_ids
@@ -1088,11 +1088,11 @@ class SamsungFrameClient:
         return self._host
 
     @property
-    def token(self) -> Optional[str]:
+    def token(self) -> str | None:
         return self._token
 
     @property
-    def duid(self) -> Optional[str]:
+    def duid(self) -> str | None:
         return self._duid
 
     async def async_connect_and_pair(self) -> None:
@@ -1156,9 +1156,9 @@ class SamsungFrameClient:
             self._connected = True
             token_path = self._token_file_path
             if token_path:
-                def _remove_pairing_file() -> None:
+                def _remove_pairing_file(path: str) -> None:
                     try:
-                        os.remove(token_path)
+                        os.remove(path)
                     except FileNotFoundError:
                         pass
                     except OSError:
@@ -1167,7 +1167,7 @@ class SamsungFrameClient:
                             self._host,
                         )
 
-                await asyncio.to_thread(_remove_pairing_file)
+                await asyncio.to_thread(_remove_pairing_file, token_path)
             _LOGGER.info(
                 "Client: authenticated host=%s port=%s duid=%s",
                 self._host,
@@ -1186,12 +1186,12 @@ class SamsungFrameClient:
             await asyncio.sleep(0.05)
             self._connected = False
 
-    async def async_get_artmode_status(self) -> Optional[str]:
+    async def async_get_artmode_status(self) -> str | None:
         """Return current Art Mode status as 'on'/'off'/None with best effort logging."""
         async with self._art_lock:
             return await self._async_get_artmode_status_locked()
 
-    async def _async_get_artmode_status_locked(self) -> Optional[str]:
+    async def _async_get_artmode_status_locked(self) -> str | None:
         """Read Art Mode status while the caller owns ``_art_lock``."""
         try:
             from samsungtvws import SamsungTVWS  # type: ignore  # noqa: F401
@@ -1199,7 +1199,7 @@ class SamsungFrameClient:
             _LOGGER.debug("get_artmode: samsungtvws unavailable: %r", err)
             return None
 
-        def _read_status() -> Optional[str]:
+        def _read_status() -> str | None:
             tv = None
             art = None
             try:
@@ -1342,7 +1342,7 @@ class SamsungFrameClient:
                     _fetch,
                     ART_OPERATION_TIMEOUT_SECONDS,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOGGER.debug("Art Preview: fetch thread timed out after 15s")
             except Exception as e:
                 _LOGGER.debug("Art Preview: fetch thread error: %r", e)
@@ -1527,9 +1527,9 @@ class SamsungFrameClient:
         self,
         image_bytes: bytes,
         matte: str = "none",
-        source_file: Optional[str] = None,
-        tags: Optional[str] = None,
-    ) -> Optional[str]:
+        source_file: str | None = None,
+        tags: str | None = None,
+    ) -> str | None:
         """Upload an image, select it, and return the TV content ID."""
         if source_file:
             source_file = await asyncio.to_thread(
@@ -1538,7 +1538,7 @@ class SamsungFrameClient:
                 source_file,
             )
 
-        async def _reuse_existing_upload() -> Optional[str]:
+        async def _reuse_existing_upload() -> str | None:
             if not source_file or not self._db_path:
                 return None
 
@@ -1708,11 +1708,12 @@ class SamsungFrameClient:
                             source_file=source_file,
                         )
                         try:
+                            uploaded_content_id = str(res)
                             await self._async_run_blocking_contained(
-                                lambda: _select_once(str(res)),
+                                lambda content_id=uploaded_content_id: _select_once(content_id),
                                 30,
                             )
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             _LOGGER.warning(
                                 "Upload selection timed out on host=%s for content_id=%s; "
                                 "not repeating the completed upload",
@@ -1739,7 +1740,7 @@ class SamsungFrameClient:
                     if res:
                         return str(res)
                     break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # asyncio.to_thread cannot cancel the synchronous upload.
                     # Retrying could therefore create a duplicate if the TV
                     # accepted the first request before the local timeout.
