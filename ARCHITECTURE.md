@@ -17,12 +17,15 @@ A [Home Assistant](https://www.home-assistant.io/) **custom integration**
 (domain: `samsung_frame_art_director`) that manages **Art Mode** on a Samsung
 The Frame TV. It is installable via HACS as a custom repository.
 
-It communicates with the TV exclusively over Samsung's **internal WebSocket
-API**, via the [`samsungtvws`](https://github.com/xchwarze/samsung-tv-ws-api)
-library (official PyPI release `samsungtvws[async,encrypted]>=3.0.5`, which
-added full Art Mode support). There is no official Samsung API; everything here is
-reverse-engineered and confirmed working on the **Q65LS03DAU**. Other
-models/years may behave differently.
+Runtime Art and remote-key behavior communicates through Samsung's **internal
+WebSocket API**, via the
+[`samsungtvws`](https://github.com/xchwarze/samsung-tv-ws-api) library (official
+PyPI release `samsungtvws[async,encrypted]>=3.0.5`). An isolated, currently
+unwired `ip_control.py` boundary implements the separate HTTPS JSON-RPC power
+protocol on port 1516; pairing, persistence, and public actions are deliberately
+deferred. There is no supported public Samsung consumer-TV API; these paths are
+reverse-engineered and model-dependent. The established WebSocket behavior is
+confirmed on the **Q65LS03DAU**; other models/years may differ.
 
 Core capabilities:
 
@@ -63,15 +66,18 @@ Core capabilities:
                      │  samsungtvws (sync art() in executor)
                      ▼
         Samsung Frame TV  (WebSocket :8002/:8001, encrypted :8000)
+        └─ dormant second endpoint: HTTPS JSON-RPC :1516 (ip_control.py)
                      ▲
    /media/frame/inbox │ /media/frame/library  (HA filesystem)
 ```
 
 Two external boundaries dominate the design:
 
-1. **The TV** — reached through `samsungtvws`. Connections are short-lived,
-   created per-operation, and wrapped in timeouts/retries. The library is
-   partly synchronous, so blocking calls are pushed to threads. Device-info
+1. **The TV** — runtime operations currently reach it through `samsungtvws`.
+   The dormant IP Control module is a separate dependency-free protocol
+   boundary and is not yet constructed by config-entry setup. Connections are
+   short-lived, created per-operation, and wrapped in timeouts/retries. The
+   library is partly synchronous, so blocking calls are pushed to threads. Device-info
    discovery uses the REST client directly so it cannot trigger WebSocket
    pairing. `SamsungTVWS.art()` creates a separate child connection; capture
    its refreshed token and close it before closing the parent TV client.
@@ -88,6 +94,7 @@ custom_components/samsung_frame_art_director/
 ├── api.py             # SamsungFrameClient: the core TV facade + SQLite library DB (~1.8k lines)
 ├── database.py        # Shared local-art + per-entry TV-state DB paths/migration
 ├── bridge.py          # Pairing/handshake + port/method selection (used by config_flow)
+├── ip_control.py      # Isolated HTTPS JSON-RPC power client (not yet wired)
 ├── config_flow.py     # Pairing UI, zeroconf discovery, reauth, reconfigure, options
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
 ├── ai.py              # ImageAnalyzer ABC, GeminiAnalyzer, OpenAIAnalyzer, create_analyzer()
@@ -152,6 +159,15 @@ Stateless pairing helpers used **only by the config flow**:
 handshake, async-then-sync), and the encrypted-pairing pair
 (`async_encrypted_start_pairing` / `async_encrypted_try_pin`) for legacy H/J
 models. Returns `PairResult` objects with `RESULT_*` semantics from `const.py`.
+
+### `ip_control.py` — dormant power-protocol boundary
+
+Implements Samsung's separate, reverse-engineered HTTPS JSON-RPC endpoint on
+port 1516 with strict response validation, bounded reads/timeouts, per-host
+serialization, and credential-safe errors. It is intentionally not constructed
+by config-entry setup yet: pairing/persistence and public power actions are
+separate rollout packages. It does not replace or modify any WebSocket Art Mode
+behavior.
 
 ### `config_flow.py`
 
