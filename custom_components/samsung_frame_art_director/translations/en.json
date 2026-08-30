@@ -87,7 +87,7 @@
         "sections": {
           "ai_tagging": {
             "name": "AI Image Tagging",
-            "description": "Optional cloud classification. Process Inbox and Sync Library send each image to the selected provider to generate tags.",
+            "description": "Optional cloud classification. Process Inbox and Sync Library send each image to the selected provider to generate tags. Provider usage may incur charges.",
             "data": {
               "ai_provider": "Provider",
               "gemini_api_key": "Gemini API key",
@@ -100,11 +100,11 @@
             "data_description": {
               "ai_provider": "The full image is sent from Home Assistant to this provider for classification.",
               "gemini_api_key": "Required for Gemini. Get a free key at aistudio.google.com.",
-              "gemini_model": "Model ID used for Gemini vision requests.",
+              "gemini_model": "Defaults to gemini-2.5-flash. A custom model must accept image input.",
               "openai_api_key": "Required for OpenAI image tagging. Sent directly through Home Assistant's HTTP client.",
-              "openai_model": "Model ID used for OpenAI vision requests.",
+              "openai_model": "Defaults to gpt-4o. A custom model must accept image input.",
               "anthropic_api_key": "Required for Anthropic image tagging. Sent directly through Home Assistant's HTTP client.",
-              "anthropic_model": "Model ID used for Anthropic vision requests."
+              "anthropic_model": "Defaults to claude-haiku-4-5-20251001. A custom model must accept image input."
             }
           },
           "cleanup": {
