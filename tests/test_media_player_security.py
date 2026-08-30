@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 from urllib.parse import quote
 
 import pytest
@@ -96,6 +96,27 @@ async def test_media_player_reads_namespaced_artwork_from_source_runtime(hass):
         matte="none",
         source_file="/media/frame/library/source.png",
     )
+
+
+async def test_media_player_power_keeps_existing_art_mode_semantics(hass):
+    """Entity power remains Art Mode and never routes through IP Control."""
+    client = MagicMock()
+    client.async_set_artmode = AsyncMock()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "host": "frame.local",
+            "ip_control_token": "IP-TOKEN",
+            "ip_control_port": 1516,
+        },
+    )
+    entry.add_to_hass(hass)
+    entity = _media_player(hass, entry, client)
+
+    await entity.async_turn_on()
+    await entity.async_turn_off()
+
+    assert client.async_set_artmode.await_args_list == [call(True), call(False)]
 
 
 @pytest.mark.parametrize("extension", ["jpg", "png", "webp"])

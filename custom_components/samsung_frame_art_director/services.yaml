@@ -40,6 +40,35 @@ send_key:
           unit_of_measurement: seconds
           mode: box
 
+power_on:
+  name: Power On (IP Control)
+  description: >-
+    Request true panel power-on through Samsung IP Control. Pair IP Control
+    first under Reconfigure. Availability from standby varies by model,
+    firmware, network, and energy settings.
+  target:
+    entity:
+      domain: media_player
+
+power_off:
+  name: Power Off (IP Control)
+  description: >-
+    Request true panel standby through Samsung IP Control. Unlike the existing
+    media-player Turn Off command, this is intended to power down the panel
+    rather than only leave Art Mode. Support varies by model and firmware.
+  target:
+    entity:
+      domain: media_player
+
+reboot:
+  name: Reboot (IP Control)
+  description: >-
+    Request a panel reboot through Samsung IP Control. Pair IP Control first
+    under Reconfigure and use it only on a trusted local network.
+  target:
+    entity:
+      domain: media_player
+
 rotate_art_now:
   name: Rotate Art
   description: Selects a new piece of art based on tags or source folder.
