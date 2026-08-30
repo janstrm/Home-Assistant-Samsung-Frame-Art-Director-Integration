@@ -25,7 +25,6 @@ def _media_player(hass, entry, client):
         hass,
         logging.getLogger(__name__),
         name="test-frame",
-        config_entry=entry,
     )
     entry.runtime_data = SamsungFrameRuntimeData(
         client=client,

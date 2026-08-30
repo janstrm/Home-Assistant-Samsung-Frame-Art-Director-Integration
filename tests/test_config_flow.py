@@ -1,4 +1,5 @@
 """Tests for the config flow (user pairing, reconfigure guard)."""
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from homeassistant import config_entries
@@ -52,12 +53,10 @@ async def test_user_flow_cannot_connect(hass):
 
 
 async def test_dhcp_enriches_mac_for_existing_entry(hass):
-    from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
-
     entry = MockConfigEntry(domain=DOMAIN, unique_id="DUID1", data={"host": "1.2.3.4"}, options={})
     entry.add_to_hass(hass)
 
-    info = DhcpServiceInfo(ip="1.2.3.4", hostname="samsung", macaddress="aabbccddeeff")
+    info = SimpleNamespace(ip="1.2.3.4", hostname="samsung", macaddress="aabbccddeeff")
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "dhcp"}, data=info
     )
@@ -72,7 +71,13 @@ async def test_reconfigure_rejects_different_device(hass):
         f"{_CF}.async_probe_device_info",
         AsyncMock(return_value=(8002, {"device": {"duid": "OTHER"}})),
     ):
-        result = await entry.start_reconfigure_flow(hass)
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={
+                "source": config_entries.SOURCE_RECONFIGURE,
+                "entry_id": entry.entry_id,
+            },
+        )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"host": "9.9.9.9", "name": "Frame"}
         )

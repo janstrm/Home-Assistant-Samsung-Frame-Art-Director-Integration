@@ -15,6 +15,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
+from .compat import create_entry_coordinator
 from .const import CONF_DUID, DOMAIN, resolve_matte
 from .media_source import split_media_identifier
 from .runtime import SamsungFrameConfigEntry
@@ -35,11 +36,11 @@ async def async_setup_entry(
         """Fetch art-mode status + current artwork over a single connection."""
         return await client.async_get_state()
 
-    coordinator = DataUpdateCoordinator(
+    coordinator = create_entry_coordinator(
         hass,
         _LOGGER,
+        entry,
         name="samsung_frame_art_mode",
-        config_entry=entry,
         update_method=async_update_data,
         update_interval=dt_util.dt.timedelta(seconds=30),
     )

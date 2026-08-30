@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import service as ha_service
 
+from .compat import async_extract_entity_ids
 from .const import DOMAIN
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
 
@@ -67,7 +67,7 @@ async def async_resolve_action_targets(
     hass: HomeAssistant, call: ServiceCall
 ) -> list[FrameActionTarget]:
     """Resolve an action target or raise a clear validation error."""
-    entity_ids = await ha_service.async_extract_entity_ids(call)
+    entity_ids = await async_extract_entity_ids(hass, call)
     if not entity_ids:
         loaded = loaded_frame_targets(hass)
         if len(loaded) == 1:
