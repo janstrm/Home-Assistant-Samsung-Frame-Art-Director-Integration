@@ -11,7 +11,6 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .const import (
     CONF_SLIDESHOW_SOURCE_TYPE,
     DOMAIN,
-    DATA_CLIENT,
     CONF_DUID,
     SLIDESHOW_SOURCE_FOLDER,
     SLIDESHOW_SOURCE_TAGS,
@@ -28,18 +27,19 @@ from .const import (
     CONF_ENABLE_ART_SETTINGS,
     DEFAULT_ENABLE_ART_SETTINGS,
 )
+from .runtime import SamsungFrameConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: SamsungFrameConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the select platform."""
     _LOGGER.debug("Setting up select platform for entry: %s", entry.entry_id)
-    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    client = entry.runtime_data.client
     entities = [
         SamsungFrameSlideshowSourceSelect(entry),
         SamsungFrameMatteStyleSelect(entry),

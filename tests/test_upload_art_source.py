@@ -7,7 +7,7 @@ import pytest
 from homeassistant.exceptions import ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.samsung_frame_art_director import async_setup_entry
+from custom_components.samsung_frame_art_director import async_setup, async_setup_entry
 from custom_components.samsung_frame_art_director.const import DOMAIN
 
 
@@ -84,6 +84,7 @@ class _FakeSession:
 async def upload_service(hass):
     """Register upload_art with the TV and network boundaries replaced."""
     hass.http = MagicMock()
+    assert await async_setup(hass, {})
     client = MagicMock()
     client.host = "frame.local"
     client.token = "token"

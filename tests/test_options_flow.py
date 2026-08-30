@@ -12,7 +12,6 @@ from custom_components.samsung_frame_art_director.config_flow import (
 )
 from custom_components.samsung_frame_art_director.const import (
     CONF_ENABLE_ART_SETTINGS,
-    DATA_CLIENT,
     DOMAIN,
 )
 from custom_components.samsung_frame_art_director.number import (
@@ -26,6 +25,9 @@ from custom_components.samsung_frame_art_director.select import (
 from custom_components.samsung_frame_art_director.switch import (
     SamsungFrameBrightnessSensorSwitch,
     async_setup_entry as async_setup_switch,
+)
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
 )
 
 _COMPONENT_DIR = (
@@ -115,7 +117,7 @@ async def test_art_setting_entity_default(
         options=options,
     )
     client = MagicMock()
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: client}
+    entry.runtime_data = SamsungFrameRuntimeData(client=client)
     add_entities = MagicMock()
 
     await setup_platform(hass, entry, add_entities)

@@ -86,6 +86,7 @@ Two external boundaries dominate the design:
 custom_components/samsung_frame_art_director/
 ├── __init__.py        # Setup, teardown, service & WS-API registration, slideshow timer
 ├── api.py             # SamsungFrameClient: the core TV facade + SQLite library DB (~1.8k lines)
+├── database.py        # Shared local-art + per-entry TV-state DB paths/migration
 ├── bridge.py          # Pairing/handshake + port/method selection (used by config_flow)
 ├── config_flow.py     # Pairing UI, zeroconf discovery, reauth, reconfigure, options
 ├── curator.py         # ContentCurator: inbox processing & library sync (AI tagging)
@@ -102,6 +103,8 @@ custom_components/samsung_frame_art_director/
 ├── number.py          # slideshow interval, gallery page, brightness, color temp, motion sensitivity
 ├── text.py            # free-text slideshow/tag filter
 ├── services.yaml      # Service schemas (UI metadata)
+├── runtime.py         # Typed ConfigEntry runtime ownership
+├── targets.py         # Target/registry resolution for loaded Frames
 ├── strings.json       # config/options flow strings
 ├── translations/en.json
 ├── manifest.json      # domain, version, requirements (samsungtvws>=3.0.5)
@@ -116,8 +119,8 @@ docs/ARCHITECTURE.md    # (this file)
 
 ### `api.py` — `SamsungFrameClient`
 
-The heart of the integration. A single instance per config entry, stored in
-`hass.data[DOMAIN][entry_id]["client"]`. It is an **async facade**: every public
+The heart of the integration. A single instance per config entry, stored in the
+typed `ConfigEntry.runtime_data.client`. It is an **async facade**: every public
 method is `async`, and any blocking `samsungtvws` call is run via
 `asyncio.to_thread` / `hass.async_add_executor_job`.
 
@@ -191,18 +194,31 @@ art preview, brightness, color temperature) stay primary. Notable:
 
 - `media_player.py` — primary entity; exposes `art_mode_status` attribute.
 - `image.py` — serves `async_get_current_art()` bytes as a camera-style preview.
-- `sensor.py` — `..._art_library`: state = item count, `items` attribute = full
-  gallery list for the dashboard; also defines the gallery-page number helper.
+- `sensor.py` — `..._art_library`: state = item count, `items` attribute = one
+  bounded gallery page for the dashboard.
 
 ---
 
 ## 5. Data model (SQLite)
 
-The DB lives at `<config>/samsung_frame_director/art_library.db`
-(`DB_DIR`/`DB_FILE` in `const.py`). It is opened **per operation** (no long-lived
-connection). Config-entry setup eagerly creates or migrates it through
-`async_initialize_database()` so a broken DB stops setup visibly; public DB
-operations still call `_ensure_db()` defensively.
+The database model deliberately has two scopes:
+
+- `<config>/samsung_frame_director/art_library.db` owns the shared `local_art`
+  table because the files on Home Assistant belong to the installation, not to
+  one TV.
+- `<config>/samsung_frame_director/art_library_<config-entry-id>.db` owns the
+  `art_library` table for one Frame. This keeps Samsung content IDs, TV
+  presence, favorites, and cleanup state isolated even when two TVs return the
+  same ID.
+
+On the first start after this change, `database.py` copies the former shared DB
+into each entry-owned database with SQLite's backup API and an atomic rename,
+then removes `local_art` from that copy. The original remains the shared local
+library and a recovery source. The client attaches it to each short-lived
+per-entry connection so existing queries can combine local files with the
+selected TV's state. Config-entry setup eagerly prepares and migrates both
+schemas through `async_initialize_database()` so a broken DB stops setup
+visibly; public DB operations still call `_ensure_db()` defensively.
 
 There are **two tables**, and understanding the split is key:
 
@@ -251,8 +267,9 @@ The columns the code actually reads/writes are: `content_id` (PK), `tags`,
 
 ### Why two tables?
 
-`local_art` = "what I have on disk and could show". `art_library` = "what is
-currently/previously on the TV's limited internal storage". Rotation can either
+`local_art` = "what this HA installation has on disk and could show on any
+Frame". `art_library` = "what is currently/previously on this TV's limited
+internal storage". Rotation can either
 re-select something already on the TV (`art_library`, fast) or upload a local
 file (`local_art`, slower). Cleanup operates on `art_library` to free TV space
 while preserving favorites and the currently-displayed image.
@@ -310,9 +327,9 @@ The `upload_art` service obtains the source bytes, then calls
    embedded credentials and unsupported schemes are rejected before I/O.
 2. Canonicalize the source identity (local path aliases resolve to one absolute
    path; URL scheme/host/default ports/path aliases normalize while the query is
-   preserved), then look up every tracked `content_id` for that identity. Because
-   the database is shared by all configured Frames, ask the target TV for its
-   available art (30-second socket timeout) and fast-select the first matching
+   preserved), then look up every tracked `content_id` for that identity in the
+   selected Frame's entry-owned database. Ask that TV for its available art
+   (30-second socket timeout) and fast-select the first matching
    ID. The blocking worker is cancellation-contained: its caller retains
    `_art_lock` until the worker exits, so it cannot perform a late selection
    beside a subsequent Art operation. Update its tags and return without
@@ -480,19 +497,22 @@ provider constant in `const.py`, and add its option(s) to the options flow in
 
 ## 9. Services, entities & the dashboard
 
-Service schemas live in `services.yaml`; handlers are registered **only** in
-`__init__.py` (a single source of truth). Domain-targeted services
-(`set_artmode`, `upload_art`, `rotate_art_now`, `cleanup_storage`,
-`art_diagnostics`) resolve their target `SamsungFrameClient`(s) via
-`_resolve_clients()` from the entity target; library/gallery services
-(`process_inbox`, `sync_library`, `purge_database`, `toggle_favorite`,
-`delete_art`, `rotate_favorites`) act on the entry's client. `media_player.py`
+Service schemas live in `services.yaml`; handlers, the thumbnail view, and the
+WebSocket command are registered once in domain `async_setup()` (a single
+source of truth). Every Frame action resolves its entity target through
+`targets.async_resolve_action_targets()` to a loaded ConfigEntry runtime. With
+exactly one loaded Frame, a missing target selects it for backward
+compatibility; with zero or multiple loaded Frames, or an invalid/unloaded
+target, the action raises `ServiceValidationError`. Internal coordination finds
+renamable entities through their stable registry unique IDs. `media_player.py`
 deliberately does **not** register entity-platform services for the same names
 (it would double-register and diverge); it only implements the native
 `turn_on`/`turn_off` Art-Mode toggle.
 
 A **WebSocket command** `samsung_frame_art_director/get_library` and the
 `SamsungFrameThumbnailView` HTTP view feed the example gallery dashboard. The
+command accepts `config_entry_id` and requires it when multiple Frames are
+loaded; thumbnail routes include the same entry ID. The
 gallery is also exposed via the `..._art_library` sensor's `items` attribute for
 template/auto-entities use. Thumbnail requests require Home Assistant
 authentication; gallery and Media Source results carry short-lived signed paths
@@ -515,6 +535,8 @@ the [README](README.md#-services).
   successor.
 - SQLite is accessed with short-lived per-call connections inside executor jobs
   (`_get_db()` / `sqlite3.connect`), avoiding cross-thread connection sharing.
+  `_get_db()` attaches the shared local-art DB to the selected Frame's isolated
+  TV-state DB.
 - Network calls use explicit client timeouts plus an aggregate timeout, either
   `_async_run_blocking_contained()` for synchronous TV calls or
   `aiohttp.ClientTimeout` for HTTP (typically 10–120s).

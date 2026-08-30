@@ -9,17 +9,18 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, DATA_CLIENT, CONF_DUID
+from .const import CONF_DUID, DOMAIN
+from .runtime import SamsungFrameConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: SamsungFrameConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the image platform."""
-    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    client = entry.runtime_data.client
     async_add_entities([SamsungFrameArtImage(hass, entry, client)], True)
 
 class SamsungFrameArtImage(ImageEntity):

@@ -6,14 +6,12 @@ import asyncio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed, ServiceValidationError
-from homeassistant.helpers import entity_registry as er, service as ha_service
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components import persistent_notification
 
 from .const import (
-    DATA_CLIENT,
     DOMAIN,
     CONF_SLIDESHOW_INTERVAL,
     CONF_SLIDESHOW_SOURCE_PATH,
@@ -37,11 +35,19 @@ from .const import (
     MATTE_STYLE_NONE,
     resolve_matte,
 )
-from .const import DB_DIR, DB_FILE, DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
+from .const import DEFAULT_CLEANUP_DRY_RUN, DEFAULT_CLEANUP_ONLY_INTEGRATION_MANAGED, DEFAULT_CLEANUP_PRESERVE_CURRENT, DEFAULT_CLEANUP_MAX_ITEMS
 from .file_access import (
     UnsafeLocalPathError,
     is_local_media_identifier,
     resolve_upload_source,
+)
+from .database import async_prepare_entry_database
+from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
+from .targets import (
+    async_resolve_action_targets,
+    entry_entity_id,
+    loaded_frame_target,
+    loaded_frame_targets,
 )
 
 
@@ -50,7 +56,12 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config) -> bool:
-    """Set up via configuration.yaml (not used)."""
+    """Set up domain-wide interfaces shared by every Frame entry."""
+    from .views import SamsungFrameThumbnailView
+
+    hass.http.register_view(SamsungFrameThumbnailView(hass))
+    _register_domain_actions(hass)
+    _register_domain_websocket(hass)
     return True
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
@@ -300,7 +311,441 @@ def _remote_filename(path: str) -> str:
     return filename
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+def _register_domain_websocket(hass: HomeAssistant) -> None:
+    """Register the Gallery WebSocket command once for the integration."""
+    from homeassistant.components import websocket_api
+
+    @websocket_api.websocket_command(
+        {
+            vol.Required("type"): f"{DOMAIN}/get_library",
+            vol.Optional("config_entry_id"): str,
+        }
+    )
+    @websocket_api.async_response
+    async def websocket_get_library(hass, connection, msg):
+        targets = loaded_frame_targets(hass)
+        config_entry_id = msg.get("config_entry_id")
+        if config_entry_id:
+            target = loaded_frame_target(hass, config_entry_id)
+            if target is None:
+                connection.send_error(
+                    msg["id"],
+                    "frame_not_loaded",
+                    "The selected Samsung Frame is not loaded",
+                )
+                return
+            targets = [target]
+        elif len(targets) != 1:
+            connection.send_error(
+                msg["id"],
+                "target_required",
+                "config_entry_id is required unless exactly one Samsung Frame is loaded",
+            )
+            return
+
+        target = targets[0]
+        data = await target.runtime.client.async_get_library_data()
+        from .media_source import signed_thumbnail_url
+
+        for item in data.get("items", []):
+            item["thumbnail"] = signed_thumbnail_url(
+                hass, target.entry.entry_id, item["id"]
+            )
+        connection.send_result(msg["id"], data)
+
+    websocket_api.async_register_command(hass, websocket_get_library)
+
+
+def _register_domain_actions(hass: HomeAssistant) -> None:
+    """Register action handlers shared by every loaded Frame."""
+    async def _svc_set_artmode(call: ServiceCall) -> None:
+        enabled = bool(call.data.get("enabled"))
+        _LOGGER.debug("Action set_artmode called: enabled=%s, data=%s", enabled, dict(call.data))
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            opts = target.entry.options
+            _LOGGER.debug("set_artmode: invoking client on host=%s", getattr(client, "host", "?"))
+            try:
+                if enabled and opts and opts.get("use_wol_before_on"):
+                    mac = opts.get("mac_address")
+                    if mac:
+                        try:
+                            # Also try the common /24 broadcast candidate derived
+                            # from the TV's IP (e.g. .61 -> .255). The global
+                            # broadcast remains the portable fallback because
+                            # the TV does not expose its subnet mask here.
+                            bcasts = []
+                            host_ip = getattr(client, "host", None)
+                            if host_ip and host_ip.count(".") == 3:
+                                bcasts.append(host_ip.rsplit(".", 1)[0] + ".255")
+                            await hass.async_add_executor_job(_send_magic_packet, mac, bcasts)
+                            _LOGGER.debug("Sent WoL to %s (broadcasts=%s), sleeping before Art ON", mac, bcasts)
+                            await asyncio.sleep(3)
+                        except Exception as wol_err:  # noqa: BLE001
+                            _LOGGER.warning("WoL send to %s failed: %r", mac, wol_err)
+                await client.async_set_artmode(enabled)
+                if enabled and opts and opts.get("use_power_key_on_off"):
+                    # A fully powered-off Frame accepts set_artmode over the art
+                    # channel but won't physically light the panel. If it still
+                    # reports off, send the POWER key to wake it, then re-assert
+                    # Art Mode so it lands on art rather than live TV.
+                    status = await client.async_get_artmode_status()
+                    if status in ("off", "false", "0", "none"):
+                        _LOGGER.debug("ON wake: TV still off; sending POWER key to wake")
+                        try:
+                            await client.async_send_key("KEY_POWER")
+                            await asyncio.sleep(3)
+                            await client.async_set_artmode(True)
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug("ON wake: POWER key path unavailable")
+                if not enabled and opts and opts.get("use_power_key_on_off"):
+                    # Re-check quickly; if still on, attempt POWER key once
+                    status = await client.async_get_artmode_status()
+                    if status in ("on", "true", "1"):
+                        _LOGGER.debug("OFF fallback: sending POWER key via websocket remote")
+                        try:
+                            # Use the client's identified connection (name + token)
+                            # so this does not trigger a TV authorization popup.
+                            await client.async_send_key("KEY_POWER")
+                            await asyncio.sleep(1.5)
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug("OFF fallback: POWER key path unavailable")
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("set_artmode error on host=%s: %r", getattr(client, "host", "?"), err)
+
+    async def _svc_upload_art(call: ServiceCall) -> dict | None:
+        path = call.data.get("path")
+        tags = call.data.get("tags")
+        requested_matte = call.data.get("matte")
+        if not path:
+            return
+        _LOGGER.debug(
+            "Action upload_art called: path=%s matte=%s tags=%s",
+            path,
+            requested_matte,
+            tags,
+        )
+        targets = await async_resolve_action_targets(hass, call)
+
+        if is_local_media_identifier(path):
+            artwork = None
+            for target in targets:
+                if artwork := await target.runtime.client.async_read_local_art(path):
+                    break
+            if not artwork:
+                raise ServiceValidationError(
+                    "Artwork is not in the tracked local library"
+                )
+            image_bytes = artwork["data"]
+            source_file = artwork["path"]
+        else:
+            # Preserve the established validation that a source has a usable name.
+            _remote_filename(path)
+            # HTTP(S) is streamed with limits; a local path is sandboxed and
+            # read off-loop. Existing path/URL calls remain compatible.
+            image_bytes = await _async_read_image_bytes(hass, path)
+            source_file = path
+
+        content_ids: list[str] = []
+        for target in targets:
+            client = target.runtime.client
+            matte = requested_matte or resolve_matte(target.entry.options)
+            _LOGGER.debug("upload_art: invoking client on host=%s", getattr(client, "host", "?"))
+            try:
+                content_id = await client.async_upload_image(
+                    image_bytes,
+                    matte=matte,
+                    source_file=source_file,
+                    tags=tags,
+                )
+                if content_id:
+                    content_ids.append(str(content_id))
+
+                # Run automatic cleanup (defaults from const)
+                # We do this asynchronously to not block the service return too long, 
+                # though here we await it for simplicity as the user expects "done" state.
+                # If performance is an issue, we could fire a task.
+                await client.async_cleanup_storage(**_cleanup_params(target.entry))
+                
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
+        if call.return_response:
+            return {
+                "content_id": content_ids[0] if len(content_ids) == 1 else None,
+                "content_ids": content_ids,
+            }
+        return None
+
+    # Schema for services
+    hass.services.async_register(
+        DOMAIN,
+        "set_artmode",
+        _svc_set_artmode,
+        schema=vol.Schema({vol.Required("enabled"): bool, vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "upload_art",
+        _svc_upload_art,
+        schema=vol.Schema({
+            vol.Required("path"): str,
+            vol.Optional("matte"): str,
+            vol.Optional("tags"): str,
+            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
+        }),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _svc_art_diagnostics(call: ServiceCall) -> None:
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            await target.runtime.client.async_art_diagnostics()
+
+    hass.services.async_register(
+        DOMAIN,
+        "art_diagnostics",
+        _svc_art_diagnostics,
+        schema=vol.Schema({vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}),
+    )
+
+    async def _svc_rotate_art_now(call: ServiceCall) -> None:
+        tags = call.data.get("tags")
+        match_all = call.data.get("match_all", False)
+        source = call.data.get("source", "library")
+        requested_path = call.data.get("path")
+        
+        _LOGGER.debug("Action rotate_art_now called: tags=%s match_all=%s source=%s path=%s", tags, match_all, source, requested_path)
+        
+        tag_list = [t.strip() for t in tags.split(",")] if tags else None
+
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            matte = resolve_matte(target.entry.options)
+            try:
+                if source == "folder":
+                    path = (
+                        requested_path
+                        or target.entry.options.get(CONF_LIBRARY_DIR)
+                        or DEFAULT_LIBRARY_DIR
+                    )
+                    success = await client.async_rotate_from_folder(path, matte=matte)
+                    if success:
+                        _LOGGER.info("rotate_art_now(folder) success on host=%s", getattr(client, "host", "?"))
+                    else:
+                        _LOGGER.warning("rotate_art_now(folder) failed on host=%s", getattr(client, "host", "?"))
+                else:
+                    success = await client.async_rotate_art(tags=tag_list, match_all=match_all, matte=matte)
+                    if success:
+                        _LOGGER.info("rotate_art_now(library) success on host=%s", getattr(client, "host", "?"))
+                    else:
+                        _LOGGER.warning("rotate_art_now(library) found no matches on host=%s for tags=%s", getattr(client, "host", "?"), tags)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("rotate_art_now failed on host=%s: %r", getattr(client, "host", "?"), err)
+
+    hass.services.async_register(
+        DOMAIN,
+        "rotate_art_now",
+        _svc_rotate_art_now,
+        schema=vol.Schema({
+            vol.Optional("tags"): str,
+            vol.Optional("match_all"): bool,
+            vol.Optional("source"): vol.In(["library", "folder"]),
+            vol.Optional("path"): str,
+            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
+        }),
+    )
+
+    async def _svc_cleanup_storage(call: ServiceCall) -> None:
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            params = _cleanup_params(target.entry, call.data)
+            _LOGGER.debug(
+                "Action cleanup_storage called for host=%s: %s",
+                getattr(client, "host", "?"),
+                params,
+            )
+            try:
+                summary = await client.async_cleanup_storage(**params)
+                _LOGGER.info("cleanup_storage summary on %s: %s", getattr(client, "host", "?"), summary)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("cleanup_storage failed on host=%s: %r", getattr(client, "host", "?"), err)
+
+    hass.services.async_register(
+        DOMAIN,
+        "cleanup_storage",
+        _svc_cleanup_storage,
+        schema=vol.Schema({
+            vol.Optional("max_items"): int,
+            vol.Optional("max_age_days"): int,
+            vol.Optional("preserve_current"): bool,
+            vol.Optional("only_integration_managed"): bool,
+            vol.Optional("dry_run"): bool,
+            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
+        }),
+    )
+
+    # Register Services
+    async def async_service_handler(call: ServiceCall) -> None:
+        """Handle service calls."""
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            if call.service == "process_inbox":
+                from .curator import ContentCurator
+
+                curator = ContentCurator(hass, target.entry, client)
+                result = await curator.async_process_inbox()
+
+                if result.get("error"):
+                    persistent_notification.async_create(
+                        hass,
+                        f"Inbox Processing Failed: {result['error']}",
+                        title="Art Director",
+                    )
+                else:
+                    persistent_notification.async_create(
+                        hass,
+                        f"Processed {result['count']} images from Inbox.",
+                        title="Art Director",
+                    )
+            elif call.service == "sync_library":
+                from .curator import ContentCurator
+
+                curator = ContentCurator(hass, target.entry, client)
+                result = await curator.async_sync_library()
+
+                if result.get("error"):
+                    persistent_notification.async_create(
+                        hass,
+                        f"Library Sync Failed: {result['error']}",
+                        title="Art Director",
+                    )
+                else:
+                    duplicates = result["duplicates_removed"]
+                    persistent_notification.async_create(
+                        hass,
+                        f"Library sync complete: {result['added']} added, "
+                        f"{result['stale_removed']} stale removed, "
+                        f"{duplicates} "
+                        f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
+                        title="Art Director",
+                    )
+            elif call.service == "purge_database":
+                await client.async_purge_database()
+                persistent_notification.async_create(
+                    hass,
+                    "Database purged successfully. Art history and local tags have been cleared.",
+                    title="Art Director",
+                )
+
+    hass.services.async_register(DOMAIN, "process_inbox", async_service_handler)
+    hass.services.async_register(DOMAIN, "sync_library", async_service_handler)
+    hass.services.async_register(DOMAIN, "purge_database", async_service_handler)
+
+    # New Favorites Services
+    async def async_fav_handler(call: ServiceCall) -> None:
+        targets = await async_resolve_action_targets(hass, call)
+        for target in targets:
+            client = target.runtime.client
+            if call.service == "toggle_favorite":
+                content_id = call.data.get("content_id")
+                if not content_id:
+                    try:
+                        current = await client.async_get_current_art()
+                        content_id = current.get("content_id")
+                    except Exception:  # noqa: BLE001
+                        content_id = None
+                if content_id:
+                    new_state = await client.async_toggle_favorite(content_id)
+                    _LOGGER.debug(
+                        "Toggled favorite for %s on host=%s: %s",
+                        content_id,
+                        getattr(client, "host", "?"),
+                        new_state,
+                    )
+                    persistent_notification.async_create(
+                        hass,
+                        f"{'Added to' if new_state else 'Removed from'} favorites: {content_id}",
+                        title="Art Director",
+                    )
+                else:
+                    _LOGGER.warning(
+                        "toggle_favorite: no content_id provided and no current artwork detected"
+                    )
+            elif call.service == "delete_art":
+                content_id = call.data.get("content_id")
+                if content_id:
+                    success = await client.async_delete_art(content_id)
+                    if success:
+                        persistent_notification.async_create(
+                            hass,
+                            f"Deleted 1 item ({content_id}) from library.",
+                            title="Art Director",
+                        )
+                    else:
+                        raise ServiceValidationError(
+                            "Artwork is not a tracked local artwork or could not be deleted"
+                        )
+            elif call.service == "rotate_favorites":
+                matte = resolve_matte(target.entry.options)
+                await client.async_rotate_art(source="favorites", matte=matte)
+            
+    hass.services.async_register(DOMAIN, "toggle_favorite", async_fav_handler)
+    hass.services.async_register(DOMAIN, "delete_art", async_fav_handler)
+    hass.services.async_register(DOMAIN, "rotate_favorites", async_fav_handler)
+
+    # Service to change gallery page (Avoiding Jinja in frontend tap_action)
+    async def async_change_page(call: ServiceCall) -> None:
+        step = call.data.get("step", 0)
+        for target in await async_resolve_action_targets(hass, call):
+            page_entity_id = entry_entity_id(
+                hass, target.entry, "number", "gallery_page"
+            )
+            library_entity_id = entry_entity_id(
+                hass, target.entry, "sensor", "art_library"
+            )
+            page_state = (
+                hass.states.get(page_entity_id) if page_entity_id else None
+            )
+            library_state = (
+                hass.states.get(library_entity_id) if library_entity_id else None
+            )
+
+            total_items = 0
+            if library_state and library_state.state not in (
+                "unknown",
+                "unavailable",
+            ):
+                try:
+                    total_items = int(library_state.state)
+                except ValueError:
+                    pass
+
+            page_size = 25
+            max_page = max(1, (total_items + page_size - 1) // page_size)
+            if page_state and page_state.state not in ("unknown", "unavailable"):
+                try:
+                    current = int(float(page_state.state))
+                    new_val = max(1, min(max_page, current + step))
+                    await hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {"entity_id": page_entity_id, "value": new_val},
+                        blocking=False,
+                    )
+                except ValueError:
+                    pass
+    
+    hass.services.async_register(DOMAIN, "change_gallery_page", async_change_page)
+
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> bool:
     """Set up Samsung Frame Art Director from a config entry."""
     _LOGGER.info("Setting up Samsung Frame Art Director for host=%s", entry.data.get("host"))
 
@@ -387,10 +832,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Provide DB path for cleanup service (directory may not exist yet)
     try:
-        import os as _os
-        db_dir = hass.config.path(DB_DIR)
-        _os.makedirs(db_dir, exist_ok=True)
-        client.set_db_path(hass.config.path(f"{DB_DIR}/{DB_FILE}"))
+        entry_db_path, local_db_path = await async_prepare_entry_database(
+            hass, entry.entry_id
+        )
+        client.set_db_path(entry_db_path)
+        client.set_local_db_path(local_db_path)
         await client.async_initialize_database()
     except Exception as err:  # noqa: BLE001
         raise ConfigEntryNotReady(
@@ -414,467 +860,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         new_data = {**entry.data, "token": client.token}
         hass.config_entries.async_update_entry(entry, data=new_data)
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        DATA_CLIENT: client,
-        **entry.data,
-    }
+    entry.runtime_data = SamsungFrameRuntimeData(client=client)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    # Register HTTP View for Thumbnails
-    from .views import SamsungFrameThumbnailView
-    hass.http.register_view(SamsungFrameThumbnailView(hass))
-
-    # Register domain-level actions (a.k.a. services) that accept target entities
-    async def _resolve_clients(call: ha_service.ServiceCall):
-        entity_ids = await ha_service.async_extract_entity_ids(call)
-        if not entity_ids:
-            # If no target provided, default to this entry's client
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if stored:
-                yield stored.get(DATA_CLIENT)
-            return
-        ent_reg = er.async_get(hass)
-        for entity_id in entity_ids:
-            ent = ent_reg.async_get(entity_id)
-            config_entry_id = getattr(ent, "config_entry_id", None) if ent else None
-            if config_entry_id:
-                stored = hass.data.get(DOMAIN, {}).get(config_entry_id)
-                if stored and (client := stored.get(DATA_CLIENT)):
-                    yield client
-
-    async def _svc_set_artmode(call: ha_service.ServiceCall) -> None:
-        enabled = bool(call.data.get("enabled"))
-        _LOGGER.debug("Action set_artmode called: enabled=%s, data=%s", enabled, dict(call.data))
-        found = False
-        async for client in _resolve_clients(call):
-            found = True
-            _LOGGER.debug("set_artmode: invoking client on host=%s", getattr(client, "host", "?"))
-            try:
-                # Options: WoL before ON, POWER key after OFF failure
-                entry_id = None
-                # Find the corresponding entry id for this client
-                for cid, stored in hass.data.get(DOMAIN, {}).items():
-                    if stored.get(DATA_CLIENT) is client:
-                        entry_id = cid
-                        break
-                opts = None
-                if entry_id:
-                    entry_obj = hass.config_entries.async_get_entry(entry_id)
-                    if entry_obj:
-                        opts = entry_obj.options or {}
-                if enabled and opts and opts.get("use_wol_before_on"):
-                    mac = opts.get("mac_address")
-                    if mac:
-                        try:
-                            # Also try the common /24 broadcast candidate derived
-                            # from the TV's IP (e.g. .61 -> .255). The global
-                            # broadcast remains the portable fallback because
-                            # the TV does not expose its subnet mask here.
-                            bcasts = []
-                            host_ip = getattr(client, "host", None)
-                            if host_ip and host_ip.count(".") == 3:
-                                bcasts.append(host_ip.rsplit(".", 1)[0] + ".255")
-                            await hass.async_add_executor_job(_send_magic_packet, mac, bcasts)
-                            _LOGGER.debug("Sent WoL to %s (broadcasts=%s), sleeping before Art ON", mac, bcasts)
-                            await asyncio.sleep(3)
-                        except Exception as wol_err:  # noqa: BLE001
-                            _LOGGER.warning("WoL send to %s failed: %r", mac, wol_err)
-                await client.async_set_artmode(enabled)
-                if enabled and opts and opts.get("use_power_key_on_off"):
-                    # A fully powered-off Frame accepts set_artmode over the art
-                    # channel but won't physically light the panel. If it still
-                    # reports off, send the POWER key to wake it, then re-assert
-                    # Art Mode so it lands on art rather than live TV.
-                    status = await client.async_get_artmode_status()
-                    if status in ("off", "false", "0", "none"):
-                        _LOGGER.debug("ON wake: TV still off; sending POWER key to wake")
-                        try:
-                            await client.async_send_key("KEY_POWER")
-                            await asyncio.sleep(3)
-                            await client.async_set_artmode(True)
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.debug("ON wake: POWER key path unavailable")
-                if not enabled and opts and opts.get("use_power_key_on_off"):
-                    # Re-check quickly; if still on, attempt POWER key once
-                    status = await client.async_get_artmode_status()
-                    if status in ("on", "true", "1"):
-                        _LOGGER.debug("OFF fallback: sending POWER key via websocket remote")
-                        try:
-                            # Use the client's identified connection (name + token)
-                            # so this does not trigger a TV authorization popup.
-                            await client.async_send_key("KEY_POWER")
-                            await asyncio.sleep(1.5)
-                        except Exception:  # noqa: BLE001
-                            _LOGGER.debug("OFF fallback: POWER key path unavailable")
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.debug("set_artmode error on host=%s: %r", getattr(client, "host", "?"), err)
-        if not found:
-            _LOGGER.debug("set_artmode: no target client resolved; nothing executed")
-
-    async def _svc_upload_art(call: ha_service.ServiceCall) -> dict | None:
-        path = call.data.get("path")
-        tags = call.data.get("tags")
-        # Matte from call data, else the configured style/color (or 'none').
-        matte = call.data.get("matte") or resolve_matte(entry.options)
-        if not path:
-            return
-        _LOGGER.debug("Action upload_art called: path=%s matte=%s tags=%s", path, matte, tags)
-        clients = [client async for client in _resolve_clients(call)]
-        if not clients:
-            _LOGGER.debug("upload_art: no target client resolved; nothing executed")
-            return None
-
-        if is_local_media_identifier(path):
-            artwork = None
-            for client in clients:
-                if artwork := await client.async_read_local_art(path):
-                    break
-            if not artwork:
-                raise ServiceValidationError(
-                    "Artwork is not in the tracked local library"
-                )
-            image_bytes = artwork["data"]
-            source_file = artwork["path"]
-        else:
-            # Preserve the established validation that a source has a usable name.
-            _remote_filename(path)
-            # HTTP(S) is streamed with limits; a local path is sandboxed and
-            # read off-loop. Existing path/URL calls remain compatible.
-            image_bytes = await _async_read_image_bytes(hass, path)
-            source_file = path
-
-        content_ids: list[str] = []
-        for client in clients:
-            _LOGGER.debug("upload_art: invoking client on host=%s", getattr(client, "host", "?"))
-            try:
-                content_id = await client.async_upload_image(
-                    image_bytes,
-                    matte=matte,
-                    source_file=source_file,
-                    tags=tags,
-                )
-                if content_id:
-                    content_ids.append(str(content_id))
-
-                # Run automatic cleanup (defaults from const)
-                # We do this asynchronously to not block the service return too long, 
-                # though here we await it for simplicity as the user expects "done" state.
-                # If performance is an issue, we could fire a task.
-                await client.async_cleanup_storage(**_cleanup_params(entry))
-                
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("upload_art failed on host=%s: %r", getattr(client, "host", "?"), err)
-        if call.return_response:
-            return {
-                "content_id": content_ids[0] if len(content_ids) == 1 else None,
-                "content_ids": content_ids,
-            }
-        return None
-
-    # Schema for services
-    hass.services.async_register(
-        DOMAIN,
-        "set_artmode",
-        _svc_set_artmode,
-        schema=vol.Schema({vol.Required("enabled"): bool, vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}),
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "upload_art",
-        _svc_upload_art,
-        schema=vol.Schema({
-            vol.Required("path"): str,
-            vol.Optional("matte"): str,
-            vol.Optional("tags"): str,
-            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
-        }),
-        supports_response=SupportsResponse.OPTIONAL,
-    )
-
-    async def _svc_art_diagnostics(call: ha_service.ServiceCall) -> None:
-        async for client in _resolve_clients(call):
-            await client.async_art_diagnostics()
-
-    hass.services.async_register(
-        DOMAIN,
-        "art_diagnostics",
-        _svc_art_diagnostics,
-        schema=vol.Schema({vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list)}),
-    )
-
-    async def _svc_rotate_art_now(call: ha_service.ServiceCall) -> None:
-        tags = call.data.get("tags")
-        match_all = call.data.get("match_all", False)
-        source = call.data.get("source", "library")
-        path = call.data.get("path")
-        
-        _LOGGER.debug("Action rotate_art_now called: tags=%s match_all=%s source=%s path=%s", tags, match_all, source, path)
-        
-        tag_list = [t.strip() for t in tags.split(",")] if tags else None
-
-        # Get matte from configured style/color
-        matte = resolve_matte(entry.options)
-
-        async for client in _resolve_clients(call):
-            try:
-                if source == "folder":
-                    # Use provided path or default from options
-                    if not path:
-                         # Try config entry options if available
-                         # We need to find the entry for this client
-                         # This implies we lookup the entry ID.
-                         # Simplified: if path is missing, use default const
-                         path = "/media/frame/library"
-                    success = await client.async_rotate_from_folder(path, matte=matte)
-                    if success:
-                        _LOGGER.info("rotate_art_now(folder) success on host=%s", getattr(client, "host", "?"))
-                    else:
-                        _LOGGER.warning("rotate_art_now(folder) failed on host=%s", getattr(client, "host", "?"))
-                else:
-                    success = await client.async_rotate_art(tags=tag_list, match_all=match_all, matte=matte)
-                    if success:
-                        _LOGGER.info("rotate_art_now(library) success on host=%s", getattr(client, "host", "?"))
-                    else:
-                        _LOGGER.warning("rotate_art_now(library) found no matches on host=%s for tags=%s", getattr(client, "host", "?"), tags)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("rotate_art_now failed on host=%s: %r", getattr(client, "host", "?"), err)
-
-    hass.services.async_register(
-        DOMAIN,
-        "rotate_art_now",
-        _svc_rotate_art_now,
-        schema=vol.Schema({
-            vol.Optional("tags"): str,
-            vol.Optional("match_all"): bool,
-            vol.Optional("source"): vol.In(["library", "folder"]),
-            vol.Optional("path"): str,
-            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
-        }),
-    )
-
-    async def _svc_cleanup_storage(call: ha_service.ServiceCall) -> None:
-        params = _cleanup_params(entry, call.data)
-        _LOGGER.debug("Action cleanup_storage called: %s", params)
-        async for client in _resolve_clients(call):
-            try:
-                summary = await client.async_cleanup_storage(**params)
-                _LOGGER.info("cleanup_storage summary on %s: %s", getattr(client, "host", "?"), summary)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("cleanup_storage failed on host=%s: %r", getattr(client, "host", "?"), err)
-
-    hass.services.async_register(
-        DOMAIN,
-        "cleanup_storage",
-        _svc_cleanup_storage,
-        schema=vol.Schema({
-            vol.Optional("max_items"): int,
-            vol.Optional("max_age_days"): int,
-            vol.Optional("preserve_current"): bool,
-            vol.Optional("only_integration_managed"): bool,
-            vol.Optional("dry_run"): bool,
-            vol.Optional(ATTR_ENTITY_ID): vol.Any(str, list),
-        }),
-    )
-
-    # Setup slideshow timer if configured
-    await _reload_slideshow_timer(hass, entry)
-
-    # Register Services
-    async def async_service_handler(call: ServiceCall) -> None:
-        """Handle service calls."""
-        if call.service == "process_inbox":
-            from .curator import ContentCurator
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if not stored:
-                return
-            client = stored.get(DATA_CLIENT)
-            curator = ContentCurator(hass, entry, client)
-            result = await curator.async_process_inbox()
-            
-            if result.get("error"):
-                persistent_notification.async_create(
-                    hass,
-                    f"Inbox Processing Failed: {result['error']}",
-                    title="Art Director"
-                )
-            else:
-                persistent_notification.async_create(
-                    hass,
-                    f"Processed {result['count']} images from Inbox.",
-                    title="Art Director"
-                )
-            return
-
-        elif call.service == "sync_library":
-            from .curator import ContentCurator
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if not stored:
-                return
-            client = stored.get(DATA_CLIENT)
-            curator = ContentCurator(hass, entry, client)
-            result = await curator.async_sync_library()
-
-            if result.get("error"):
-                persistent_notification.async_create(
-                    hass,
-                    f"Library Sync Failed: {result['error']}",
-                    title="Art Director",
-                )
-            else:
-                duplicates = result["duplicates_removed"]
-                persistent_notification.async_create(
-                    hass,
-                    f"Library sync complete: {result['added']} added, "
-                    f"{result['stale_removed']} stale removed, "
-                    f"{duplicates} "
-                    f"{'duplicate' if duplicates == 1 else 'duplicates'} removed.",
-                    title="Art Director",
-                )
-            return
-
-        elif call.service == "purge_database":
-            stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-            if not stored:
-                return
-            client = stored.get(DATA_CLIENT)
-            if client:
-                await client.async_purge_database()
-                persistent_notification.async_create(
-                    hass,
-                    "Database purged successfully. Art history and local tags have been cleared.",
-                    title="Art Director"
-                )
-            return
-
-    hass.services.async_register(DOMAIN, "process_inbox", async_service_handler)
-    hass.services.async_register(DOMAIN, "sync_library", async_service_handler)
-    hass.services.async_register(DOMAIN, "purge_database", async_service_handler)
-
-    # New Favorites Services
-    async def async_fav_handler(call: ServiceCall) -> None:
-        stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if not stored: return
-        client = stored.get(DATA_CLIENT)
-        if not client: return
-        
-        elif call.service == "toggle_favorite":
-            content_id = call.data.get("content_id")
-            if not content_id:
-                # Default to whatever is currently displayed on the TV.
-                try:
-                    current = await client.async_get_current_art()
-                    content_id = current.get("content_id")
-                except Exception:  # noqa: BLE001
-                    content_id = None
-            if content_id:
-                new_state = await client.async_toggle_favorite(content_id)
-                _LOGGER.debug(f"Toggled favorite for {content_id}: {new_state}")
-                persistent_notification.async_create(
-                    hass,
-                    f"{'Added to' if new_state else 'Removed from'} favorites: {content_id}",
-                    title="Art Director",
-                )
-            else:
-                _LOGGER.warning("toggle_favorite: no content_id provided and no current artwork detected")
-
-        elif call.service == "delete_art":
-            content_id = call.data.get("content_id")
-            if content_id:
-                success = await client.async_delete_art(content_id)
-                if success:
-                    persistent_notification.async_create(
-                        hass,
-                        f"Deleted 1 item ({content_id}) from library.",
-                        title="Art Director"
-                    )
-                else:
-                    raise ServiceValidationError(
-                        "Artwork is not a tracked local artwork or could not be deleted"
-                    )
-                
-        elif call.service == "rotate_favorites":
-            matte = resolve_matte(entry.options)
-            await client.async_rotate_art(source="favorites", matte=matte)
-            
-    hass.services.async_register(DOMAIN, "toggle_favorite", async_fav_handler)
-    hass.services.async_register(DOMAIN, "delete_art", async_fav_handler)
-    hass.services.async_register(DOMAIN, "rotate_favorites", async_fav_handler)
-
-    # Service to change gallery page (Avoiding Jinja in frontend tap_action)
-    async def async_change_page(call: ServiceCall) -> None:
-        step = call.data.get("step", 0)
-        entity_id = "number.samsung_frame_gallery_page"
-        state = hass.states.get(entity_id)
-        
-        # Get total items to calculate max page
-        lib_sensor = hass.states.get("sensor.samsung_frame_art_library")
-        total_items = 0
-        if lib_sensor and lib_sensor.state not in ("unknown", "unavailable"):
-            try:
-                total_items = int(lib_sensor.state)
-            except ValueError:
-                pass
-        
-        page_size = 25
-        max_page = max(1, (total_items + page_size - 1) // page_size)
-
-        if state and state.state not in ("unknown", "unavailable"):
-            try:
-                current = int(float(state.state))
-                new_val = max(1, min(max_page, current + step))
-                await hass.services.async_call(
-                    "number", 
-                    "set_value", 
-                    {"entity_id": entity_id, "value": new_val},
-                    blocking=False
-                )
-            except ValueError:
-                pass
-    
-    hass.services.async_register(DOMAIN, "change_gallery_page", async_change_page)
-
-    # Register WebSocket API for Gallery Dashboard
-    from homeassistant.components import websocket_api
-    @websocket_api.websocket_command({
-        "type": f"{DOMAIN}/get_library"
-    })
-    @websocket_api.async_response
-    async def websocket_get_library(hass, connection, msg):
-        stored = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if not stored:
-             connection.send_result(msg["id"], {"items": []})
-             return
-        client = stored.get(DATA_CLIENT)
-        data = await client.async_get_library_data()
-        from .media_source import signed_thumbnail_url
-
-        for item in data.get("items", []):
-            item["thumbnail"] = signed_thumbnail_url(hass, item["id"])
-        connection.send_result(msg["id"], data)
-        
     try:
-        websocket_api.async_register_command(hass, websocket_get_library)
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await _reload_slideshow_timer(hass, entry)
     except Exception:
-        # Already registered
-        pass
-    
+        try:
+            await client.async_disconnect()
+        finally:
+            entry.runtime_data = None
+        raise
+
     # Register update listener to reload entry when options change
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
     return True
 
 
-async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def async_update_options(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> None:
     """Update options."""
     # Check if we need a full reload (e.g. if non-slideshow options changed)
     # For now, we assume most option changes are slideshow related and can be hot-reloaded.
     # If connection-critical options were in 'options', we would check them here.
     
     # Re-apply runtime client preferences
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if data and (client := data.get(DATA_CLIENT)):
-        client.set_resize_mode(entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE))
+    entry.runtime_data.client.set_resize_mode(
+        entry.options.get(CONF_RESIZE_MODE, DEFAULT_RESIZE_MODE)
+    )
 
     # Reload slideshow timer directly
     await _reload_slideshow_timer(hass, entry)
@@ -883,16 +898,16 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
     # Note: If you add options that require restart (like mac address), handle them here.
 
 
-async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _reload_slideshow_timer(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> None:
     """Start or stop the slideshow timer based on options."""
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if not data:
-        return
+    runtime = entry.runtime_data
 
     # Cancel existing timer if any
-    if "timer_unsub" in data:
-        data["timer_unsub"]()
-        data.pop("timer_unsub")
+    if runtime.timer_unsub:
+        runtime.timer_unsub()
+        runtime.timer_unsub = None
 
     interval = entry.options.get(CONF_SLIDESHOW_INTERVAL) or DEFAULT_SLIDESHOW_INTERVAL
     enabled = entry.options.get(CONF_SLIDESHOW_ENABLED, False)
@@ -905,29 +920,29 @@ async def _reload_slideshow_timer(hass: HomeAssistant, entry: ConfigEntry) -> No
         async def _tick(now):
             await _run_slideshow_job(hass, entry)
 
-        data["timer_unsub"] = async_track_time_interval(hass, _tick, timedelta(minutes=interval))
+        runtime.timer_unsub = async_track_time_interval(
+            hass, _tick, timedelta(minutes=interval)
+        )
 
 
-async def _run_slideshow_job(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def _run_slideshow_job(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> None:
     """Pick a random image from source_dir and upload it."""
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if not data:
-        return
-    client = data.get(DATA_CLIENT)
-    if not client:
-        return
+    runtime = entry.runtime_data
+    client = runtime.client
 
     # Skip this tick if the previous slideshow upload is still running. Uploading
     # over a slow Frame connection can take longer than an aggressive interval,
     # and without this guard ticks would pile up and overwhelm the TV.
-    if data.get("slideshow_running"):
+    if runtime.slideshow_running:
         _LOGGER.debug("Slideshow skipped: previous rotation still in progress")
         return
-    data["slideshow_running"] = True
+    runtime.slideshow_running = True
     try:
         await _do_slideshow_rotation(hass, entry, client)
     finally:
-        data["slideshow_running"] = False
+        runtime.slideshow_running = False
 
 
 async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client) -> None:
@@ -948,11 +963,13 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
 
     # --- NEW LOGIC: Respect Dashboard Filters ---
     # 1. Favorites Filter
-    fav_switch = hass.states.get("switch.samsung_frame_gallery_favorites_only")
+    fav_entity_id = entry_entity_id(hass, entry, "switch", "favorites_filter")
+    fav_switch = hass.states.get(fav_entity_id) if fav_entity_id else None
     fav_only = fav_switch and fav_switch.state == "on"
 
     # 2. Text/Tag Filter
-    text_filter = hass.states.get("text.samsung_frame_slideshow_filter")
+    text_entity_id = entry_entity_id(hass, entry, "text", "slideshow_filter")
+    text_filter = hass.states.get(text_entity_id) if text_entity_id else None
     tags_filter = []
     neg_filter = []
 
@@ -1009,22 +1026,23 @@ async def _do_slideshow_rotation(hass: HomeAssistant, entry: ConfigEntry, client
         _LOGGER.warning("Slideshow cleanup failed: %s", e)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(
+    hass: HomeAssistant, entry: SamsungFrameConfigEntry
+) -> bool:
     """Unload a config entry."""
     _LOGGER.info("Unloading Samsung Frame Art Director")
     
-    # Cancel timer
-    data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if data and "timer_unsub" in data:
-        data["timer_unsub"]()
-        data.pop("timer_unsub")
+    runtime = entry.runtime_data
+    if runtime.timer_unsub:
+        runtime.timer_unsub()
+        runtime.timer_unsub = None
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        # Disconnect client
-        stored = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
-        if stored and (client := stored.get(DATA_CLIENT)):
-            await client.async_disconnect()
+        try:
+            await runtime.client.async_disconnect()
+        finally:
+            entry.runtime_data = None
 
     return unload_ok
 

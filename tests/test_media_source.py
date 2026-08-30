@@ -3,10 +3,15 @@ import types
 
 import pytest
 from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.samsung_frame_art_director.const import DOMAIN
 from custom_components.samsung_frame_art_director.media_source import (
     ArtLibraryMediaSource,
     async_get_media_source,
+)
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
 )
 
 
@@ -39,6 +44,13 @@ class _FakeClient:
         }
 
 
+def _source_with_client(hass):
+    entry = MockConfigEntry(domain=DOMAIN, data={"host": "frame.local"})
+    entry.add_to_hass(hass)
+    entry.runtime_data = SamsungFrameRuntimeData(client=_FakeClient())
+    return ArtLibraryMediaSource(hass), entry
+
+
 async def test_factory_returns_source(hass):
     source = await async_get_media_source(hass)
     assert isinstance(source, ArtLibraryMediaSource)
@@ -47,8 +59,7 @@ async def test_factory_returns_source(hass):
 
 async def test_browse_lists_library_items(hass):
     assert await async_setup_component(hass, "http", {})
-    source = ArtLibraryMediaSource(hass)
-    source._client = lambda: _FakeClient()
+    source, entry = _source_with_client(hass)
 
     result = await source.async_browse_media(types.SimpleNamespace(identifier=None))
 
@@ -56,7 +67,7 @@ async def test_browse_lists_library_items(hass):
     assert len(result.children) == 3
     first = result.children[0]
     assert first.can_play is True
-    assert first.identifier == "local-aaaaaaaa"
+    assert first.identifier == f"{entry.entry_id}:local-aaaaaaaa"
     assert first.title.startswith("★")  # favorite marker
     assert first.thumbnail.startswith("/api/samsung_frame_art_director/thumbnail/")
     assert [child.media_content_type for child in result.children] == [
@@ -68,7 +79,6 @@ async def test_browse_lists_library_items(hass):
 
 async def test_browse_without_client_is_empty(hass):
     source = ArtLibraryMediaSource(hass)
-    source._client = lambda: None
     result = await source.async_browse_media(types.SimpleNamespace(identifier=None))
     assert result.children == []
 
@@ -83,10 +93,9 @@ async def test_browse_without_client_is_empty(hass):
 )
 async def test_resolve_returns_image_url(hass, media_id, content_type):
     assert await async_setup_component(hass, "http", {})
-    source = ArtLibraryMediaSource(hass)
-    source._client = lambda: _FakeClient()
+    source, entry = _source_with_client(hass)
     media = await source.async_resolve_media(
-        types.SimpleNamespace(identifier=media_id)
+        types.SimpleNamespace(identifier=f"{entry.entry_id}:{media_id}")
     )
     assert media.mime_type == content_type
     assert f"/{media_id}?" in media.url

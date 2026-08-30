@@ -15,6 +15,9 @@ set_artmode:
 rotate_art_now:
   name: Rotate Art
   description: Selects a new piece of art based on tags or source folder.
+  target:
+    entity:
+      domain: media_player
   fields:
     tags:
       name: Tags
@@ -51,6 +54,9 @@ toggle_favorite:
   description: >-
     Toggle favorite status for an artwork. If no Content ID is given, the
     currently displayed artwork on the TV is used.
+  target:
+    entity:
+      domain: media_player
   fields:
     content_id:
       name: Content ID
@@ -148,18 +154,30 @@ art_diagnostics:
 process_inbox:
   name: "Process Inbox"
   description: "Scans the inbox folder (/media/frame/inbox), analyzes images with Gemini AI, tags them, and moves them to the library folder (/media/frame/library)."
+  target:
+    entity:
+      domain: media_player
 
 sync_library:
   name: "Sync Library"
   description: "Scans the library folder for untracked images and registers them in the database with AI-generated tags. Useful after manually adding files or after a database reset."
+  target:
+    entity:
+      domain: media_player
 
 purge_database:
   name: "Purge Database"
   description: "Wipes the local SQLite database (art history, AI tags, and favorites). Does NOT delete image files from the library folder. Run Sync Library afterwards to re-register existing images."
+  target:
+    entity:
+      domain: media_player
 
 delete_art:
   name: "Delete Art"
   description: "Permanently delete a tracked local artwork file and its library records. Raw filesystem paths and untracked files are rejected."
+  target:
+    entity:
+      domain: media_player
   fields:
     content_id:
       name: Content ID
@@ -174,4 +192,23 @@ rotate_favorites:
   target:
     entity:
       domain: media_player
+
+change_gallery_page:
+  name: Change Gallery Page
+  description: Move the selected Frame's dashboard gallery page forward or backward.
+  target:
+    entity:
+      domain: media_player
+  fields:
+    step:
+      name: Step
+      description: Number of pages to move; use a negative value to go backward.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: -100
+          max: 100
+          step: 1
+          mode: box
 

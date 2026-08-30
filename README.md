@@ -114,6 +114,12 @@ For exercising **every** entity and service from one screen — using only built
 
 Domain: `samsung_frame_art_director`
 
+Every action below is resolved to a loaded Frame at call time. If exactly one
+Frame is loaded, `target` may be omitted for backward compatibility. If two or
+more Frames are loaded, provide a `media_player` under `target`; otherwise Home
+Assistant returns a clear validation error instead of choosing a TV. Renaming
+an entity is safe because the integration follows its stable registry identity.
+
 ### Core Services
 
 #### set_artmode
@@ -211,6 +217,8 @@ target:
 Scan `/media/frame/inbox`, analyze each image with Gemini, move to `/media/frame/library`, and register in the database with tags.
 ```yaml
 service: samsung_frame_art_director.process_inbox
+target:
+  entity_id: media_player.samsung_frame
 ```
 > **Note:** Requires a Gemini API key in the integration options. JPEG, PNG and
 > WebP inputs are validated before upload to the provider and limited to 20 MiB,
@@ -225,6 +233,8 @@ Full bidirectional sync of the library database:
 3. **Adds untracked images** — files in `/media/frame/library/` not yet in the DB (tagged via Gemini AI)
 ```yaml
 service: samsung_frame_art_director.sync_library
+target:
+  entity_id: media_player.samsung_frame
 ```
 > **Note:** Phases 1 & 2 (cleanup) always run, even without a Gemini key. Phase 3 (adding new images) requires the API key.
 
@@ -232,6 +242,8 @@ service: samsung_frame_art_director.sync_library
 Wipe the local SQLite database (art history, tags, favorites). **Does NOT delete image files** from `/media/frame/library/`.
 ```yaml
 service: samsung_frame_art_director.purge_database
+target:
+  entity_id: media_player.samsung_frame
 ```
 > **Tip:** After purging, run **Sync Library** to re-scan and re-tag your existing images.
 
@@ -241,6 +253,8 @@ service: samsung_frame_art_director.purge_database
 Toggle the favorite status of an artwork in the library database.
 ```yaml
 service: samsung_frame_art_director.toggle_favorite
+target:
+  entity_id: media_player.samsung_frame
 data:
   content_id: "local-<opaque-library-id>"
 ```
@@ -251,6 +265,8 @@ the opaque `local-…` ID exposed by `sensor.samsung_frame_art_library`; raw fil
 paths and untracked files are rejected.
 ```yaml
 service: samsung_frame_art_director.delete_art
+target:
+  entity_id: media_player.samsung_frame
 data:
   content_id: "local-<opaque-library-id>"
 ```

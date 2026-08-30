@@ -12,7 +12,10 @@ from unittest.mock import AsyncMock, patch
 from PIL import Image
 import pytest
 
-from custom_components.samsung_frame_art_director.api import SamsungFrameClient
+from custom_components.samsung_frame_art_director.api import (
+    DeviceUnavailableError,
+    SamsungFrameClient,
+)
 from custom_components.samsung_frame_art_director.file_access import media_identifier
 
 
@@ -1170,10 +1173,50 @@ async def test_cleanup_dry_run_excludes_manual_tv_art(hass, tmp_path):
     assert deleted_ids == []
 
 
-async def test_get_state_falls_back_gracefully_without_tv(hass):
-    # No TV reachable: the per-call path must degrade to a safe empty result.
+async def test_get_state_reports_unavailable_without_tv(hass):
+    """A failed poll must make the coordinator unavailable, not look empty."""
     client = SamsungFrameClient(hass, "127.0.0.1")
-    assert await client.async_get_state() == {"status": None, "content_id": None}
+    with pytest.raises(DeviceUnavailableError, match="State refresh"):
+        await client.async_get_state()
+    assert client.is_connected is False
+
+
+async def test_entry_databases_share_local_art_without_sharing_tv_state(
+    hass, tmp_path
+):
+    """Local metadata is shared while Samsung content IDs stay per Frame."""
+    shared_path = tmp_path / "shared-local.db"
+    first = SamsungFrameClient(hass, "frame-a.local")
+    second = SamsungFrameClient(hass, "frame-b.local")
+    first.set_db_path(str(tmp_path / "frame-a.db"))
+    second.set_db_path(str(tmp_path / "frame-b.db"))
+    first.set_local_db_path(str(shared_path))
+    second.set_local_db_path(str(shared_path))
+    await first.async_initialize_database()
+    await second.async_initialize_database()
+
+    image_path = Path(hass.config.path("www", "shared.png"))
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"shared")
+    await first.async_add_local_art(
+        str(image_path), "shared", "shared", 1, 1, 6
+    )
+    await first.async_track_art("MY-SAME", source_file=str(image_path))
+    await second.async_track_art("MY-SAME", source_file=str(image_path))
+
+    first_items = (await first.async_get_library_data())["items"]
+    second_items = (await second.async_get_library_data())["items"]
+    assert [item["id"] for item in first_items] == [
+        item["id"] for item in second_items
+    ]
+    with sqlite3.connect(tmp_path / "frame-a.db") as connection:
+        assert connection.execute(
+            "SELECT content_id FROM art_library"
+        ).fetchall() == [("MY-SAME",)]
+    with sqlite3.connect(tmp_path / "frame-b.db") as connection:
+        assert connection.execute(
+            "SELECT content_id FROM art_library"
+        ).fetchall() == [("MY-SAME",)]
 
 
 async def test_get_state_retains_art_token_and_closes_art_socket(hass):

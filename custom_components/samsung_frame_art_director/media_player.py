@@ -15,14 +15,21 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_DUID, DATA_CLIENT, DOMAIN, resolve_matte
+from .const import CONF_DUID, DOMAIN, resolve_matte
+from .runtime import SamsungFrameConfigEntry
+from .media_source import split_media_identifier
+from .targets import loaded_frame_target
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities) -> None:
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: SamsungFrameConfigEntry,
+    async_add_entities,
+) -> None:
     """Set up the Samsung Frame media player from a config entry."""
-    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    client = entry.runtime_data.client
 
     async def async_update_data():
         """Fetch art-mode status + current artwork over a single connection."""
@@ -36,6 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         update_method=async_update_data,
         update_interval=dt_util.dt.timedelta(seconds=30),
     )
+    entry.runtime_data.coordinator = coordinator
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -64,7 +72,7 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         super().__init__(coordinator)
         self.hass = hass
         self._entry = entry
-        self._client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+        self._client = entry.runtime_data.client
         self._attr_unique_id = entry.data.get("duid") or entry.entry_id
         # Use duid for device identifiers to ensure all platforms group together
         device_id = entry.data.get(CONF_DUID) or entry.entry_id
@@ -126,8 +134,18 @@ class SamsungFrameMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         from urllib.parse import unquote
 
-        media_id = unquote(sourced.identifier)
-        artwork = await self._client.async_read_local_art(media_id)
+        source_entry_id, media_id = split_media_identifier(
+            unquote(sourced.identifier)
+        )
+        source_client = self._client
+        if source_entry_id:
+            source_target = loaded_frame_target(self.hass, source_entry_id)
+            if source_target is None:
+                raise HomeAssistantError(
+                    "The artwork's source Samsung Frame is not loaded"
+                )
+            source_client = source_target.runtime.client
+        artwork = await source_client.async_read_local_art(media_id)
         if not artwork:
             raise HomeAssistantError("Artwork is not in the tracked local library")
 

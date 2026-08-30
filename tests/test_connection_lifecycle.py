@@ -8,12 +8,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    ServiceValidationError,
+)
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director import (
     _enable_verbose_logging,
+    async_setup,
     async_setup_entry,
+    async_unload_entry,
 )
 from custom_components.samsung_frame_art_director.api import (
     AuthenticationRejectedError,
@@ -25,6 +31,42 @@ from custom_components.samsung_frame_art_director.const import DOMAIN
 
 def _fake_module(tv_type):
     return SimpleNamespace(SamsungTVWS=tv_type)
+
+
+async def test_domain_setup_registers_shared_interfaces(hass):
+    """The domain owns shared HTTP and action interfaces."""
+    hass.http = MagicMock()
+
+    assert await async_setup(hass, {})
+
+    hass.http.register_view.assert_called_once()
+    for action in (
+        "set_artmode",
+        "upload_art",
+        "art_diagnostics",
+        "rotate_art_now",
+        "cleanup_storage",
+        "process_inbox",
+        "sync_library",
+        "purge_database",
+        "toggle_favorite",
+        "delete_art",
+        "rotate_favorites",
+        "change_gallery_page",
+    ):
+        assert hass.services.has_service(DOMAIN, action), action
+
+
+async def test_domain_setup_registers_websocket_interface(hass):
+    """The gallery WebSocket command is owned by domain setup."""
+    hass.http = MagicMock()
+
+    with patch(
+        "homeassistant.components.websocket_api.async_register_command"
+    ) as register_command:
+        assert await async_setup(hass, {})
+
+    register_command.assert_called_once()
 
 
 async def test_startup_reuses_saved_token_without_token_file_pairing(
@@ -552,6 +594,125 @@ async def test_setup_stops_before_tv_connection_when_database_init_fails(hass):
         await async_setup_entry(hass, entry)
 
     client.async_connect_and_pair.assert_not_awaited()
+
+
+async def test_platform_setup_failure_clears_partial_runtime(hass):
+    """A partially forwarded entry must never remain action-addressable."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock()
+    client.async_connect_and_pair = AsyncMock()
+    client.async_disconnect = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            AsyncMock(side_effect=RuntimeError("platform setup failed")),
+        ),
+        pytest.raises(RuntimeError, match="platform setup failed"),
+    ):
+        await async_setup_entry(hass, entry)
+
+    assert getattr(entry, "runtime_data", None) is None
+    client.async_disconnect.assert_awaited_once_with()
+
+
+async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
+    """A loaded entry retains and disconnects its own Frame client."""
+    hass.http = MagicMock()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock()
+    client.async_connect_and_pair = AsyncMock()
+    client.async_disconnect = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+    ):
+        assert await async_setup_entry(hass, entry)
+        assert entry.runtime_data.client is client
+        assert entry.entry_id not in hass.data.get(DOMAIN, {})
+        assert await async_unload_entry(hass, entry)
+
+    client.async_disconnect.assert_awaited_once_with()
+
+
+async def test_action_rejects_an_unknown_target(hass):
+    """An action never reports success for an unresolved Frame entity."""
+    hass.http = MagicMock()
+    assert await async_setup(hass, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "frame.local", "port": 8002, "token": "SAVED"},
+    )
+    entry.add_to_hass(hass)
+    client = MagicMock()
+    client.host = "frame.local"
+    client.token = "SAVED"
+    client.async_initialize_database = AsyncMock()
+    client.async_connect_and_pair = AsyncMock()
+    client.async_set_artmode = AsyncMock()
+
+    with (
+        patch(
+            "custom_components.samsung_frame_art_director.api.SamsungFrameClient",
+            return_value=client,
+        ),
+        patch.object(hass.config_entries, "async_forward_entry_setups", AsyncMock()),
+        patch(
+            "custom_components.samsung_frame_art_director._reload_slideshow_timer",
+            AsyncMock(),
+        ),
+        patch("homeassistant.components.websocket_api.async_register_command"),
+    ):
+        assert await async_setup_entry(hass, entry)
+
+    with pytest.raises(
+        ServiceValidationError,
+        match="not a loaded Samsung Frame Art Director entity",
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_artmode",
+            {
+                "enabled": True,
+                "entity_id": "media_player.unknown_frame",
+            },
+            blocking=True,
+        )
+
+    client.async_set_artmode.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

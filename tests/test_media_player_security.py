@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import quote
 
 import pytest
@@ -11,19 +11,25 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.samsung_frame_art_director.api import SamsungFrameClient
-from custom_components.samsung_frame_art_director.const import DATA_CLIENT, DOMAIN
+from custom_components.samsung_frame_art_director.const import DOMAIN
 from custom_components.samsung_frame_art_director.media_player import (
     SamsungFrameMediaPlayer,
+)
+from custom_components.samsung_frame_art_director.runtime import (
+    SamsungFrameRuntimeData,
 )
 
 
 def _media_player(hass, entry, client):
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {DATA_CLIENT: client}
     coordinator = DataUpdateCoordinator(
         hass,
         logging.getLogger(__name__),
         name="test-frame",
         config_entry=entry,
+    )
+    entry.runtime_data = SamsungFrameRuntimeData(
+        client=client,
+        coordinator=coordinator,
     )
     return SamsungFrameMediaPlayer(hass, entry, coordinator)
 
@@ -44,6 +50,52 @@ async def test_media_player_rejects_a_path_bearing_media_identifier(hass, tmp_pa
         await entity.async_play_media("image", media_id)
 
     client.async_upload_image.assert_not_awaited()
+
+
+async def test_media_player_reads_namespaced_artwork_from_source_runtime(hass):
+    """A namespaced Media Source item cannot resolve through another Frame DB."""
+    media_id = "local-aaaaaaaa"
+    source_client = MagicMock()
+    source_client.async_read_local_art = AsyncMock(
+        return_value={
+            "data": b"source-image",
+            "path": "/media/frame/library/source.png",
+        }
+    )
+    destination_client = MagicMock()
+    destination_client.async_read_local_art = AsyncMock(
+        return_value={
+            "data": b"wrong-image",
+            "path": "/media/frame/library/wrong.png",
+        }
+    )
+    destination_client.async_upload_image = AsyncMock(return_value="MY-UPLOADED")
+    source_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "source.local"},
+    )
+    destination_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "destination.local"},
+    )
+    source_entry.add_to_hass(hass)
+    destination_entry.add_to_hass(hass)
+    source_entry.runtime_data = SamsungFrameRuntimeData(client=source_client)
+    entity = _media_player(hass, destination_entry, destination_client)
+    identifier = quote(f"{source_entry.entry_id}:{media_id}", safe="")
+
+    await entity.async_play_media(
+        "image",
+        f"media-source://{DOMAIN}/{identifier}",
+    )
+
+    source_client.async_read_local_art.assert_awaited_once_with(media_id)
+    destination_client.async_read_local_art.assert_not_awaited()
+    destination_client.async_upload_image.assert_awaited_once_with(
+        b"source-image",
+        matte="none",
+        source_file="/media/frame/library/source.png",
+    )
 
 
 @pytest.mark.parametrize("extension", ["jpg", "png", "webp"])

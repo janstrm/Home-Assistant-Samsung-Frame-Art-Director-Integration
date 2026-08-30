@@ -12,22 +12,22 @@ from .const import (
     CONF_DUID,
     CONF_ENABLE_ART_SETTINGS,
     CONF_SLIDESHOW_ENABLED,
-    DATA_CLIENT,
     DEFAULT_ENABLE_ART_SETTINGS,
     DOMAIN,
 )
+from .runtime import SamsungFrameConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: SamsungFrameConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the switch platform."""
     _LOGGER.debug("Setting up switch platform for entry: %s", entry.entry_id)
-    client = hass.data[DOMAIN][entry.entry_id][DATA_CLIENT]
+    client = entry.runtime_data.client
     entities = [
         SamsungFrameSlideshowSwitch(entry),
         SamsungFrameFavoritesSwitch(entry),
