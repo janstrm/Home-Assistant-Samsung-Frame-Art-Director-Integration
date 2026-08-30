@@ -4,7 +4,11 @@ DOMAIN = "samsung_frame_art_director"
 
 # Integration-specific keys
 CONF_DUID = "duid"
+CONF_IP_CONTROL_PORT = "ip_control_port"
+CONF_IP_CONTROL_TOKEN = "ip_control_token"
 DATA_CLIENT = "client"
+DATA_REAUTH_CONNECTION = "reauth_connection"
+REAUTH_CONNECTION_IP_CONTROL = "ip_control"
 
 # Pairing / methods / results aligned with official approach
 METHOD_WEBSOCKET = "websocket"

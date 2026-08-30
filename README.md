@@ -58,7 +58,13 @@ If your TV is on, it is usually **auto-discovered** — look for "Samsung Frame 
 ### Initial Setup
 - You will be asked for the TV's IP address and a Name (pre-filled when discovered).
 - Follow the prompt on your TV to "Allow" the connection.
-- If the TV's IP later changes, use **Reconfigure** on the integration to update it (no need to delete and re-add); discovery also updates it automatically.
+- If the TV's IP later changes, use **Reconfigure → TV Connection** on the integration to update it (no need to delete and re-add); discovery also updates it automatically.
+
+### Optional IP Control Pairing
+
+IP Control is Samsung's separate local connection for true panel power commands. To pair it, open the integration's **Reconfigure → IP Control** flow. First enable **IP Remote** in the TV settings, wake the TV, and switch to normal TV viewing rather than Art Mode. Click **Submit** only when you are ready to approve the prompt on the TV.
+
+The IP Control token and selected port are stored only in that TV's Home Assistant config entry, separately from the normal WebSocket token. Pairing is never started by a restart, polling, or an action. Because the TV uses a self-signed certificate, use this feature only on a trusted local network. Support varies by model and firmware.
 
 ### Options Flow (Configure)
 **Nothing here is required** — the integration works out of the box after pairing. Click **Configure** to adjust optional settings, grouped into collapsible sections:

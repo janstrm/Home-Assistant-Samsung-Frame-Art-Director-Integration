@@ -26,11 +26,23 @@
       },
       "reconfigure": {
         "title": "Reconfigure {device}",
+        "description": "Choose which connection to configure.",
+        "menu_options": {
+          "reconfigure_connection": "TV Connection",
+          "ip_control": "IP Control"
+        }
+      },
+      "reconfigure_connection": {
+        "title": "TV Connection for {device}",
         "description": "Update the TV's IP address (e.g. after a DHCP change). It must be the same TV.",
         "data": {
           "host": "Host",
           "name": "Name"
         }
+      },
+      "ip_control": {
+        "title": "Pair IP Control for {device}",
+        "description": "On the TV, enable IP Remote and switch to normal TV viewing (not Art Mode). Then click Submit and approve the access prompt on {device}. The token is stored only for this TV. Use IP Control only on a trusted local network."
       },
       "encrypted_pairing": {
         "description": "Please enter the PIN displayed on {device}.",
@@ -46,7 +58,10 @@
       "auth_missing": "Authorization is required. Accept the popup on your TV, then submit again.",
       "cannot_connect": "Cannot connect to the TV. Verify the IP, network, and that the TV is awake.",
       "invalid_pin": "PIN is invalid, please try again.",
-      "not_supported": "This Samsung device is currently not supported."
+      "not_supported": "This Samsung device is currently not supported.",
+      "ip_control_rejected": "The TV rejected IP Control pairing. Return to Reconfigure > IP Control and approve the prompt to pair again.",
+      "ip_control_unavailable": "IP Control is unavailable in the TV's current state. Enable IP Remote, leave Art Mode, and try again.",
+      "ip_control_pairing_failed": "The TV returned an unexpected IP Control response. No token was saved."
     },
     "abort": {
       "already_in_progress": "A configuration flow is already in progress.",
@@ -54,7 +69,8 @@
       "reauth_successful": "Re-authorization was successful.",
       "reconfigure_successful": "The TV address was updated successfully.",
       "cannot_connect": "Cannot connect to the TV. Verify it is on and reachable on the network.",
-      "wrong_device": "That address belongs to a different TV than the one configured here."
+      "wrong_device": "That address belongs to a different TV than the one configured here.",
+      "ip_control_pairing_successful": "IP Control pairing was successful for this TV."
     }
   },
   "options": {
