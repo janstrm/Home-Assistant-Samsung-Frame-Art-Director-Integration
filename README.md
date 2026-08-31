@@ -479,7 +479,8 @@ trigger:
 | Problem | Solution |
 |---|---|
 | Art uploads stall or fail | Ensure the TV is paired. Try turning on manually and watching for permission popups. |
-| The TV repeatedly asks to allow Home Assistant | Update the integration, restart HA, and confirm the TV's **Device Connection Manager → Access Notification** setting is **First Time Only**. A normal restart reuses the saved token and must not show a prompt; a single new prompt is expected only when HA starts reauthentication for an explicitly rejected/expired token. |
+| The TV repeatedly asks to allow Home Assistant | Update the integration, restart HA, and confirm the TV's **Device Connection Manager → Access Notification** setting is **First Time Only**. A normal restart reuses the saved token and must not show a prompt; a single new prompt is expected only when HA starts reauthentication, which happens when the saved token is rejected or expired, or when the TV leaves the handshake hanging on its approval dialog. |
+| The integration stays unavailable and never asks for anything | The TV is most likely showing **"Allow this device?"** and waiting. Home Assistant starts reauthentication for this, so answer the repair under **Settings → Devices & services**; approve the prompt on the panel while the integration is connecting. If no prompt appears, remove Home Assistant from the TV's **Device Connection Manager → Device List** and reload the entry to force a fresh one. |
 | "No … API key" warning | Select a provider and add its API key under **Settings → Devices & services → Integrations → Samsung Frame Art Director → Configure**. |
 | "Local file missing" warnings during rotation | Run **Purge Database** then **Sync Library** to clean up stale entries. |
 | Gallery shows no images | Ensure images exist in `/media/frame/library/` and run **Sync Library**. |

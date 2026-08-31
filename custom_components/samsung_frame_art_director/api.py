@@ -90,19 +90,30 @@ class DeviceUnavailableError(ConnectionError):
     """Raised when startup validation cannot reach a usable TV endpoint."""
 
 
-def _is_timeout(err: Exception | None) -> bool:
+# Suffixes of third-party timeout types. ``samsungtvws`` raises
+# ``WebSocketTimeoutException``, which is not a :class:`TimeoutError` subclass,
+# and the library's exception types are not imported here — so they are matched
+# structurally, as the ``UnauthorizedError`` check in
+# :meth:`SamsungFrameClient.async_connect_and_pair` already is. Suffixes rather
+# than a substring, so an unrelated name that merely contains "timeout" cannot
+# be mistaken for one.
+_TIMEOUT_TYPE_SUFFIXES = ("TimeoutError", "TimeoutException")
+
+
+def _is_timeout(err: BaseException | None) -> bool:
     """Whether ``err`` represents an operation that hung rather than failed.
 
-    ``samsungtvws`` raises ``WebSocketTimeoutException``, which is not a
-    :class:`TimeoutError` subclass, and the library's exception types are not
-    imported here — so match structurally, exactly as the ``UnauthorizedError``
-    check in :meth:`SamsungFrameClient.async_connect_and_pair` already does.
+    The distinction matters because a hang against a reachable TV is the
+    on-screen approval dialog, while an error is a genuine failure. Checks the
+    whole MRO so a library's own subclass of its timeout type still matches.
     """
     if err is None:
         return False
     if isinstance(err, TimeoutError):
         return True
-    return "timeout" in type(err).__name__.lower()
+    return any(
+        base.__name__.endswith(_TIMEOUT_TYPE_SUFFIXES) for base in type(err).__mro__
+    )
 
 
 class PairingTimeoutError(AuthenticationRejectedError):
