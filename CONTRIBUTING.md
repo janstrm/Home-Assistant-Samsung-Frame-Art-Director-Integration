@@ -50,6 +50,9 @@ and authenticated views) over tests coupled to private helpers.
   flow, migration, helpers, DB, image processing).
 - Don't touch the connection/resilience layer in `api.py` without a clear reason
   and, ideally, real‑TV validation.
+- Keep commit authorship tied to the human contributor. Do not add AI-tool
+  `Co-Authored-By` trailers, AI session URLs, or similar generated-tool metadata
+  to commit messages. Maintainers may remove such metadata when squashing a PR.
 
 ## Reporting bugs / requesting features
 Use the issue templates. For bugs, include your TV model/year and HA version, and
