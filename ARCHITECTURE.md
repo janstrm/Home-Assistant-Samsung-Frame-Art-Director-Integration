@@ -140,7 +140,15 @@ method is `async`, and any blocking `samsungtvws` call is run via
 Responsibilities:
 
 - **Startup authentication** — `async_connect_and_pair()` (saved-token
-  validation, token rotation capture, DUID).
+  validation, token rotation capture, DUID). It validates the persisted token
+  without opening a pairing flow, and classifies failure rather than assuming
+  unavailability. An explicit rejection raises `AuthenticationRejectedError`.
+  A handshake that *hung* on a TV still answering its tokenless REST endpoint
+  raises `PairingTimeoutError` (a subclass, so both reach Home Assistant as
+  `ConfigEntryAuthFailed` and start reauth) — that combination is the on-screen
+  approval dialog, which no amount of retrying can clear. Everything else,
+  including a handshake that failed after the token was accepted, stays
+  `DeviceUnavailableError` → `ConfigEntryNotReady`.
 - **Art Mode** — `async_set_artmode()`, `async_get_artmode_status()`.
 - **Upload** — `async_preprocess_image()` (Pillow resize/crop), `async_upload_image()`.
 - **Rotation** — `async_rotate_art()` (DB-driven, tag/favorite filtered),

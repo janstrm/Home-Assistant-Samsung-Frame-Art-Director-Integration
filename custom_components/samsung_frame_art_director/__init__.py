@@ -858,9 +858,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: SamsungFrameConfigEntry)
     except Exception as err:  # noqa: BLE001
         raise ConfigEntryNotReady(f"Library database initialization failed: {err}") from err
     try:
-        # Validate the saved token without opening a new pairing flow. Only an
-        # explicit authentication failure starts reauth; reachability and
-        # missing device information remain retryable setup failures.
+        # Validate the saved token without opening a new pairing flow. An
+        # explicit rejection, and a handshake that never completes against a
+        # TV that is demonstrably reachable, both start reauth — the latter is
+        # the on-screen approval dialog, which only the user can clear.
+        # Genuine unreachability and missing device information remain
+        # retryable setup failures.
         await client.async_connect_and_pair()
     except AuthenticationRejectedError as err:
         _LOGGER.debug("Client pairing failed (auth): %r", err, exc_info=True)

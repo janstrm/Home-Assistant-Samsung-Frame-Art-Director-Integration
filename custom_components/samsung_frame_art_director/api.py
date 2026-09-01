@@ -37,6 +37,9 @@ except Exception:
 _LOGGER = logging.getLogger(__name__)
 
 CONNECTION_ATTEMPT_TIMEOUT_SECONDS = 10
+# The tokenless REST endpoint only has to answer, so it gets a shorter
+# budget than a full authenticated websocket handshake.
+REACHABILITY_PROBE_TIMEOUT_SECONDS = 5
 ART_OPERATION_TIMEOUT_SECONDS = 15
 ART_LIBRARY_SCHEMA_VERSION = 1
 
@@ -85,6 +88,32 @@ class AuthenticationRejectedError(Exception):
 
 class DeviceUnavailableError(ConnectionError):
     """Raised when startup validation cannot reach a usable TV endpoint."""
+
+
+# Suffixes of third-party timeout types. ``samsungtvws`` raises
+# ``WebSocketTimeoutException``, which is not a :class:`TimeoutError` subclass,
+# and the library's exception types are not imported here — so they are matched
+# structurally, as the ``UnauthorizedError`` check in
+# :meth:`SamsungFrameClient.async_connect_and_pair` already is. Suffixes rather
+# than a substring, so an unrelated name that merely contains "timeout" cannot
+# be mistaken for one.
+_TIMEOUT_TYPE_SUFFIXES = ("TimeoutError", "TimeoutException")
+
+
+def _is_timeout(err: BaseException | None) -> bool:
+    """Whether ``err`` represents an operation that hung rather than failed.
+
+    The distinction matters because a hang against a reachable TV is the
+    on-screen approval dialog, while an error is a genuine failure. Checks the
+    whole MRO so a library's own subclass of its timeout type still matches.
+    """
+    if err is None:
+        return False
+    if isinstance(err, TimeoutError):
+        return True
+    return any(
+        base.__name__.endswith(_TIMEOUT_TYPE_SUFFIXES) for base in type(err).__mro__
+    )
 
 
 class PairingTimeoutError(AuthenticationRejectedError):
@@ -1144,7 +1173,13 @@ class SamsungFrameClient:
                 f"No persisted authentication token for {self._host}"
             )
 
+        # Whether the *authenticated* channel ever opened. It separates "the
+        # TV never accepted us" from a later failure on an authenticated
+        # connection, which is not a pairing problem and must not start reauth.
+        remote_channel_opened = False
+
         def _validate(port: int) -> dict:
+            nonlocal remote_channel_opened
             tv = None
             art = None
             try:
@@ -1156,6 +1191,7 @@ class SamsungFrameClient:
                 # distinct, unauthenticated channel and must not receive this
                 # token on newer Frame firmware.
                 tv.open()
+                remote_channel_opened = True
                 art = self._make_art(tv)
                 art.open()
                 info = tv.rest_device_info()
@@ -1211,9 +1247,55 @@ class SamsungFrameClient:
             )
             return
 
+        # A remote-control handshake that HUNG against a TV that is answering
+        # its tokenless REST endpoint is the on-screen "Allow this device?"
+        # dialog waiting for someone in front of the panel. The TV is powered,
+        # on the network and reachable, so retrying forever never fixes it and
+        # never tells anybody why; only reauthentication surfaces it.
+        #
+        # Deliberately narrow: a handshake that FAILED rather than hung is
+        # left as unavailable, because a reachable REST endpoint alone is not
+        # evidence that the token is the problem.
+        if (
+            not remote_channel_opened
+            and _is_timeout(last_error)
+            and await self._async_device_is_reachable()
+        ):
+            raise PairingTimeoutError(
+                f"{self._host} is reachable but did not accept the saved "
+                f"authentication; approve this device on the TV"
+            ) from last_error
+
         raise DeviceUnavailableError(
             f"Unable to validate saved authentication for {self._host}"
         ) from last_error
+
+    async def _async_device_is_reachable(self) -> bool:
+        """Return whether the TV answers its tokenless REST endpoint.
+
+        Pairing is irrelevant to this endpoint, so it is the one signal that
+        tells "the panel is off or off-network" (retry, stay quiet) apart from
+        "the panel is up but would not complete the authenticated handshake"
+        (ask the user to approve us). Any failure here is deliberately treated
+        as unreachable so this can only ever downgrade to today's behaviour.
+        """
+
+        def _probe() -> bool:
+            tv = self._make_tv(timeout=REACHABILITY_PROBE_TIMEOUT_SECONDS)
+            info = tv.rest_device_info()
+            return isinstance(info, dict) and bool(info.get("device"))
+
+        try:
+            return bool(
+                await self._async_run_blocking_contained(
+                    _probe, REACHABILITY_PROBE_TIMEOUT_SECONDS
+                )
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Client: reachability probe failed host=%s: %r", self._host, err
+            )
+            return False
 
     async def async_disconnect(self) -> None:
         if self._connected:

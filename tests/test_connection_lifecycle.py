@@ -22,8 +22,10 @@ from custom_components.samsung_frame_art_director import (
     async_unload_entry,
 )
 from custom_components.samsung_frame_art_director.api import (
+    REACHABILITY_PROBE_TIMEOUT_SECONDS,
     AuthenticationRejectedError,
     DeviceUnavailableError,
+    PairingTimeoutError,
     SamsungFrameClient,
 )
 from custom_components.samsung_frame_art_director.const import DOMAIN
@@ -208,6 +210,278 @@ async def test_offline_tv_is_a_transient_setup_failure(hass):
     class FakeTV:
         def __init__(self, *_args, **_kwargs):
             raise OSError("host unreachable")
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+
+
+async def test_stalled_handshake_on_a_reachable_tv_starts_reauth(hass):
+    """The on-screen approval dialog must surface as reauthentication.
+
+    A Frame whose saved token has lapsed does not answer with an explicit
+    rejection: it shows "Allow this device?" on the panel and leaves the
+    remote-control handshake hanging until it times out. The TV is powered,
+    on the network, and answering its tokenless REST endpoint the whole time,
+    so classifying that as unavailable leaves the entry retrying forever
+    while the one person who can fix it is never told.
+    """
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            raise TimeoutError("no approval before the handshake timed out")
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(PairingTimeoutError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+
+
+async def test_library_websocket_timeout_is_recognised_as_a_hang(hass):
+    """samsungtvws' timeout is not a TimeoutError subclass — match it anyway.
+
+    The real Frame surfaces the stalled approval dialog as the library's own
+    ``WebSocketTimeoutException``. If only :class:`TimeoutError` counted, the
+    fix would pass its unit tests and still do nothing on real hardware.
+    """
+
+    class WebSocketTimeoutException(Exception):
+        pass
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            raise WebSocketTimeoutException("timed out waiting for approval")
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(PairingTimeoutError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+    assert client.duid is None
+
+
+async def test_reachability_probe_is_bounded_to_its_exact_timeout(hass):
+    """The probe must carry an explicit, exact bound — not merely a non-null one.
+
+    It runs on the failure path of every retry against a TV that may be off,
+    so an unbounded (or merely "some") timeout would stack up behind the
+    handshake budget it is meant to follow.
+    """
+    assert REACHABILITY_PROBE_TIMEOUT_SECONDS == 5
+
+    constructor_timeouts = []
+
+    class FakeTV:
+        def __init__(self, *_args, **kwargs):
+            constructor_timeouts.append(kwargs.get("timeout"))
+
+        def open(self):
+            raise TimeoutError("no approval before the handshake timed out")
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(PairingTimeoutError),
+    ):
+        await client.async_connect_and_pair()
+
+    # One handshake attempt on the pinned port, then exactly one probe.
+    assert constructor_timeouts == [10, REACHABILITY_PROBE_TIMEOUT_SECONDS]
+
+
+async def test_reachability_probe_is_skipped_once_the_token_was_accepted(hass):
+    """No probe after an authenticated channel opened — the token is not at fault."""
+    rest_calls = []
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            return None
+
+        def art(self):
+            raise TimeoutError("art channel stalled after authentication")
+
+        def rest_device_info(self):
+            rest_calls.append(1)
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert rest_calls == []
+
+
+async def test_reachability_probe_is_skipped_when_the_handshake_did_not_hang(hass):
+    """A handshake that errored never reaches the probe — no wasted round trip."""
+    rest_calls = []
+
+    class ConnectionFailure(Exception):
+        pass
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            raise ConnectionFailure("remote channel failed")
+
+        def rest_device_info(self):
+            rest_calls.append(1)
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert rest_calls == []
+
+
+async def test_a_name_merely_containing_timeout_is_not_a_hang(hass):
+    """Suffix matching, not substring — an unrelated name must not reauth."""
+
+    class TimeoutBudgetExceeded(Exception):
+        pass
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            raise TimeoutBudgetExceeded("not a transport timeout")
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+
+async def test_stalled_handshake_reauth_reaches_home_assistant(hass):
+    """PairingTimeoutError must arrive at HA as ConfigEntryAuthFailed."""
+    assert issubclass(PairingTimeoutError, AuthenticationRejectedError)
+
+
+async def test_stalled_handshake_on_an_unreachable_tv_stays_transient(hass):
+    """A silent TV is still just unavailable — never a reauthentication prompt.
+
+    Same stalled handshake as above, but the REST endpoint is dark too, so
+    nothing distinguishes this from a panel in deep standby. Asking the user
+    to approve a TV that is switched off would be noise every single night.
+    """
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            raise TimeoutError("no approval before the handshake timed out")
+
+        def rest_device_info(self):
+            raise OSError("host unreachable")
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+
+
+async def test_authenticated_channel_failure_is_not_a_pairing_problem(hass):
+    """A failure AFTER the token was accepted must not start reauth.
+
+    The remote-control channel opened, so the saved token is fine; whatever
+    went wrong afterwards is a device or firmware problem. Re-approving on
+    the TV would not fix it, so this stays a retryable setup failure even
+    though the TV answers its REST endpoint.
+    """
+
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            return None
+
+        def art(self):
+            raise TimeoutError("art channel stalled after authentication")
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:frame"}}
+
+        def close(self):
+            return None
 
     client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
 
