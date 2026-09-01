@@ -7,3 +7,4 @@
 - [ ] hassfest + HACS CI green
 - [ ] Bumped `manifest.json` version (for user-facing changes)
 - [ ] Tested against a real Frame TV (if it touches the TV API)
+- [ ] Commit messages contain no AI-tool co-author trailers or AI session links
