@@ -204,6 +204,113 @@ async def test_startup_authenticates_remote_but_opens_art_without_remote_token(h
     assert events == ["remote-open", ("art-open", None, None)]
 
 
+async def test_startup_retries_timed_out_art_channel_on_alternate_port(hass):
+    """A model-specific Art port timeout must not keep setup retrying forever."""
+    art_ports = []
+
+    class ConnectionFailure(Exception):
+        pass
+
+    class FakeArt:
+        token = None
+        token_file = None
+
+        def __init__(self, port):
+            self.port = port
+
+        def open(self):
+            art_ports.append(self.port)
+            if self.port == 8002:
+                raise ConnectionFailure({"event": "ms.channel.timeOut"})
+            return object()
+
+        def get_brightness(self):
+            self.open()
+            return "5"
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **kwargs):
+            self.port = kwargs["port"]
+
+        def open(self):
+            return object()
+
+        def art(self):
+            return FakeArt(self.port)
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:newer-frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        await client.async_connect_and_pair()
+        assert await client.async_get_brightness() == 5
+
+    assert client.is_connected is True
+    assert client.duid == "uuid:newer-frame"
+    assert art_ports == [8002, 8001, 8001]
+
+
+async def test_startup_does_not_retry_other_art_failures_on_alternate_port(hass):
+    """Only Samsung's explicit channel-timeout response permits port fallback."""
+    art_ports = []
+
+    class ConnectionFailure(Exception):
+        pass
+
+    class FakeArt:
+        token = None
+        token_file = None
+
+        def __init__(self, port):
+            self.port = port
+
+        def open(self):
+            art_ports.append(self.port)
+            raise ConnectionFailure({"event": "ms.channel.clientDisconnect"})
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **kwargs):
+            self.port = kwargs["port"]
+
+        def open(self):
+            return object()
+
+        def art(self):
+            return FakeArt(self.port)
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:newer-frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        pytest.raises(DeviceUnavailableError),
+    ):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is False
+    assert art_ports == [8002]
+
+
 async def test_offline_tv_is_a_transient_setup_failure(hass):
     """An unreachable TV must not appear connected or trigger reauthentication."""
 

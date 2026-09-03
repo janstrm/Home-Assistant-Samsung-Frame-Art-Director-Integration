@@ -148,7 +148,11 @@ Responsibilities:
   `ConfigEntryAuthFailed` and start reauth) — that combination is the on-screen
   approval dialog, which no amount of retrying can clear. Everything else,
   including a handshake that failed after the token was accepted, stays
-  `DeviceUnavailableError` → `ConfigEntryNotReady`.
+  `DeviceUnavailableError` → `ConfigEntryNotReady`. The Art child normally
+  uses the remote channel's port; if Samsung explicitly answers its tokenless
+  handshake with `ms.channel.timeOut`, startup tries the alternate 8001/8002
+  Art port and remembers it for later operations without moving the
+  authenticated remote channel.
 - **Art Mode** — `async_set_artmode()`, `async_get_artmode_status()`.
 - **Upload** — `async_preprocess_image()` (Pillow resize/crop), `async_upload_image()`.
 - **Rotation** — `async_rotate_art()` (DB-driven, tag/favorite filtered),
@@ -401,8 +405,9 @@ The `upload_art` service obtains the source bytes, then calls
    concurrent calls for one source cannot both create a copy.
 3. `async_preprocess_image()` — Pillow: scale-to-fill + center-crop to
    **3840×2160**, JPEG q85.
-4. Under `_art_lock`, use the synchronous Art API on port 8002 in a worker
-   thread to upload, select, and apply the landscape matte. On samsungtvws
+4. Under `_art_lock`, use the synchronous, tokenless Art API on the working
+   8001/8002 port in a worker thread to upload, select, and apply the landscape
+   matte. On samsungtvws
    versions whose `select_image()` has no `matte` argument, fall back to
    `change_matte(content_id, matte_id=...)` without overwriting the optional
    portrait matte; LS03D/LS03F reject that extra parameter with error `-7`.
@@ -498,8 +503,10 @@ Patterns you will see repeated, and why they exist:
   compatibility fallback. Runtime Art API calls use short-lived tokenless sync
   Art clients in worker threads because the full Art Mode settings API is
   exposed there.
-- **Port selection.** Pairing probes the ports supported by the TV; art uploads
-  use the authenticated SSL WebSocket on port 8002.
+- **Port selection.** Pairing probes the ports supported by the TV. The
+  authenticated remote channel retains that selected port, while the tokenless
+  Art channel may fall back independently between 8001 and 8002 after an
+  explicit Samsung `ms.channel.timeOut` response.
 - **Retries + exponential backoff.** Upload retries 5× on transient
   `ConnectionFailure`, recreating the client between attempts; the art channel
   is "primed" (`supported()` / `get_artmode()`) before attempts.
