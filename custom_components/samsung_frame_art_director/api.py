@@ -116,6 +116,14 @@ def _is_timeout(err: BaseException | None) -> bool:
     )
 
 
+def _is_channel_timeout_response(err: BaseException) -> bool:
+    """Return whether samsungtvws reported the channel-timeout event."""
+    if type(err).__name__ != "ConnectionFailure" or not err.args:
+        return False
+    response = err.args[0]
+    return isinstance(response, dict) and response.get("event") == "ms.channel.timeOut"
+
+
 class PairingTimeoutError(AuthenticationRejectedError):
     """Backward-compatible name for the former setup authentication error."""
 
@@ -132,6 +140,9 @@ class SamsungFrameClient:
         self._client_name = "Home Assistant Art Director"
         self._token_file_path = token_file_path
         self._port: int | None = port
+        # The tokenless Art channel can use a different WS port than the
+        # authenticated remote channel on newer Frame firmware.
+        self._art_port: int | None = None
         # Serialize art channel operations to avoid contention (upload vs set_artmode, etc.)
         self._art_lock: asyncio.Lock = asyncio.Lock()
         # DB path (set on demand by caller)
@@ -189,7 +200,7 @@ class SamsungFrameClient:
             kwargs["timeout"] = timeout
         return SamsungTVWS(self._host, **kwargs)
 
-    def _make_art(self, tv):
+    def _make_art(self, tv, *, port: int | None = None):
         """Create the TV's separate, unauthenticated Art App connection.
 
         The remote-control websocket uses the persisted token to authenticate
@@ -199,6 +210,9 @@ class SamsungFrameClient:
         token sources before the child opens its socket.
         """
         art = tv.art()
+        selected_port = port if port is not None else self._art_port
+        if selected_port is not None:
+            art.port = selected_port
         for attribute in ("token", "token_file"):
             try:
                 if hasattr(art, attribute):
@@ -1192,8 +1206,32 @@ class SamsungFrameClient:
                 # token on newer Frame firmware.
                 tv.open()
                 remote_channel_opened = True
-                art = self._make_art(tv)
-                art.open()
+                art_port = self._art_port or port
+                art = self._make_art(tv, port=art_port)
+                try:
+                    art.open()
+                except Exception as err:  # noqa: BLE001
+                    if not _is_channel_timeout_response(err) or art_port not in (
+                        8001,
+                        8002,
+                    ):
+                        raise
+                    closer = getattr(art, "close", None)
+                    if callable(closer):
+                        try:
+                            closer()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    alternate_art_port = 8001 if art_port == 8002 else 8002
+                    _LOGGER.debug(
+                        "Client: Art channel timed out on port=%s; trying port=%s",
+                        art_port,
+                        alternate_art_port,
+                    )
+                    art = self._make_art(tv, port=alternate_art_port)
+                    art.open()
+                    art_port = alternate_art_port
+                self._art_port = art_port
                 info = tv.rest_device_info()
                 device = info.get("device") if isinstance(info, dict) else None
                 if not isinstance(device, dict) or not device:
