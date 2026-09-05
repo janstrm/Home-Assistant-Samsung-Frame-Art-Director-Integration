@@ -1211,7 +1211,10 @@ class SamsungFrameClient:
                 try:
                     art.open()
                 except Exception as err:  # noqa: BLE001
-                    if not _is_channel_timeout_response(err) or art_port not in (
+                    is_art_timeout = _is_channel_timeout_response(err) or _is_timeout(
+                        err
+                    )
+                    if not is_art_timeout or art_port not in (
                         8001,
                         8002,
                     ):

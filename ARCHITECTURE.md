@@ -149,10 +149,10 @@ Responsibilities:
   approval dialog, which no amount of retrying can clear. Everything else,
   including a handshake that failed after the token was accepted, stays
   `DeviceUnavailableError` → `ConfigEntryNotReady`. The Art child normally
-  uses the remote channel's port; if Samsung explicitly answers its tokenless
-  handshake with `ms.channel.timeOut`, startup tries the alternate 8001/8002
-  Art port and remembers it for later operations without moving the
-  authenticated remote channel.
+  uses the remote channel's port; if Samsung answers its tokenless handshake
+  with `ms.channel.timeOut` or the WebSocket transport times out, startup tries
+  the alternate 8001/8002 Art port and remembers it for later operations
+  without moving the authenticated remote channel.
 - **Art Mode** — `async_set_artmode()`, `async_get_artmode_status()`.
 - **Upload** — `async_preprocess_image()` (Pillow resize/crop), `async_upload_image()`.
 - **Rotation** — `async_rotate_art()` (DB-driven, tag/favorite filtered),
@@ -506,7 +506,7 @@ Patterns you will see repeated, and why they exist:
 - **Port selection.** Pairing probes the ports supported by the TV. The
   authenticated remote channel retains that selected port, while the tokenless
   Art channel may fall back independently between 8001 and 8002 after an
-  explicit Samsung `ms.channel.timeOut` response.
+  explicit Samsung `ms.channel.timeOut` response or a transport-level timeout.
 - **Retries + exponential backoff.** Upload retries 5× on transient
   `ConnectionFailure`, recreating the client between attempts; the art channel
   is "primed" (`supported()` / `get_artmode()`) before attempts.
