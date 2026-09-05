@@ -260,8 +260,59 @@ async def test_startup_retries_timed_out_art_channel_on_alternate_port(hass):
     assert art_ports == [8002, 8001, 8001]
 
 
+async def test_startup_retries_websocket_timeout_on_alternate_art_port(hass):
+    """A fresh client must recover when the first Art transport times out."""
+    art_ports = []
+
+    class WebSocketTimeoutException(Exception):
+        pass
+
+    class FakeArt:
+        token = None
+        token_file = None
+
+        def __init__(self, port):
+            self.port = port
+
+        def open(self):
+            art_ports.append(self.port)
+            if self.port == 8002:
+                raise WebSocketTimeoutException("Connection timed out")
+            return object()
+
+        def close(self):
+            return None
+
+    class FakeTV:
+        token = "SAVED"
+
+        def __init__(self, *_args, **kwargs):
+            self.port = kwargs["port"]
+
+        def open(self):
+            return object()
+
+        def art(self):
+            return FakeArt(self.port)
+
+        def rest_device_info(self):
+            return {"device": {"duid": "uuid:newer-frame"}}
+
+        def close(self):
+            return None
+
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+
+    with patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}):
+        await client.async_connect_and_pair()
+
+    assert client.is_connected is True
+    assert client.duid == "uuid:newer-frame"
+    assert art_ports == [8002, 8001]
+
+
 async def test_startup_does_not_retry_other_art_failures_on_alternate_port(hass):
-    """Only Samsung's explicit channel-timeout response permits port fallback."""
+    """Only explicit or transport timeouts permit Art-port fallback."""
     art_ports = []
 
     class ConnectionFailure(Exception):
