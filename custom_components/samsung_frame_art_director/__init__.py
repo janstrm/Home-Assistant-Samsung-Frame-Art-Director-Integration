@@ -831,7 +831,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: SamsungFrameConfigEntry)
     host = entry.data.get("host")
     safe_host = str(host).replace("/", "_").replace(".", "_")
     token_file_path = hass.config.path(f"pairing_tokens/token_{safe_host}.txt")
-    client = SamsungFrameClient(hass, host, entry.data.get("token"), token_file_path=token_file_path, port=entry.data.get("port"))
+    client = SamsungFrameClient(
+        hass, host, entry.data.get("token"), token_file_path=token_file_path,
+        port=entry.data.get("port"), art_port=entry.data.get("art_port"),
+        art_auth_mode=entry.data.get("art_auth_mode"),
+    )
 
     # Persist a refreshed token whenever the TV (re)issues one during normal
     # operation, so authorization stays valid across reconnects and the TV
@@ -872,10 +876,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: SamsungFrameConfigEntry)
         _LOGGER.debug("Client connect_and_pair failed: %r", err, exc_info=True)
         raise ConfigEntryNotReady from err
 
-    # If we obtained a new token, persist it into the ConfigEntry
-    if client.token and client.token != entry.data.get("token"):
-        _LOGGER.info("Token updated for host=%s; persisting to ConfigEntry", entry.data.get("host"))
-        new_data = {**entry.data, "token": client.token}
+    # Publish only after the complete, non-cancelled startup has succeeded.
+    new_data = dict(entry.data)
+    if client.token:
+        new_data["token"] = client.token
+    if client.art_profile:
+        new_data["art_port"], new_data["art_auth_mode"] = client.art_profile
+    if new_data != entry.data:
         hass.config_entries.async_update_entry(entry, data=new_data)
 
     entry.runtime_data = SamsungFrameRuntimeData(client=client)

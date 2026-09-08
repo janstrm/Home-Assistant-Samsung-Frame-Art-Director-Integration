@@ -201,7 +201,7 @@ async def test_startup_authenticates_remote_but_opens_art_without_remote_token(h
 
     assert client.is_connected is True
     assert client.duid == "uuid:newer-frame"
-    assert events == ["remote-open", ("art-open", None, None)]
+    assert events == ["remote-open", ("art-open", "SAVED", None), ("art-open", None, None)]
 
 
 async def test_startup_retries_timed_out_art_channel_on_alternate_port(hass):
@@ -257,7 +257,7 @@ async def test_startup_retries_timed_out_art_channel_on_alternate_port(hass):
 
     assert client.is_connected is True
     assert client.duid == "uuid:newer-frame"
-    assert art_ports == [8002, 8001, 8001]
+    assert art_ports == [8002, 8002, 8001, 8001]
 
 
 async def test_startup_retries_websocket_timeout_on_alternate_art_port(hass):
@@ -308,7 +308,7 @@ async def test_startup_retries_websocket_timeout_on_alternate_art_port(hass):
 
     assert client.is_connected is True
     assert client.duid == "uuid:newer-frame"
-    assert art_ports == [8002, 8001]
+    assert art_ports == [8002, 8002, 8001]
 
 
 async def test_startup_does_not_retry_other_art_failures_on_alternate_port(hass):
@@ -516,7 +516,7 @@ async def test_reachability_probe_is_skipped_once_the_token_was_accepted(hass):
     ):
         await client.async_connect_and_pair()
 
-    assert rest_calls == []
+    assert rest_calls == [1]  # startup device lookup only; no extra reachability probe
 
 
 async def test_reachability_probe_is_skipped_when_the_handshake_did_not_hang(hass):
@@ -723,10 +723,6 @@ async def test_timed_out_port_finishes_before_fallback_starts(hass):
             self._port = port
 
         def open(self):
-            if self._port == 8002:
-                events.append("first-start")
-                time.sleep(0.05)
-                events.append("first-end")
             return object()
 
         def close(self):
@@ -742,6 +738,11 @@ async def test_timed_out_port_finishes_before_fallback_starts(hass):
             self._art = FakeArt(port)
 
         def open(self):
+            if self._port == 8002:
+                events.append("first-start")
+                time.sleep(0.05)
+                events.append("first-end")
+                raise TimeoutError
             return object()
 
         def art(self):
@@ -1055,6 +1056,7 @@ async def test_setup_stops_before_tv_connection_when_database_init_fails(hass):
     )
     entry.add_to_hass(hass)
     client = MagicMock()
+    client.art_profile = None
     client.host = "frame.local"
     client.token = "SAVED"
     client.async_initialize_database = AsyncMock(
@@ -1088,6 +1090,7 @@ async def test_platform_setup_failure_clears_partial_runtime(hass):
     )
     entry.add_to_hass(hass)
     client = MagicMock()
+    client.art_profile = None
     client.host = "frame.local"
     client.token = "SAVED"
     client.async_initialize_database = AsyncMock()
@@ -1121,6 +1124,7 @@ async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
     )
     entry.add_to_hass(hass)
     client = MagicMock()
+    client.art_profile = (8001, "tokenless")
     client.host = "frame.local"
     client.token = "SAVED"
     client.async_initialize_database = AsyncMock()
@@ -1146,6 +1150,10 @@ async def test_config_entry_owns_and_cleans_up_its_runtime(hass):
     ):
         assert await async_setup_entry(hass, entry)
         assert entry.runtime_data.client is client
+        assert entry.data["art_port"] == 8001
+        assert entry.data["art_auth_mode"] == "tokenless"
+        assert entry.data["port"] == 8002
+        assert entry.data["token"] == "SAVED"
         assert entry.entry_id not in hass.data.get(DOMAIN, {})
         assert await async_unload_entry(hass, entry)
 
@@ -1162,6 +1170,7 @@ async def test_action_rejects_an_unknown_target(hass):
     )
     entry.add_to_hass(hass)
     client = MagicMock()
+    client.art_profile = None
     client.host = "frame.local"
     client.token = "SAVED"
     client.async_initialize_database = AsyncMock()
@@ -1218,6 +1227,7 @@ async def test_setup_maps_auth_and_reachability_failures_separately(
     )
     entry.add_to_hass(hass)
     client = MagicMock()
+    client.art_profile = None
     client.async_initialize_database = AsyncMock()
     client.async_connect_and_pair = AsyncMock(side_effect=client_error)
 

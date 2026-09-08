@@ -12,6 +12,7 @@ import os
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+from .art_connection import PROFILES, ArtHandshakeError, managed_art
 from .const import DOMAIN
 from .database import sqlite_connection
 from .file_access import (
@@ -103,17 +104,19 @@ _TIMEOUT_TYPE_SUFFIXES = ("TimeoutError", "TimeoutException")
 def _is_timeout(err: BaseException | None) -> bool:
     """Whether ``err`` represents an operation that hung rather than failed.
 
-    The distinction matters because a hang against a reachable TV is the
-    on-screen approval dialog, while an error is a genuine failure. Checks the
-    whole MRO so a library's own subclass of its timeout type still matches.
+    Preserve timeout meaning through explicit SDK wrapper causes. A timeout
+    alone does not identify an authorization failure or a pending TV prompt.
     """
-    if err is None:
-        return False
-    if isinstance(err, TimeoutError):
-        return True
-    return any(
-        base.__name__.endswith(_TIMEOUT_TYPE_SUFFIXES) for base in type(err).__mro__
-    )
+    seen: set[int] = set()
+    while err is not None and id(err) not in seen and len(seen) < 10:
+        seen.add(id(err))
+        if isinstance(err, TimeoutError) or any(
+            base.__name__.endswith(_TIMEOUT_TYPE_SUFFIXES) for base in type(err).__mro__
+        ):
+            return True
+        err = err.__cause__
+    return False
+
 
 
 def _is_channel_timeout_response(err: BaseException) -> bool:
@@ -131,7 +134,11 @@ class PairingTimeoutError(AuthenticationRejectedError):
 class SamsungFrameClient:
     """Thin async client facade for Samsung TV WS API."""
 
-    def __init__(self, hass: HomeAssistant, host: str, token: str | None = None, token_file_path: str | None = None, port: int | None = None) -> None:
+    def __init__(
+        self, hass: HomeAssistant, host: str, token: str | None = None,
+        token_file_path: str | None = None, port: int | None = None,
+        art_port: int | None = None, art_auth_mode: str | None = None,
+    ) -> None:
         self.hass = hass
         self._host = host
         self._token = token
@@ -140,9 +147,9 @@ class SamsungFrameClient:
         self._client_name = "Home Assistant Art Director"
         self._token_file_path = token_file_path
         self._port: int | None = port
-        # The tokenless Art channel can use a different WS port than the
-        # authenticated remote channel on newer Frame firmware.
-        self._art_port: int | None = None
+        profile = (art_port, art_auth_mode)
+        self._art_port = art_port if profile in PROFILES else None
+        self._art_auth_mode = art_auth_mode if profile in PROFILES else "tokenless"
         # Serialize art channel operations to avoid contention (upload vs set_artmode, etc.)
         self._art_lock: asyncio.Lock = asyncio.Lock()
         # DB path (set on demand by caller)
@@ -183,9 +190,7 @@ class SamsungFrameClient:
         """Create a sync SamsungTVWS parent with our stable remote identity.
 
         The remote-control channel ties authorization to the (name, token)
-        pair. Connecting there without them — or under a different name — can
-        make the TV treat us as a new device and show the approval dialog
-        again. The separate Art App child is deliberately made tokenless by
+        pair. The Art child's independent connection profile is applied by
         :meth:`_make_art`.
         """
         from samsungtvws import SamsungTVWS  # type: ignore
@@ -198,33 +203,26 @@ class SamsungFrameClient:
             kwargs["token"] = self._token
         if timeout is not None:
             kwargs["timeout"] = timeout
-        return SamsungTVWS(self._host, **kwargs)
+        tv = SamsungTVWS(self._host, **kwargs)
+        tv._frame_initial_token = self._token
+        return tv
 
-    def _make_art(self, tv, *, port: int | None = None):
-        """Create the TV's separate, unauthenticated Art App connection.
+    @property
+    def art_profile(self) -> tuple[int, str] | None:
+        """Last completely validated Art connection preference."""
+        profile = (self._art_port, self._art_auth_mode)
+        return profile if profile in PROFILES else None
 
-        The remote-control websocket uses the persisted token to authenticate
-        Home Assistant. Samsung's ``com.samsung.art-app`` channel is separate
-        and does not use that token. Some newer Frame firmware stalls the Art
-        handshake when the remote-control token is included, so remove both
-        token sources before the child opens its socket.
-        """
+    def _make_art(self, tv, *, port: int | None = None, auth_mode: str | None = None):
+        """Apply the independent Art profile to startup and all Art commands."""
         art = tv.art()
         selected_port = port if port is not None else self._art_port
         if selected_port is not None:
             art.port = selected_port
-        for attribute in ("token", "token_file"):
-            try:
-                if hasattr(art, attribute):
-                    setattr(art, attribute, None)
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug(
-                    "Could not clear %s on Art client for host=%s",
-                    attribute,
-                    self._host,
-                    exc_info=True,
-                )
-        return art
+        mode = auth_mode or self._art_auth_mode
+        art.token = self._token if mode == "saved_remote_token" else None
+        art.token_file = None
+        return managed_art(art, timeout=CONNECTION_ATTEMPT_TIMEOUT_SECONDS, auth_mode=mode)
 
     @staticmethod
     async def _async_run_blocking_contained(fn, timeout: float):
@@ -253,6 +251,8 @@ class SamsungFrameClient:
             new = getattr(tv, "token", None)
         except Exception:  # noqa: BLE001
             new = None
+        if new == getattr(tv, "_frame_initial_token", None):
+            return
         if new and new != self._token:
             _LOGGER.debug("Token refreshed for %s; persisting new token", self._host)
             self._token = new
@@ -265,14 +265,7 @@ class SamsungFrameClient:
 
     def _close_art_connection(self, tv, art=None) -> None:
         """Persist the freshest token and close Art before its parent client."""
-        token_source = tv
-        if art is not None:
-            try:
-                if getattr(art, "token", None):
-                    token_source = art
-            except Exception:  # noqa: BLE001
-                pass
-        self._capture_token(token_source)
+        self._capture_token(tv)
 
         closed_ids: set[int] = set()
         for client in (art, tv):
@@ -1173,143 +1166,115 @@ class SamsungFrameClient:
         return self._duid
 
     async def async_connect_and_pair(self) -> None:
-        """Validate the persisted TV identity without opening a pairing flow."""
-        _LOGGER.debug(
-            "Client: startup validation host=%s token_present=%s",
-            self._host,
-            bool(self._token),
-        )
+        """Validate Remote credentials, then independently negotiate Art."""
         self._connected = False
         self._duid = None
-
         if not self._token:
-            raise AuthenticationRejectedError(
-                f"No persisted authentication token for {self._host}"
-            )
+            raise AuthenticationRejectedError(f"No persisted authentication token for {self._host}")
 
-        # Whether the *authenticated* channel ever opened. It separates "the
-        # TV never accepted us" from a later failure on an authenticated
-        # connection, which is not a pairing problem and must not start reauth.
-        remote_channel_opened = False
-
-        def _validate(port: int) -> dict:
-            nonlocal remote_channel_opened
-            tv = None
-            art = None
-            try:
-                tv = self._make_tv(
-                    port=port,
-                    timeout=CONNECTION_ATTEMPT_TIMEOUT_SECONDS,
-                )
-                # Authenticate on the remote-control channel. The Art App is a
-                # distinct, unauthenticated channel and must not receive this
-                # token on newer Frame firmware.
-                tv.open()
-                remote_channel_opened = True
-                art_port = self._art_port or port
-                art = self._make_art(tv, port=art_port)
+        async with self._art_lock:
+            last_error = None
+            remote_channel_opened = False
+            ports = [self._port] if self._port is not None else [8002, 8001]
+            for port in ports:
                 try:
-                    art.open()
+                    tv = self._make_tv(port=port, timeout=CONNECTION_ATTEMPT_TIMEOUT_SECONDS)
                 except Exception as err:  # noqa: BLE001
-                    is_art_timeout = _is_channel_timeout_response(err) or _is_timeout(
-                        err
-                    )
-                    if not is_art_timeout or art_port not in (
-                        8001,
-                        8002,
-                    ):
-                        raise
-                    closer = getattr(art, "close", None)
-                    if callable(closer):
-                        try:
-                            closer()
-                        except Exception:  # noqa: BLE001
-                            pass
-                    alternate_art_port = 8001 if art_port == 8002 else 8002
-                    _LOGGER.debug(
-                        "Client: Art channel timed out on port=%s; trying port=%s",
-                        art_port,
-                        alternate_art_port,
-                    )
-                    art = self._make_art(tv, port=alternate_art_port)
-                    art.open()
-                    art_port = alternate_art_port
-                self._art_port = art_port
-                info = tv.rest_device_info()
-                device = info.get("device") if isinstance(info, dict) else None
-                if not isinstance(device, dict) or not device:
-                    raise DeviceUnavailableError(
-                        f"Device information unavailable for {self._host}"
-                    )
-                return info
-            finally:
-                if tv is not None:
-                    self._close_art_connection(tv, art)
+                    last_error = err
+                    continue
 
-        ports = [self._port] if self._port is not None else [8002, 8001]
-        last_error: Exception | None = None
-        for port in ports:
-            try:
-                info = await self._async_run_blocking_contained(
-                    lambda selected_port=port: _validate(selected_port),
-                    CONNECTION_ATTEMPT_TIMEOUT_SECONDS,
-                )
-            except Exception as err:  # noqa: BLE001
-                if type(err).__name__ == "UnauthorizedError":
-                    raise AuthenticationRejectedError(
-                        f"Stored authentication was rejected by {self._host}"
-                    ) from err
-                last_error = err
-                continue
+                def validate_remote(tv=tv):
+                    nonlocal remote_channel_opened
+                    tv.open()
+                    remote_channel_opened = True
+                    self._capture_token(tv)
+                    info = tv.rest_device_info()
+                    device = info.get("device") if isinstance(info, dict) else None
+                    if not isinstance(device, dict) or not device:
+                        raise DeviceUnavailableError("Device information unavailable")
+                    return device
 
-            device = info["device"]
-            self._duid = device.get("duid") or device.get("udn")
-            self._port = port
-            self._connected = True
-            token_path = self._token_file_path
-            if token_path:
-                def _remove_pairing_file(path: str) -> None:
+                try:
                     try:
-                        os.remove(path)
-                    except FileNotFoundError:
-                        pass
-                    except OSError:
-                        _LOGGER.debug(
-                            "Could not remove obsolete pairing token file for host=%s",
-                            self._host,
+                        # Remote handshake and REST are two bounded socket operations.
+                        device = await self._async_run_blocking_contained(
+                            validate_remote, 2 * CONNECTION_ATTEMPT_TIMEOUT_SECONDS + 1,
                         )
+                    except Exception as err:  # noqa: BLE001
+                        if type(err).__name__ == "UnauthorizedError":
+                            raise AuthenticationRejectedError("Remote authentication rejected") from None
+                        last_error = err
+                        continue
 
-                await asyncio.to_thread(_remove_pairing_file, token_path)
-            _LOGGER.info(
-                "Client: authenticated host=%s port=%s duid=%s",
-                self._host,
-                port,
-                self._duid,
-            )
-            return
+                    candidates = list(PROFILES)
+                    if self.art_profile:
+                        candidates.remove(self.art_profile)
+                        candidates.insert(0, self.art_profile)
+                    selected = None
+                    refused_ports: set[int] = set()
+                    for art_port, mode in candidates:
+                        if art_port in refused_ports:
+                            continue
+                        def open_art(selected_port=art_port, selected_mode=mode, tv=tv):
+                            art = None
+                            try:
+                                art = self._make_art(tv, port=selected_port, auth_mode=selected_mode)
+                                art.open()
+                            finally:
+                                if art is not None:
+                                    art.close()
 
-        # A remote-control handshake that HUNG against a TV that is answering
-        # its tokenless REST endpoint is the on-screen "Allow this device?"
-        # dialog waiting for someone in front of the panel. The TV is powered,
-        # on the network and reachable, so retrying forever never fixes it and
-        # never tells anybody why; only reauthentication surfaces it.
-        #
-        # Deliberately narrow: a handshake that FAILED rather than hung is
-        # left as unavailable, because a reachable REST endpoint alone is not
-        # evidence that the token is the problem.
-        if (
-            not remote_channel_opened
-            and _is_timeout(last_error)
-            and await self._async_device_is_reachable()
-        ):
-            raise PairingTimeoutError(
-                f"{self._host} is reachable but did not accept the saved "
-                f"authentication; approve this device on the TV"
-            ) from last_error
+                        try:
+                            # Each candidate owns its budget and is fully drained/closed
+                            # before the next starts. No worker publishes profile state.
+                            await self._async_run_blocking_contained(
+                                open_art, CONNECTION_ATTEMPT_TIMEOUT_SECONDS + 1,
+                            )
+                        except Exception as err:  # noqa: BLE001
+                            if isinstance(err, ArtHandshakeError) and err.event == "connection_refused":
+                                refused_ports.add(art_port)
+                            retryable = (
+                                (isinstance(err, ArtHandshakeError) and err.retryable)
+                                or _is_timeout(err) or _is_channel_timeout_response(err)
+                                or type(err).__name__ == "UnauthorizedError"
+                            )
+                            _LOGGER.debug(
+                                "Art candidate failed port=%s auth_mode=%s error_type=%s",
+                                art_port, mode, type(err).__name__,
+                            )
+                            if retryable:
+                                continue
+                            raise DeviceUnavailableError("Art channel unavailable") from None
+                        selected = (art_port, mode)
+                        break
+                    if selected is None:
+                        raise DeviceUnavailableError("No usable Art connection profile") from None
 
-        raise DeviceUnavailableError(
-            f"Unable to validate saved authentication for {self._host}"
-        ) from last_error
+                    token_path = self._token_file_path
+                    if token_path:
+                        def remove_pairing_file(token_path=token_path):
+                            try:
+                                os.remove(token_path)
+                            except OSError:
+                                pass
+                        await asyncio.to_thread(remove_pairing_file)
+                finally:
+                    await self._async_run_blocking_contained(
+                        lambda tv=tv: self._close_art_connection(tv),
+                        CONNECTION_ATTEMPT_TIMEOUT_SECONDS + 1,
+                    )
+
+                # Cleanup/cancellation must complete before publishing success.
+                self._art_port, self._art_auth_mode = selected
+                self._port = port
+                self._duid = device.get("duid") or device.get("udn")
+                self._connected = True
+                _LOGGER.info("Art connected port=%s auth_mode=%s", *selected)
+                return
+
+            if not remote_channel_opened and _is_timeout(last_error) and await self._async_device_is_reachable():
+                raise PairingTimeoutError("TV reachable but Remote authentication did not complete") from None
+            raise DeviceUnavailableError("Unable to validate saved Remote authentication") from None
 
     async def _async_device_is_reachable(self) -> bool:
         """Return whether the TV answers its tokenless REST endpoint.
@@ -1938,7 +1903,11 @@ class SamsungFrameClient:
         def _collect() -> dict:
             tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
             art = None
-            result: dict = {"host": self._host}
+            result: dict = {
+                "host": self._host,
+                "art_port": self._art_port,
+                "art_auth_mode": self._art_auth_mode,
+            }
             try:
                 try:
                     art = self._make_art(tv)

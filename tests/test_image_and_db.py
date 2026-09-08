@@ -322,7 +322,8 @@ async def test_upload_image_returns_tv_content_id(hass):
         content_id = await client.async_upload_image(_jpeg(100, 100))
 
     assert content_id == "MY-CONTENT-123"
-    assert persisted_tokens == ["NEW"]
+    assert persisted_tokens == []
+    assert client.token == "OLD"
     assert art_clients
     assert all(art.closed for art in art_clients)
 
@@ -1228,7 +1229,10 @@ async def test_cleanup_dry_run_excludes_manual_tv_art(hass, tmp_path):
 async def test_get_state_reports_unavailable_without_tv(hass):
     """A failed poll must make the coordinator unavailable, not look empty."""
     client = SamsungFrameClient(hass, "127.0.0.1")
-    with pytest.raises(DeviceUnavailableError, match="State refresh"):
+    with (
+        patch.object(client, "_make_tv", side_effect=OSError("TV unreachable")),
+        pytest.raises(DeviceUnavailableError, match="State refresh"),
+    ):
         await client.async_get_state()
     assert client.is_connected is False
 
@@ -1271,8 +1275,8 @@ async def test_entry_databases_share_local_art_without_sharing_tv_state(
         ).fetchall() == [("MY-SAME",)]
 
 
-async def test_get_state_retains_art_token_and_closes_art_socket(hass):
-    """State polling keeps a rotated Art token and closes its child socket."""
+async def test_get_state_keeps_remote_token_and_closes_art_socket(hass):
+    """State polling cannot replace Remote credentials with an Art token."""
     art_clients = []
     tv_clients = []
     persisted_tokens = []
@@ -1314,7 +1318,8 @@ async def test_get_state_retains_art_token_and_closes_art_socket(hass):
         state = await client.async_get_state()
 
     assert state == {"status": "on", "content_id": "MY-CURRENT"}
-    assert persisted_tokens == ["NEW"]
+    assert persisted_tokens == []
+    assert client.token == "OLD"
     assert len(art_clients) == 1
     assert art_clients[0].closed is True
     assert tv_clients[0].closed is True
