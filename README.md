@@ -513,4 +513,10 @@ Feel free to check the [issues page](https://github.com/janstrm/Home-Assistant-S
 > **TV Model Compatibility**
 > Samsung's internal Art Mode APIs vary significantly between different models and production years. This integration has been primarily developed, tested, and confirmed working on model **Samsung The Frame Q65LS03DAU**. Your mileage may vary on older or newer models.
 
-*Disclaimer: Not affiliated with Samsung. Uses the internal WebSockets API of Frame TVs.*
+## ⚖️ License & third-party notices
+
+This project is licensed under the [MIT License](LICENSE).
+
+It uses the third-party `samsungtvws` library, which is licensed under the GNU LGPL-3.0. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
+
+> **Samsung trademark notice:** Samsung, Samsung The Frame, and related product names and marks are trademarks of Samsung Electronics Co., Ltd. Samsung Frame Art Director is an independent open-source project and is not affiliated with, endorsed by, sponsored by, or otherwise associated with Samsung Electronics.
