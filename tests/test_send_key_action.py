@@ -17,6 +17,7 @@ async def send_key_action(hass):
     hass.http = MagicMock()
     assert await async_setup(hass, {})
     client = MagicMock()
+    client.art_profile = None
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()

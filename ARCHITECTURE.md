@@ -484,29 +484,41 @@ Patterns you will see repeated, and why they exist:
   remote-control channel ties authorization to the `(client name, token)` pair.
   All sync parent clients are therefore built through
   `SamsungFrameClient._make_tv()` (always passes `name` + `token`), and
-  `_capture_token()` runs on close to **persist any token the TV re-issues** (via
+  `_capture_token()` runs on close to **persist Remote token rotation** (via
   a loop-safe `set_token_persister` callback wired in `__init__.py`) so
   authorization doesn't drift. The separate `com.samsung.art-app` child is
-  built through `_make_art()` and deliberately has `token` and `token_file`
-  cleared: newer Frame firmware can stall that handshake when it receives the
-  remote-control token. Never construct either client outside these helpers.
+  built through `_make_art()` with its independently saved port and token mode.
+  An Art token never replaces the Remote credential. An unopened parent's
+  inherited token cannot overwrite a newer credential. Never construct either
+  client outside these helpers.
 - **Connection model.** Every art operation opens a short-lived `SamsungTVWS`
-  parent and uses a tokenless synchronous `art()` child off the event loop via
+  parent and uses a synchronous Art child with the selected profile off the event loop via
   `asyncio.to_thread` (`async_get_state`, `_async_art`, `async_upload_image`,
   `async_set_artmode`, …). Each parent creates exactly one Art child;
-  `_close_art_connection()` captures any refreshed token and closes child then
+  `_close_art_connection()` captures Remote token rotation and closes child then
   parent exactly once. There is no long-lived connection; the `_art_lock`
   serializes reads and writes alike. Startup first authenticates the remote
-  parent and then verifies that the tokenless Art child is usable.
+  parent and then verifies that the Art child is usable. `ManagedArt` in
+  `art_connection.py` keeps upstream commands but owns the socket throughout
+  both connect/ready phases and closes failed handshakes. A monotonic deadline
+  bounds each handshake; startup budgets each candidate separately. Cancellation
+  drains the worker before cleanup and cannot publish a learned profile.
 - **Pairing vs. art operations.** `bridge.py` uses the official async/encrypted
   remote client for pairing and an authenticated sync remote client only as a
-  compatibility fallback. Runtime Art API calls use short-lived tokenless sync
+  compatibility fallback. Runtime Art API calls use short-lived profiled sync
   Art clients in worker threads because the full Art Mode settings API is
   exposed there.
-- **Port selection.** Pairing probes the ports supported by the TV. The
-  authenticated remote channel retains that selected port, while the tokenless
-  Art channel may fall back independently between 8001 and 8002 after an
-  explicit Samsung `ms.channel.timeOut` response or a transport-level timeout.
+- **Profile selection.** Remote keeps its paired port. Art learns a separate
+  `(art_port, art_auth_mode)` preference: 8002/saved_remote_token, 8002/tokenless,
+  or 8001/tokenless. ConfigEntry data stores it after successful startup.
+  Startup tries the saved profile first, then the deduplicated profiles above;
+  missing fields start with token-bearing 8002 in this beta. Timeouts and
+  explicit Art rejection can advance to another profile. A refused port skips
+  other token modes on that port and tries the other port. Other failures stop
+  setup and use HA backoff. Art failures never invalidate Remote credentials.
+  Runtime polling uses the selected profile without renegotiating. See the
+  [beta validation guide](docs/art-profile-validation.md) for the simple
+  installation/restart test on Shane's LS03F.
 - **Retries + exponential backoff.** Upload retries 5× on transient
   `ConnectionFailure`, recreating the client between attempts; the art channel
   is "primed" (`supported()` / `get_artmode()`) before attempts.

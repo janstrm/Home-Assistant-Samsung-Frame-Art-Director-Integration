@@ -14,6 +14,10 @@
 
 Control your Samsung Frame TV's Art Mode directly from Home Assistant. Upload local images or fetch them from trusted HTTP(S) URLs with automatic resizing, rotate art on a schedule, manage TV storage, and build gallery dashboards. Optional cloud classification through Google Gemini, OpenAI, or Anthropic can auto-tag images placed in an inbox folder.
 
+The **1.11.4b1 beta** adds a saved Art connection profile for devices with
+different port/token requirements. Hardware validation for recurring approval
+prompts is still pending. See the [beta test instructions](docs/art-profile-validation.md).
+
 ---
 
 ## 📋 Prerequisites
