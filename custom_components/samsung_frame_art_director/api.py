@@ -1289,7 +1289,7 @@ class SamsungFrameClient:
             return
 
         # A remote-control handshake that HUNG against a TV that is answering
-        # its tokenless REST endpoint is the on-screen "Allow this device?"
+        # its REST endpoint or Remote TCP port can be the "Allow this device?"
         # dialog waiting for someone in front of the panel. The TV is powered,
         # on the network and reachable, so retrying forever never fixes it and
         # never tells anybody why; only reauthentication surfaces it.
@@ -1300,7 +1300,7 @@ class SamsungFrameClient:
         if (
             not remote_channel_opened
             and _is_timeout(last_error)
-            and await self._async_device_is_reachable()
+            and await self._async_device_is_reachable(port)
         ):
             raise PairingTimeoutError(
                 f"{self._host} is reachable but did not accept the saved "
@@ -1311,14 +1311,13 @@ class SamsungFrameClient:
             f"Unable to validate saved authentication for {self._host}"
         ) from last_error
 
-    async def _async_device_is_reachable(self) -> bool:
-        """Return whether the TV answers its tokenless REST endpoint.
+    async def _async_device_is_reachable(self, port: int) -> bool:
+        """Check REST, then the Remote transport without another pairing attempt.
 
-        Pairing is irrelevant to this endpoint, so it is the one signal that
-        tells "the panel is off or off-network" (retry, stay quiet) apart from
-        "the panel is up but would not complete the authenticated handshake"
-        (ask the user to approve us). Any failure here is deliberately treated
-        as unreachable so this can only ever downgrade to today's behaviour.
+        REST can stall independently of pairing (issue #49). An accepting TCP
+        port is also evidence of reachability, but never proof of invalid
+        credentials by itself: the caller must first observe a Remote timeout
+        before authentication, not an Art or device-info failure.
         """
 
         def _probe() -> bool:
@@ -1327,15 +1326,26 @@ class SamsungFrameClient:
             return isinstance(info, dict) and bool(info.get("device"))
 
         try:
-            return bool(
-                await self._async_run_blocking_contained(
-                    _probe, REACHABILITY_PROBE_TIMEOUT_SECONDS
-                )
-            )
+            if await self._async_run_blocking_contained(
+                _probe, REACHABILITY_PROBE_TIMEOUT_SECONDS
+            ):
+                return True
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug(
                 "Client: reachability probe failed host=%s: %r", self._host, err
             )
+
+        # No TLS, HTTP, or WebSocket handshake: this cannot trigger an approval
+        # prompt. Bound DNS/connect/cleanup together and always close the socket.
+        try:
+            async with asyncio.timeout(REACHABILITY_PROBE_TIMEOUT_SECONDS):
+                _, writer = await asyncio.open_connection(self._host, port)
+                try:
+                    return True
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+        except (OSError, TimeoutError):
             return False
 
     async def async_disconnect(self) -> None:
