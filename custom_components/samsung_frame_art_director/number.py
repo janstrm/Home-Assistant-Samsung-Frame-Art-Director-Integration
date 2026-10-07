@@ -71,7 +71,7 @@ class SamsungFrameSlideshowInterval(NumberEntity):
     @property
     def native_value(self) -> float:
         """Return the current value (preconfigured default when unset)."""
-        return self._entry.options.get(CONF_SLIDESHOW_INTERVAL) or DEFAULT_SLIDESHOW_INTERVAL
+        return self._entry.options.get(CONF_SLIDESHOW_INTERVAL, DEFAULT_SLIDESHOW_INTERVAL)
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""

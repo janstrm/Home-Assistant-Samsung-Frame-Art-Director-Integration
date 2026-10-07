@@ -48,8 +48,9 @@ async def test_process_inbox_rejects_a_prefix_collision(hass):
     api.async_add_local_art.assert_not_awaited()
 
 
-async def test_sync_library_skips_a_symlink_escape(hass):
+async def test_sync_library_skips_a_symlink_escape(hass, tmp_path):
     """A library symlink cannot make the curator analyze an outside file."""
+    hass.config.config_dir = str(tmp_path / "config")
     library = Path(hass.config.path("www", "library"))
     library.mkdir(parents=True, exist_ok=True)
     config_root = Path(hass.config.path())

@@ -159,7 +159,12 @@ Responsibilities:
   `async_rotate_from_folder()`, `async_rotate_art_now()` (older mode-based variant),
   `_async_select_image_id()`.
 - **Preview** — `async_get_current_art()` (current content id + thumbnail bytes,
-  5-second cache).
+  5-second monotonic cache measured from completion). Concurrent callers check
+  the cache again under the Art lock; successful and failed downloads are both
+  coalesced. A timed-out thumbnail does not start further preview/photo fallback
+  downloads. `preview_deadline.py` bounds SDK frame and thumbnail receive loops
+  on the disposable preview child, so unrelated events or trickling bytes cannot
+  reset the receive budget. Worker draining and Art serialization remain unchanged.
 - **Library DB** — schema init/migration (`_ensure_db()`), tracking, favorites,
   delete, dedup, stale-cleanup, purge, and the gallery data query.
 - **TV storage cleanup** — `async_cleanup_storage()`.
@@ -526,9 +531,13 @@ Patterns you will see repeated, and why they exist:
 - **Broad `except` with debug logging.** Many TV calls raise spurious errors
   (e.g. the `clientConnect` handshake event) even when the action succeeded, so
   failures are logged at debug and the flow continues.
-- **No token material in logs.** Integration messages expose only whether a
-  token exists. The `samsungtvws.connection` logger remains at WARNING because
-  version 3.0.5 includes raw token values in lower-level connection messages.
+- **Credential-safe TV diagnostics.** `log_safety.py` filters credential-bearing
+  payloads and exception details at integration and Samsung SDK source loggers,
+  including `samsungtvws.helper` and `samsungtvws.art.art`. Filters remain active
+  if Home Assistant's debug action changes logger levels. They are installed
+  before config-flow pairing, not only when an entry loads. The connection
+  logger also remains at WARNING. This does not sanitize unrelated HA core logs
+  or previously posted logs; inspect and redact those before sharing.
 
 When changing this layer, prefer **adding** a guarded path over removing one,
 and keep the debug logging — it is the only diagnostic tool users have.

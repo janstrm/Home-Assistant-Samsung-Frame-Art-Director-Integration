@@ -56,7 +56,7 @@
       },
       "ip_control": {
         "title": "Pair IP Control",
-        "description": "On the TV, enable IP Remote and switch to normal TV viewing (not Art Mode). Then click Submit and approve the access prompt on {device}. The token is stored only for this TV. Use IP Control only on a trusted local network.",
+        "description": "IP Control needs its own pairing; the initial Art/remote approval does not enable panel power commands. On the TV, enable IP Remote and switch to normal TV viewing (not Art Mode). Then click Submit and approve the access prompt on {device}. Use IP Control only on a trusted local network.",
         "data": {}
       }
     },
@@ -67,7 +67,8 @@
       "not_supported": "This Samsung device is currently not supported.",
       "ip_control_rejected": "The TV rejected IP Control pairing. Return to Reconfigure > IP Control and approve the prompt to pair again.",
       "ip_control_unavailable": "IP Control is unavailable in the TV's current state. Enable IP Remote, leave Art Mode, and try again.",
-      "ip_control_pairing_failed": "The TV returned an unexpected IP Control response. No token was saved."
+      "ip_control_pairing_failed": "The TV returned an unexpected IP Control response. No token was saved.",
+      "ip_control_cannot_connect": "Cannot reach Samsung IP Control on ports 1516 or 1515. Enable IP Remote on the TV, keep normal TV viewing active, and check access from Home Assistant to these ports. Art/remote control can still work on ports 8001/8002. Existing credentials have not been changed."
     },
     "abort": {
       "already_in_progress": "A configuration flow is already in progress.",

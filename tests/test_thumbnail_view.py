@@ -164,6 +164,7 @@ async def test_library_hides_a_tracked_symlink_that_escapes_allowed_roots(
     tmp_path,
 ):
     """Tracking a symlink does not let previews escape the library boundary."""
+    hass.config.config_dir = str(tmp_path / "config")
     outside = tmp_path / "outside.png"
     outside.write_bytes(b"outside")
     link = Path(hass.config.path("www", "escape.png"))

@@ -188,7 +188,7 @@ async def test_ip_control_pairing_preserves_entry_data_and_replaces_stale_token(
 @pytest.mark.parametrize(
     ("error", "expected_error"),
     [
-        (IPControlTransportError("SECRET transport detail"), "cannot_connect"),
+        (IPControlTransportError("SECRET transport detail"), "ip_control_cannot_connect"),
         (IPControlAuthError("SECRET rejected token"), "ip_control_rejected"),
         (IPControlUnavailableError("SECRET TV state"), "ip_control_unavailable"),
         (IPControlProtocolError("SECRET response"), "ip_control_pairing_failed"),
@@ -227,7 +227,7 @@ async def test_ip_control_pairing_errors_are_classified_and_redacted(
     assert entry.data["token"] == "WEBSOCKET_TOKEN"
 
 
-async def test_ip_control_connection_refusal_falls_back_then_shows_cannot_connect(
+async def test_ip_control_connection_refusal_falls_back_then_shows_specific_error(
     hass,
 ):
     entry = MockConfigEntry(
@@ -254,7 +254,7 @@ async def test_ip_control_connection_refusal_falls_back_then_shows_cannot_connec
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["type"] == FlowResultType.FORM
-    assert result["errors"]["base"] == "cannot_connect"
+    assert result["errors"]["base"] == "ip_control_cannot_connect"
     assert [item.args[1] for item in connection.call_args_list] == [1516, 1515]
     assert "ip_control_token" not in entry.data
 
