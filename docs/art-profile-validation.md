@@ -4,15 +4,17 @@ Version: **1.11.6b1 candidate**, related to GitHub issue #7. Hardware validation
 
 ## Current candidate
 
-PR #47 has been updated with the current `main`, including the REST-to-TCP
-reachability fallback from #50. The earlier published **v1.11.4b1** release
-is historical and does not contain that fallback. No v1.11.6b1 release has
-been published yet; do not select the old beta to test this revision.
+PR #47 includes the stable 1.11.5 code: the REST-to-TCP reachability fallback
+from #50 and the bounded previews, credential-safe diagnostics, IP Control
+pairing guidance, and zero-interval fix from #52. The earlier published
+**v1.11.4b1** release does not contain these fixes.
 
 Install the candidate's `custom_components/samsung_frame_art_director` folder
 using the README's manual-install procedure. Keep the existing integration,
-configuration, and TV approval. After a maintainer publishes this candidate as
-a pre-release, it can also be selected through HACS Redownload.
+configuration, and TV approval. Once **v1.11.6b1** appears on the repository's
+Releases page as a pre-release, use HACS **Redownload**, select **v1.11.6b1**,
+and restart Home Assistant. Do not select the historical v1.11.4b1 beta to
+test this revision.
 
 ## Short hardware test
 
