@@ -404,7 +404,7 @@ class SamsungFrameConfigFlow(config_entries.ConfigFlow, domain="samsung_frame_ar
             try:
                 token, port = await async_pair_ip_control(self.hass, entry.data[CONF_HOST])
             except IPControlTransportError:
-                errors = {"base": RESULT_CANNOT_CONNECT}
+                errors = {"base": "ip_control_cannot_connect"}
             except IPControlAuthError:
                 errors = {"base": "ip_control_rejected"}
             except IPControlUnavailableError:

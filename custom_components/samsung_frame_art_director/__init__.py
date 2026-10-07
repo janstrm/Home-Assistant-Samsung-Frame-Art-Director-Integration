@@ -49,6 +49,7 @@ from .ip_control_actions import (
     IP_CONTROL_ACTIONS,
     async_execute_ip_control_action,
 )
+from .log_safety import install_credential_log_filters
 from .runtime import SamsungFrameConfigEntry, SamsungFrameRuntimeData
 from .targets import (
     async_resolve_action_targets,
@@ -74,6 +75,9 @@ async def async_setup(hass: HomeAssistant, config) -> bool:
 PLATFORMS = ["media_player", "number", "switch", "select", "text", "image", "sensor"]
 
 _LOGGER = logging.getLogger(__name__)
+
+# Protect config-flow pairing too, before an entry or verbose logging exists.
+install_credential_log_filters()
 
 MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_REMOTE_REDIRECTS = 5
@@ -166,6 +170,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 def _enable_verbose_logging() -> None:
     """Enable verbose logging for this integration and samsungtvws at startup."""
+    install_credential_log_filters()
     try:
         # Our package under custom_components
         logging.getLogger("custom_components.samsung_frame_art_director").setLevel(logging.DEBUG)
@@ -921,7 +926,7 @@ async def _reload_slideshow_timer(hass: HomeAssistant, entry: SamsungFrameConfig
         runtime.timer_unsub()
         runtime.timer_unsub = None
 
-    interval = entry.options.get(CONF_SLIDESHOW_INTERVAL) or DEFAULT_SLIDESHOW_INTERVAL
+    interval = entry.options.get(CONF_SLIDESHOW_INTERVAL, DEFAULT_SLIDESHOW_INTERVAL)
     enabled = entry.options.get(CONF_SLIDESHOW_ENABLED, False)
 
     if interval > 0 and enabled:

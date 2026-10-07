@@ -73,6 +73,15 @@ IP Control is Samsung's separate local connection for true panel power commands.
 
 The IP Control token and selected port are stored only in that TV's Home Assistant config entry, separately from the normal WebSocket token. Pairing is never started by a restart, polling, or an action. Because the TV uses a self-signed certificate, use this feature only on a trusted local network. Support varies by model and firmware.
 
+If Art control works but IP Control pairing fails, the initial TV approval has
+only authorized the Art/remote connection. Check that **IP Remote** is enabled
+and that Home Assistant can reach the TV on **1516** (or the legacy **1515**).
+Working ports 8001/8002 do not prove those separate power-control ports work.
+Pair while normal TV viewing is active. Debug logs identify the attempted port
+and whether it timed out, refused the connection, or failed TLS, without logging
+the credential. A failed attempt preserves existing credentials and options;
+there is no need to delete and recreate the integration.
+
 After pairing, 3 explicit targeted actions are available: **Power On (IP Control)**, **Power Off (IP Control)**, and **Reboot (IP Control)**. The IP Control Power Off action requests true panel standby; the existing media-player **Turn Off** still only leaves Art Mode, exactly as before. If the paired IP Control port is unreachable in standby, Power On falls back to Wake-on-LAN when its existing option is enabled and a TV MAC address is configured. Power-on from standby still depends on the Frame model, firmware, network, and energy settings. A rejected saved token creates a Home Assistant repair that links back to the safe pairing form.
 
 ### Configure optional features

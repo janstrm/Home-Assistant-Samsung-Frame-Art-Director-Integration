@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 from contextlib import contextmanager
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from .const import DOMAIN
@@ -22,6 +23,7 @@ from .file_access import (
     media_identifier,
     resolve_upload_source,
 )
+from .preview_deadline import bound_preview_reads
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -41,6 +43,7 @@ CONNECTION_ATTEMPT_TIMEOUT_SECONDS = 10
 # budget than a full authenticated websocket handshake.
 REACHABILITY_PROBE_TIMEOUT_SECONDS = 5
 ART_OPERATION_TIMEOUT_SECONDS = 15
+ART_PREVIEW_CACHE_SECONDS = 5
 ART_LIBRARY_SCHEMA_VERSION = 1
 
 
@@ -1396,15 +1399,10 @@ class SamsungFrameClient:
     async def async_get_current_art(self) -> dict:
         """Fetch info and thumbnail of currently displayed artwork."""
         # Simple caching to avoid over-polling and connection timeouts
-        now = __import__("time").time()
-        if hasattr(self, "_art_preview_cache") and (now - self._art_preview_cache_time < 5):
+        if hasattr(self, "_art_preview_cache") and (monotonic() - self._art_preview_cache_time < ART_PREVIEW_CACHE_SECONDS):
             return self._art_preview_cache
 
         results = {"content_id": None, "image": None}
-        try:
-            from samsungtvws import SamsungTVWS  # noqa: F401
-        except Exception:
-            return results
 
         def _fetch():
             tv = None
@@ -1412,11 +1410,7 @@ class SamsungFrameClient:
             try:
                 tv = self._make_tv(timeout=ART_OPERATION_TIMEOUT_SECONDS)
                 art_client = self._make_art(tv)
-                # Prime the art channel
-                try:
-                    art_client.supported()
-                except Exception:
-                    pass
+                bound_preview_reads(art_client, ART_OPERATION_TIMEOUT_SECONDS)
 
                 # Select the correct thumbnail method based on discovery
                 # Discovery showed 'get_thumbnail' is the correct one for this model/version
@@ -1469,6 +1463,8 @@ class SamsungFrameClient:
                             _LOGGER.debug("Art Preview: get_thumbnail returned empty for %s", results["content_id"])
                         except Exception as e:
                             _LOGGER.debug("Art Preview: get_thumbnail failed for %s: %r", results["content_id"], e)
+                            if _is_timeout(e) or _is_timeout(e.__cause__):
+                                return
 
                     # 2. Try get_preview as fallback
                     get_preview_fn = getattr(art_client, "get_preview", None)
@@ -1482,6 +1478,8 @@ class SamsungFrameClient:
                             _LOGGER.debug("Art Preview: get_preview returned empty for %s", results["content_id"])
                         except Exception as e:
                             _LOGGER.debug("Art Preview: get_preview failed for %s: %r", results["content_id"], e)
+                            if _is_timeout(e) or _is_timeout(e.__cause__):
+                                return
 
                     # 3. Try get_photo as final fallback
                     get_photo_fn = getattr(art_client, "get_photo", None)
@@ -1505,18 +1503,22 @@ class SamsungFrameClient:
                     self._close_art_connection(tv, art_client)
 
         async with self._art_lock:
+            # Other dashboard requests may have completed this same fetch while
+            # we waited. Cache failed downloads too, so they cannot flood the TV.
+            if hasattr(self, "_art_preview_cache") and (monotonic() - self._art_preview_cache_time < ART_PREVIEW_CACHE_SECONDS):
+                return self._art_preview_cache
             try:
                 await self._async_run_blocking_contained(
                     _fetch,
                     ART_OPERATION_TIMEOUT_SECONDS,
                 )
             except TimeoutError:
-                _LOGGER.debug("Art Preview: fetch thread timed out after 15s")
+                _LOGGER.debug("Art Preview: fetch exceeded the operation timeout")
             except Exception as e:
                 _LOGGER.debug("Art Preview: fetch thread error: %r", e)
-            
-        self._art_preview_cache = results
-        self._art_preview_cache_time = now
+            # The cache lifetime starts at completion, including a slow failure.
+            self._art_preview_cache = results
+            self._art_preview_cache_time = monotonic()
         return results
 
     async def async_set_artmode(self, enabled: bool) -> None:
