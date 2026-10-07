@@ -28,6 +28,7 @@ async def test_sync_library_action_reports_curator_result(hass):
     hass.http = MagicMock()
     assert await async_setup(hass, {})
     client = MagicMock()
+    client.art_profile = None
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()
@@ -80,6 +81,7 @@ async def test_sync_library_action_reports_curator_result(hass):
 async def test_slideshow_cleanup_uses_configured_options(hass, dashboard_filter):
     """The scheduled slideshow applies the same configured cleanup policy."""
     client = MagicMock()
+    client.art_profile = None
     client.async_get_artmode_status = AsyncMock(return_value="on")
     client.async_rotate_art = AsyncMock(return_value=True)
     client.async_cleanup_storage = AsyncMock()
@@ -134,6 +136,7 @@ async def test_manual_cleanup_action_uses_complete_default_policy(hass):
     hass.http = MagicMock()
     assert await async_setup(hass, {})
     client = MagicMock()
+    client.art_profile = None
     client.host = "frame.local"
     client.token = "token"
     client.async_connect_and_pair = AsyncMock()

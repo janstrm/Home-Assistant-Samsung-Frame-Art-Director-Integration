@@ -26,6 +26,7 @@ from custom_components.samsung_frame_art_director.runtime import (
 
 def _client(host: str) -> MagicMock:
     client = MagicMock()
+    client.art_profile = None
     client.host = host
     client.token = "SAVED"
     client.async_initialize_database = AsyncMock()
