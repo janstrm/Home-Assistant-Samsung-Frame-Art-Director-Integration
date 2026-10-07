@@ -1,32 +1,39 @@
 # Art connection profile beta validation
 
-Version: **1.11.4b1**, related to GitHub issue #7. Hardware validation is pending.
+Version: **1.11.6b1 candidate**, related to GitHub issue #7. Hardware validation is pending.
 
-## Short test for Shane
+## Current candidate
 
-Use the official [GitHub pre-release v1.11.4b1](https://github.com/janstrm/Home-Assistant-Samsung-Frame-Art-Director-Integration/releases/tag/v1.11.4b1).
+PR #47 has been updated with the current `main`, including the REST-to-TCP
+reachability fallback from #50. The earlier published **v1.11.4b1** release
+is historical and does not contain that fallback. No v1.11.6b1 release has
+been published yet; do not select the old beta to test this revision.
 
-1. In HACS, open **Samsung Frame Art Director**, choose **Redownload**, and
-   select **v1.11.4b1** in the version selector (some versions label this
-   **Need a different version?**). Keep the existing integration and TV approval.
-2. Restart Home Assistant with the TV awake. Check whether Art control works
+Install the candidate's `custom_components/samsung_frame_art_director` folder
+using the README's manual-install procedure. Keep the existing integration,
+configuration, and TV approval. After a maintainer publishes this candidate as
+a pre-release, it can also be selected through HACS Redownload.
+
+## Short hardware test
+
+1. Restart Home Assistant with the TV awake. Check whether Art control works
    and whether an approval prompt appears. If you approve a prompt, mention it.
-3. Restart Home Assistant once more with the TV still awake and check again.
+2. Restart Home Assistant once more with the TV still awake and check again.
+3. Reload the integration twice, then verify upload/select, preview, and
+   30 minutes idle without further approval prompts.
 
-Please report only **Art control works: yes/no**, and **approval prompt on
-first restart: yes/no; on second restart: yes/no**.
+Report **Art control works: yes/no**, and **approval prompt on first restart:
+yes/no; on second restart: yes/no**, plus the installed candidate version.
 
-No terminal commands, scripts, token files or extra logs are needed for this
-first test. To roll back, select **v1.11.3** in HACS and restart Home Assistant.
-If the beta is missing, refresh the repository information. For beta update
-notifications, see the [official HACS pre-release switch documentation](https://www.hacs.xyz/docs/use/entities/switch/).
+No token files or raw debug payloads are needed. To roll back, select the
+latest stable release in HACS and restart Home Assistant.
 
 This beta starts with token-bearing Art/8002 when no working Art profile has
 been saved. A saved profile still comes first; tokenless fallback remains
 available. This is an integration test with fallback, not an isolated protocol
 experiment.
 
-## Automated validation (2026-09-08)
+## Historical automated validation (2026-09-08)
 
 - HA 2024.7 / Python 3.12.13: **263 passed**, 72.36% integration coverage.
 - HA 2026.8 / Python 3.14.2: **263 passed**, 72.36% integration coverage.
@@ -36,6 +43,8 @@ experiment.
   local system MIME database did not contain it. No tests were skipped.
 - HACS/hassfest container validation was not run locally: Docker's daemon was
   unavailable. Run the repository CI checks before publishing a release.
+
+## Current behavior
 
 The integration learns an Art port and authentication mode independently from the
 Remote connection. It saves the profile after successful startup, uses it for

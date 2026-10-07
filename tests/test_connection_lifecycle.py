@@ -415,6 +415,44 @@ async def test_stalled_handshake_on_a_reachable_tv_starts_reauth(hass):
     assert client.is_connected is False
 
 
+@pytest.mark.parametrize("port", [8001, 8002])
+@pytest.mark.parametrize("probe_result", [TimeoutError("REST timed out"), OSError("REST failed"), {}])
+async def test_stalled_pairing_with_failed_rest_and_live_transport_starts_reauth(hass, probe_result, port):
+    """Issue #49: a failed REST probe must not hide pairing on a live TV."""
+    class FakeTV:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def open(self):
+            raise TimeoutError("waiting for approval")
+
+        def rest_device_info(self):
+            if isinstance(probe_result, Exception):
+                raise probe_result
+            return probe_result
+
+        def close(self):
+            pass
+
+    writer = MagicMock()
+    writer.wait_closed = AsyncMock()
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=port)
+    entry = MockConfigEntry(domain=DOMAIN, data={"host": "frame.local", "port": port, "token": "SAVED"})
+    entry.add_to_hass(hass)
+    with (
+        patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        patch("asyncio.open_connection", new_callable=AsyncMock, return_value=(None, writer)) as connect,
+        patch("custom_components.samsung_frame_art_director.api.SamsungFrameClient", return_value=client),
+        patch.object(client, "async_initialize_database", new_callable=AsyncMock),
+        pytest.raises(ConfigEntryAuthFailed),
+    ):
+        await async_setup_entry(hass, entry)
+    connect.assert_awaited_once_with("frame.local", port)
+    writer.close.assert_called_once()
+    writer.wait_closed.assert_awaited_once()
+    assert not client.is_connected
+
+
 async def test_library_websocket_timeout_is_recognised_as_a_hang(hass):
     """samsungtvws' timeout is not a TimeoutError subclass — match it anyway.
 
@@ -584,10 +622,11 @@ async def test_stalled_handshake_reauth_reaches_home_assistant(hass):
     assert issubclass(PairingTimeoutError, AuthenticationRejectedError)
 
 
-async def test_stalled_handshake_on_an_unreachable_tv_stays_transient(hass):
+@pytest.mark.parametrize("transport_error", [ConnectionRefusedError(), TimeoutError(), OSError("offline")])
+async def test_stalled_handshake_on_an_unreachable_tv_stays_transient(hass, transport_error):
     """A silent TV is still just unavailable — never a reauthentication prompt.
 
-    Same stalled handshake as above, but the REST endpoint is dark too, so
+    Same stalled handshake as above, but REST and the TCP port are dark too, so
     nothing distinguishes this from a panel in deep standby. Asking the user
     to approve a TV that is switched off would be noise every single night.
     """
@@ -609,11 +648,51 @@ async def test_stalled_handshake_on_an_unreachable_tv_stays_transient(hass):
 
     with (
         patch.dict(sys.modules, {"samsungtvws": _fake_module(FakeTV)}),
+        patch("asyncio.open_connection", new_callable=AsyncMock, side_effect=transport_error),
         pytest.raises(DeviceUnavailableError),
     ):
         await client.async_connect_and_pair()
 
     assert client.is_connected is False
+
+
+async def test_transport_probe_timeout_cancels_pending_connection(hass):
+    """An offline transport cannot leave a background probe running."""
+    client = SamsungFrameClient(hass, "frame.local", token="SAVED", port=8002)
+    cancelled = asyncio.Event()
+
+    async def connect(*args):
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    with (
+        patch.object(client, "_async_run_blocking_contained", new_callable=AsyncMock, return_value=False),
+        patch("custom_components.samsung_frame_art_director.api.REACHABILITY_PROBE_TIMEOUT_SECONDS", 0.01),
+        patch("asyncio.open_connection", side_effect=connect),
+    ):
+        assert not await client._async_device_is_reachable(8002)
+    assert cancelled.is_set()
+
+
+@pytest.mark.enable_socket
+async def test_transport_probe_uses_and_closes_a_real_connection(hass, socket_enabled):
+    """A TCP-only probe sends no application data and closes its socket."""
+    received = asyncio.get_running_loop().create_future()
+
+    async def accept(reader, writer):
+        data = await reader.read()
+        writer.close()
+        await writer.wait_closed()
+        received.set_result(data)
+
+    server = await asyncio.start_server(accept, "127.0.0.1", 0)
+    client = SamsungFrameClient(hass, "127.0.0.1", token="SAVED")
+    async with server:
+        with patch.object(client, "_async_run_blocking_contained", new_callable=AsyncMock, return_value=False):
+            assert await client._async_device_is_reachable(server.sockets[0].getsockname()[1])
+        assert await asyncio.wait_for(received, 1) == b""
 
 
 async def test_authenticated_channel_failure_is_not_a_pairing_problem(hass):
