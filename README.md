@@ -86,7 +86,7 @@ After pairing, 3 explicit targeted actions are available: **Power On (IP Control
 
 ### Configure optional features
 The integration works with its defaults after pairing. Select **Configure** to adjust optional settings, grouped into collapsible sections:
-- **AI Image Tagging:** Select Google Gemini, OpenAI, or Anthropic. Enter that provider's API key and optionally choose its model. **Process Inbox** and **Sync Library** send the full image to the selected cloud provider.
+- **AI Image Tagging:** Select Google Gemini, OpenAI, or Anthropic. Enter that provider's API key and optionally choose its model. Choose **Without AI (local import)** to import without a key or cloud requests. With a cloud provider selected, **Process Inbox**, **Sync Library**, and **Tag Untagged Library Images** send images to that provider.
 - **Storage Cleanup:** Max items / age to keep on the TV, preserve-current, dry-run.
 - **Folders & Image:** Inbox/library folder paths and the image fit mode (crop vs. fit/letterbox).
 - **Connection & Power:** Wake-on-LAN MAC and power-key fallback.
@@ -96,7 +96,7 @@ The integration works with its defaults after pairing. Select **Configure** to a
 
 #### Cloud tagging providers
 
-Cloud tagging is disabled until you select a provider and save its API key. The default models accept image input and balance speed with cost:
+For local import, explicitly select **Without AI (local import)**. For cloud tagging, select a provider and save its API key. The default models accept image input and balance speed with cost:
 
 | Provider | Default model | API key |
 |---|---|---|
@@ -114,14 +114,29 @@ The integration uses two folders on your HA filesystem:
 
 | Folder | Purpose |
 |---|---|
-| `/media/frame/inbox` | Drop new images here. **Process Inbox** will analyze, tag, and move them to the library. |
+| `/media/frame/inbox` | Drop new images here. **Process Inbox** validates and moves them to the library, optionally adding AI tags. |
 | `/media/frame/library` | Permanent storage for processed images. Used by rotation and the gallery sensor. |
 
 ### Workflow
-1. Drop images into `/media/frame/inbox/`
-2. Run **Process Inbox** → the selected provider tags each image, then the integration moves it to `/media/frame/library/`
-3. Images appear in the Gallery sensor and are available for rotation
-4. If you add images directly to `/media/frame/library/`, run **Sync Library** to tag and register them
+1. Under **Configure → AI Image Tagging → Provider**, choose **Without AI (local import)** or a cloud provider.
+2. Drop images into `/media/frame/inbox/` and run **Process Inbox**. Images are validated and moved to `/media/frame/library/`. Without AI, tags and descriptions remain empty and no image is sent to a cloud service.
+3. Use the gallery, favorites, and slideshow without tag filters. Untagged images do not match positive filters such as `nature` or `winter`.
+
+**Sync Library** also supports local import: it registers files already in the library folder without requiring an API key when **Without AI** is selected. File validation and path protections apply in both modes.
+
+### Tag local imports later
+
+Select **Google Gemini**, **OpenAI**, or **Anthropic** under **Configure → AI Image Tagging**. Enter the selected provider's API key and, optionally, its model ID in the matching model field. Each provider has separate credentials and a separate model field; unused providers can remain blank. Custom models must accept images and return text. Leaving the model field blank uses that provider's default.
+
+Then run **Tag Untagged Library Images** (`samsung_frame_art_director.tag_untagged`), targeting your Frame. This explicitly sends registered images without tags to the selected cloud provider. Existing tags, favorites and files are preserved. Normal library sync does not reclassify existing entries. Provider charges may apply.
+
+```yaml
+action: samsung_frame_art_director.tag_untagged
+target:
+  entity_id: media_player.samsung_frame
+```
+
+Changing provider alone does not start classification. An explicitly selected cloud provider with a missing/invalid key reports an error; it does not silently fall back to local import. Existing cloud configurations remain unchanged.
 
 ---
 
@@ -308,7 +323,7 @@ target:
 ### Library actions
 
 #### process_inbox
-Scan `/media/frame/inbox`, analyze each image with the configured Gemini, OpenAI, or Anthropic provider, move it to `/media/frame/library`, and register it with normalized tags.
+Scan `/media/frame/inbox`, validate each image, move it to `/media/frame/library`, and register it. Without AI leaves tags empty; a selected cloud provider adds tags.
 ```yaml
 action: samsung_frame_art_director.process_inbox
 target:
@@ -327,13 +342,13 @@ target:
 Reconcile the library folder with the local database:
 1. **Deduplicates** the database (removes duplicate entries, keeps newest)
 2. **Removes stale entries**: database records whose files no longer exist on disk
-3. **Adds untracked images**: files in `/media/frame/library/` that are not yet in the database, tagged by the selected provider
+3. **Adds untracked images**: files in `/media/frame/library/` that are not yet in the database; imported locally without tags in **Without AI** mode, or tagged by the selected cloud provider
 ```yaml
 action: samsung_frame_art_director.sync_library
 target:
   entity_id: media_player.samsung_frame
 ```
-> **Note:** Phases 1 & 2 (cleanup) always run without AI. Phase 3 requires the selected provider's API key.
+> **Note:** Cleanup always runs without AI. Import needs no API key when **Without AI** is selected. Selecting a cloud provider requires its matching key. Use **Tag Untagged Library Images** separately to classify existing local imports.
 
 #### purge_database
 Wipe the local SQLite database (art history, tags, favorites). **Does NOT delete image files** from `/media/frame/library/`.
@@ -342,7 +357,7 @@ action: samsung_frame_art_director.purge_database
 target:
   entity_id: media_player.samsung_frame
 ```
-> **Tip:** After purging, run **Sync Library** to re-scan and re-tag your existing images.
+> **Tip:** After purging, run **Sync Library** to re-register your images using the selected local or cloud mode.
 
 ### Gallery management actions
 

@@ -2318,6 +2318,31 @@ class SamsungFrameClient:
                 )
         await self.hass.async_add_executor_job(_add)
 
+    async def async_get_untagged_local_art_paths(self) -> list[str]:
+        """Return registered files that have no tags, including local imports."""
+        await self._ensure_db()
+
+        def _read():
+            with self._get_db() as conn:
+                return [row["file_path"] for row in conn.execute(
+                    "SELECT file_path FROM local_art WHERE TRIM(COALESCE(tags, '')) = ''"
+                )]
+        return await self.hass.async_add_executor_job(_read)
+
+    async def async_tag_local_art(self, path: str, tags: str, description: str) -> bool:
+        """Tag an existing untagged row without replacing favorites or metadata."""
+        await self._ensure_db()
+
+        def _update():
+            with self._get_db() as conn:
+                cursor = conn.execute(
+                    "UPDATE local_art SET tags=?, description=? "
+                    "WHERE file_path=? AND TRIM(COALESCE(tags, '')) = ''",
+                    (tags, description, path),
+                )
+                return cursor.rowcount > 0
+        return await self.hass.async_add_executor_job(_update)
+
     async def async_get_local_art_paths(self) -> list[str]:
         """Return a list of all file paths currently in the local_art database."""
         await self._ensure_db()

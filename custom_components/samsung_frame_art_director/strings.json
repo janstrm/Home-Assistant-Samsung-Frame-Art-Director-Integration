@@ -82,7 +82,7 @@
         "sections": {
           "ai_tagging": {
             "name": "AI Image Tagging",
-            "description": "Optional cloud classification. Process Inbox and Sync Library send each image to the selected provider to generate tags. Provider usage may incur charges.",
+            "description": "Choose Without AI for local import with no cloud requests. Gallery, favorites and unfiltered slideshows work without tags. Cloud providers add tags and may charge for usage. Use Tag Untagged Library Images to classify existing imports later.",
             "data": {
               "ai_provider": "Provider",
               "gemini_api_key": "Gemini API key",
@@ -93,8 +93,8 @@
               "anthropic_model": "Anthropic model"
             },
             "data_description": {
-              "ai_provider": "The full image is sent from Home Assistant to this provider for classification.",
-              "gemini_api_key": "Required for Gemini. Get a free key at aistudio.google.com.",
+              "ai_provider": "Without AI imports locally with empty tags. Tag filters do not match untagged images. Selecting Gemini, OpenAI or Anthropic sends the full image to that provider; configure its matching API key and model.",
+              "gemini_api_key": "Required only when Gemini is selected. Obtain a key at aistudio.google.com; usage charges may apply.",
               "gemini_model": "Defaults to gemini-2.5-flash. A custom model must accept image input.",
               "openai_api_key": "Required for OpenAI image tagging. Sent directly through Home Assistant's HTTP client.",
               "openai_model": "Defaults to gpt-4o. A custom model must accept image input.",

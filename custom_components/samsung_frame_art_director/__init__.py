@@ -642,6 +642,16 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
                         f"Processed {result['count']} images from Inbox; {result.get('skipped', 0)} skipped.",
                         title="Art Director",
                     )
+            elif call.service == "tag_untagged":
+                from .curator import ContentCurator
+
+                result = await ContentCurator(hass, target.entry, client).async_tag_untagged()
+                error = f" {result['error']}" if result.get("error") else ""
+                persistent_notification.async_create(
+                    hass,
+                    f"Library tagging: {result['tagged']} tagged, {result['skipped']} skipped.{error}",
+                    title="Art Director",
+                )
             elif call.service == "sync_library":
                 from .curator import ContentCurator
 
@@ -677,6 +687,7 @@ def _register_domain_actions(hass: HomeAssistant) -> None:
 
     hass.services.async_register(DOMAIN, "process_inbox", async_service_handler)
     hass.services.async_register(DOMAIN, "sync_library", async_service_handler)
+    hass.services.async_register(DOMAIN, "tag_untagged", async_service_handler)
     hass.services.async_register(DOMAIN, "purge_database", async_service_handler)
 
     # New Favorites Services

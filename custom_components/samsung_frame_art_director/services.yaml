@@ -211,14 +211,21 @@ art_diagnostics:
 
 process_inbox:
   name: "Process Inbox"
-  description: "Scans the configured inbox, sends each validated image to the selected AI provider (Gemini, OpenAI, or Anthropic), tags it, and moves it to the library."
+  description: "Validates inbox images and moves them to the library. Select Without AI for local import without tags, or Gemini, OpenAI, or Anthropic for cloud tagging."
+  target:
+    entity:
+      domain: media_player
+
+tag_untagged:
+  name: "Tag Untagged Library Images"
+  description: "Sends registered images without tags to the selected AI provider. Configure its API key and an image-capable model first. Existing tags and favorites are preserved; files are not moved. Provider charges may apply."
   target:
     entity:
       domain: media_player
 
 sync_library:
   name: "Sync Library"
-  description: "Scans the library for untracked images and registers them with tags from the selected AI provider. Useful after manually adding files or after a database reset."
+  description: "Registers untracked library images. Without AI imports locally without tags; a selected cloud provider adds tags. Existing images are not reclassified. Use Tag Untagged Library Images to tag them later."
   target:
     entity:
       domain: media_player

@@ -50,6 +50,7 @@ async def test_domain_setup_registers_shared_interfaces(hass):
         "cleanup_storage",
         "process_inbox",
         "sync_library",
+        "tag_untagged",
         "purge_database",
         "toggle_favorite",
         "delete_art",

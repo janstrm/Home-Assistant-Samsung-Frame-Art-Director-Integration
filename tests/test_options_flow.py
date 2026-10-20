@@ -40,7 +40,8 @@ from custom_components.samsung_frame_art_director.switch import (
 _COMPONENT_DIR = pathlib.Path(__file__).parent.parent / "custom_components" / "samsung_frame_art_director"
 
 
-async def test_flatten_preserves_entity_managed_keys(hass):
+@pytest.mark.parametrize("provider", ["anthropic", "none"])
+async def test_flatten_preserves_entity_managed_keys(hass, provider):
     """Submitting the sectioned form must keep keys managed by entities."""
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -58,7 +59,7 @@ async def test_flatten_preserves_entity_managed_keys(hass):
 
     user_input = {
         "ai_tagging": {
-            "ai_provider": "anthropic",
+            "ai_provider": provider,
             "gemini_api_key": "NEW",
             "openai_api_key": "",
             "anthropic_api_key": "ANTHROPIC",
@@ -85,7 +86,7 @@ async def test_flatten_preserves_entity_managed_keys(hass):
     assert data["gemini_api_key"] == "NEW"
     assert data["anthropic_api_key"] == "ANTHROPIC"
     assert data["anthropic_model"] == "claude-custom"
-    assert data["ai_provider"] == "anthropic"
+    assert data["ai_provider"] == provider
     assert data["library_dir"] == "/l"
     # Entity-managed keys preserved (not in the form)
     assert data["matte_style"] == "modern"
