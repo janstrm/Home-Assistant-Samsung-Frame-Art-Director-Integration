@@ -100,11 +100,21 @@ For local import, explicitly select **Without AI (local import)**. For cloud tag
 
 | Provider | Default model | API key |
 |---|---|---|
-| Google Gemini | `gemini-2.5-flash` | [Create a key in Google AI Studio](https://aistudio.google.com/app/apikey) |
-| OpenAI | `gpt-4o` | [Create an OpenAI API key](https://platform.openai.com/api-keys) |
-| Anthropic | `claude-haiku-4-5-20251001` | [Create a key in Anthropic Console](https://console.anthropic.com/settings/keys) |
+| Google Gemini | `gemini-3.5-flash-lite` | [Create a key in Google AI Studio](https://aistudio.google.com/app/apikey) |
+| OpenAI | `gpt-4.1-mini` | [Create an OpenAI API key](https://platform.openai.com/api-keys) |
+| Anthropic | `claude-haiku-5-5` | [Create a key in Anthropic Console](https://console.anthropic.com/settings/keys) |
 
 You may enter another model ID for the selected provider. The model must accept image input and return text. Provider usage may incur charges under your account. The full image leaves Home Assistant during classification; API keys and provider response bodies are excluded from logs and returned errors.
+
+Defaults are Gemini 3.5 Flash-Lite, GPT-4.1 mini and Claude Haiku 5.5, chosen for lightweight image classification. Saved model IDs are not overwritten by an update. To adopt a new default, enter the ID from the table above in the corresponding model field (including when an older default was saved there).
+
+Tagging requests **1–15 relevant English tags**, not a fixed quota, plus one short factual description. It asks for visible features, avoids speculative artists/locations/seasons, and treats text inside an image as content rather than instructions. English tags keep slideshow filters consistent across providers.
+
+All default models receive a native JSON schema, and every response is validated locally for the exact fields, types, counts and lengths. Truncated or refused responses, Markdown, prose and comma-separated answers are rejected rather than stored as tags. Existing artwork is not automatically retagged.
+
+Custom model IDs remain supported. Gemini requests JSON/schema output; custom Gemini models must support it. Native schema constraints are enabled for the known OpenAI GPT-4.1 family / GPT-4o aliases and Claude Haiku 4.5/5.5, Sonnet 4.5 and Opus 4.5 families. Other OpenAI/Anthropic model IDs receive the JSON prompt and strict local validation without unverified schema parameters. Model-specific API compatibility still applies; unsupported model settings report an error, with no automatic paid retry or model substitution.
+
+Model/API references: [Gemini Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite), [GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini), [Haiku migration](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide). These choices are based on documented capabilities; comparative tag quality has not been benchmarked on a live image collection.
 
 ---
 
