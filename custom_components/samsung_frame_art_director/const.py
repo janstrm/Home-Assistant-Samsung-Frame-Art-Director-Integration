@@ -66,6 +66,7 @@ CONF_MATTE_ENABLED = "matte_enabled"
 
 # AI vision providers used for auto-tagging
 AI_PROVIDER_GEMINI = "gemini"
+AI_PROVIDER_NONE = "none"
 AI_PROVIDER_OPENAI = "openai"
 AI_PROVIDER_ANTHROPIC = "anthropic"
 

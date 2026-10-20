@@ -29,6 +29,7 @@ from .ai import (
 )
 from .api import SamsungFrameClient
 from .const import (
+    AI_PROVIDER_NONE,
     CONF_AI_MODEL,
     CONF_AI_PROVIDER,
     CONF_INBOX_DIR,
@@ -70,18 +71,18 @@ def _read_and_validate_ai_image(
     """Read and validate an AI input while running in HA's executor."""
     trusted_path = ensure_allowed_local_path(hass, path)
     if trusted_path.stat().st_size > max_bytes:
-        raise UnsafeAIImageError("Image exceeds the selected provider's input limit")
+        raise UnsafeAIImageError("Image exceeds the input size limit")
 
     with trusted_path.open("rb") as file_handle:
         data = file_handle.read(max_bytes + 1)
     if len(data) > max_bytes:
-        raise UnsafeAIImageError("Image exceeds the selected provider's input limit")
+        raise UnsafeAIImageError("Image exceeds the input size limit")
 
     detect_image_mime(data)
     with Image.open(BytesIO(data)) as image:
         width, height = image.size
         if width <= 0 or height <= 0 or width > max_dimension or height > max_dimension or width * height > max_pixels:
-            raise UnsafeAIImageError("Image dimensions exceed the AI input limit")
+            raise UnsafeAIImageError("Image dimensions exceed the input limit")
         image.verify()
 
     return ValidatedAIImage(data, width, height, len(data))
@@ -133,6 +134,8 @@ class ContentCurator:
         """
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+        if self.entry.options.get(CONF_AI_PROVIDER) == AI_PROVIDER_NONE:
+            return None, "", None
         spec, api_key, model = self._configured_provider()
         if spec is None:
             return None, "", "Unsupported AI provider configured."
@@ -190,7 +193,7 @@ class ContentCurator:
             _LOGGER.info("Process Inbox: Inbox folder '%s' is empty. Nothing to process.", self._inbox_dir)
             return {"count": 0}
 
-        _LOGGER.info("Process Inbox: Found %d images in '%s'. Starting AI analysis...", len(files), self._inbox_dir)
+        _LOGGER.info("Process Inbox: Found %d images in '%s'. Processing images...", len(files), self._inbox_dir)
 
         processed_count = 0
         skipped_count = 0
@@ -214,7 +217,7 @@ class ContentCurator:
                     image.data,
                     prompt="Describe this image",
                     api_key=api_key,
-                )
+                ) if analyzer is not None else {"tags": [], "description": ""}
 
                 if "error" in result:
                     error_str = str(result["error"])
@@ -244,7 +247,7 @@ class ContentCurator:
                 tags = ",".join(result.get("tags", []))
                 description = result.get("description", "")
 
-                _LOGGER.info("Process Inbox: AI tagged '%s' -> Tags: %s", filename, tags)
+                _LOGGER.info("Process Inbox: validated '%s' (cloud tagging=%s)", filename, analyzer is not None)
 
                 # 2. Move to Library (Executor)
                 def _move(source: Path, original_filename: str):
@@ -262,7 +265,7 @@ class ContentCurator:
                     shutil.move(str(trusted_source), str(dest_path))
                     return str(dest_path)
 
-                # CRITICAL: We move the file ONLY after AI analysis is successful
+                # Move only after validation and any requested analysis succeed.
                 dest_path = await self.hass.async_add_executor_job(
                     _move,
                     source_path,
@@ -387,7 +390,7 @@ class ContentCurator:
                 analyzer_err,
             )
         elif missing_files:
-            _LOGGER.info("Sync Library: Found %d untracked images. Starting AI analysis...", len(missing_files))
+            _LOGGER.info("Sync Library: Found %d untracked images. Processing images...", len(missing_files))
             max_bytes, max_pixels, max_dimension = _analyzer_limits(analyzer)
 
             for path in missing_files:
@@ -405,7 +408,7 @@ class ContentCurator:
                         image.data,
                         prompt="Describe this image",
                         api_key=api_key,
-                    )
+                    ) if analyzer is not None else {"tags": [], "description": ""}
                     if "error" in result:
                         error_str = str(result["error"])
                         provider_name = result.get("provider", "AI provider")
@@ -459,3 +462,35 @@ class ContentCurator:
         if batch_error:
             summary["error"] = batch_error
         return summary
+
+    async def async_tag_untagged(self):
+        """Explicitly classify registered images without tags; never move files."""
+        async with _curator_lock(self.hass):
+            analyzer, api_key, error = self._build_analyzer()
+            summary = {"tagged": 0, "skipped": 0}
+            if error or analyzer is None:
+                summary["error"] = error or "Select an AI provider and configure its API key before tagging."
+                return summary
+            limits = _analyzer_limits(analyzer)
+            for path in await self.api.async_get_untagged_local_art_paths():
+                try:
+                    image = await self.hass.async_add_executor_job(
+                        _read_and_validate_ai_image, self.hass, Path(path), *limits,
+                    )
+                    result = await analyzer.analyze_image(image.data, prompt="Describe this image", api_key=api_key)
+                    if "error" in result:
+                        summary["skipped"] += 1
+                        if result.get("batch_fatal"):
+                            summary["error"] = str(result["error"])
+                            break
+                        continue
+                    tags = ",".join(result.get("tags", []))
+                    if tags and await self.api.async_tag_local_art(path, tags, result.get("description", "")):
+                        summary["tagged"] += 1
+                    else:
+                        summary["skipped"] += 1
+                except Exception:  # noqa: BLE001
+                    # Do not expose provider payloads or credentials in errors.
+                    _LOGGER.warning("Tag Untagged: could not process a library image")
+                    summary["skipped"] += 1
+            return summary

@@ -30,6 +30,7 @@ from .bridge import async_encrypted_start_pairing, async_encrypted_try_pin, asyn
 from .const import (
     AI_PROVIDER_ANTHROPIC,
     AI_PROVIDER_GEMINI,
+    AI_PROVIDER_NONE,
     AI_PROVIDER_OPENAI,
     CONF_AI_MODEL,
     CONF_AI_PROVIDER,
@@ -491,6 +492,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(CONF_AI_PROVIDER, default=opts.get(CONF_AI_PROVIDER, AI_PROVIDER_GEMINI)): SelectSelector(
                     SelectSelectorConfig(
                         options=[
+                            SelectOptionDict(value=AI_PROVIDER_NONE, label="Without AI (local import)"),
                             SelectOptionDict(value=AI_PROVIDER_GEMINI, label="Google Gemini"),
                             SelectOptionDict(value=AI_PROVIDER_OPENAI, label="OpenAI"),
                             SelectOptionDict(value=AI_PROVIDER_ANTHROPIC, label="Anthropic"),
