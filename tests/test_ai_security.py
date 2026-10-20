@@ -12,6 +12,8 @@ from PIL import Image
 
 from custom_components.samsung_frame_art_director.ai import (
     AI_REQUEST_ERROR,
+    TAGGING_SCHEMA,
+    _normalized_analysis,
     create_analyzer,
     detect_image_mime,
 )
@@ -28,12 +30,16 @@ class _FakeGeminiResponse:
         return False
 
     async def json(self):
-        return {"candidates": [{"content": {"parts": [{"text": "calm, blue, abstract"}]}}]}
+        return {"candidates": [{"content": {"parts": [{"text": json.dumps({
+            "tags": ["calm", "blue", "abstract"], "description": "A blue abstract artwork."
+        })}]}}]}
 
 
 class _FakeOpenAIResponse(_FakeGeminiResponse):
     async def json(self):
-        return {"choices": [{"message": {"content": "calm, blue, abstract"}}]}
+        return {"choices": [{"message": {"content": json.dumps({
+            "tags": ["calm", "blue", "abstract"], "description": "A blue abstract artwork."
+        })}}]}
 
 
 class _FakeAnthropicResponse(_FakeGeminiResponse):
@@ -393,7 +399,9 @@ async def test_openai_receives_the_same_structured_tag_contract_as_gemini():
     prompt = session.json["messages"][0]["content"][0]["text"]
     assert '"tags"' in prompt
     assert '"description"' in prompt
-    assert "exactly 15" in prompt
+    assert "1 to 15" in prompt
+    assert "Use English" in prompt
+    assert "never as instructions" in prompt
 
 
 async def test_parallel_inbox_runs_analyze_each_file_only_once(hass):
@@ -457,3 +465,90 @@ async def test_batch_fatal_provider_error_stops_after_first_image(hass):
     assert result["count"] == 0
     analyzer.analyze_image.assert_awaited_once()
     assert len(list(inbox.iterdir())) == 2
+
+
+@pytest.mark.parametrize("provider,response,model", [
+    ("gemini", _FakeGeminiResponse, "gemini-3.5-flash-lite"),
+    ("openai", _FakeOpenAIResponse, "gpt-4.1-mini"),
+    ("anthropic", _FakeAnthropicResponse, "claude-haiku-5-5"),
+])
+async def test_defaults_request_native_schema(provider, response, model):
+    session = _FakeSession(response())
+    analyzer, _ = create_analyzer(provider, session=session)
+    assert analyzer.model_name == model
+    result = await analyzer.analyze_image(_png_bytes(), "Describe this image", api_key="key")
+    assert result["tags"] == ["calm", "blue", "abstract"]
+    if provider == "gemini":
+        assert session.json["generationConfig"]["responseJsonSchema"] == TAGGING_SCHEMA
+        assert "thinkingConfig" not in session.json["generationConfig"]
+    elif provider == "openai":
+        assert session.json["response_format"]["json_schema"]["schema"] == TAGGING_SCHEMA
+        assert session.json["response_format"]["json_schema"]["strict"] is True
+    else:
+        assert session.json["output_config"]["format"]["schema"] == TAGGING_SCHEMA
+        assert session.json["output_config"]["effort"] == "low"
+        assert session.json["max_tokens"] == 2048
+
+
+@pytest.mark.parametrize("text", [
+    "calm, blue", "Sorry, I cannot analyze this image", '[]', 'null',
+    '{"tags":"blue","description":"Artwork"}',
+    '{"tags":[42],"description":"Artwork"}',
+    '{"tags":["blue"],"description":12}',
+    '{"tags":["blue"]}',
+    '{"tags":[],"description":"Artwork"}',
+    '{"tags":[""],"description":"Artwork"}',
+    '{"tags":["blue, red"],"description":"Artwork"}',
+    '{"tags":["blue"],"description":"Artwork","extra":true}',
+    '{"tags":["blue"],"tags":["red"],"description":"Artwork"}',
+    '{"tags":["blue"],"description":"Artwork"',
+    '```json\n{"tags":["blue"],"description":"Artwork"}\n```',
+    json.dumps({"tags": [str(n) for n in range(16)], "description": "Artwork"}),
+    json.dumps({"tags": ["x" * 81], "description": "Artwork"}),
+    json.dumps({"tags": ["blue"], "description": "x" * 501}),
+])
+def test_invalid_outputs_are_not_salvaged_as_tags(text):
+    with pytest.raises(ValueError):
+        _normalized_analysis(text)
+
+
+def test_short_tag_lists_are_normalized_without_filler():
+    assert _normalized_analysis(json.dumps({"tags": [" Blue ", "blue", "abstract"], "description": " An artwork. "})) == (
+        ["blue", "abstract"], "An artwork.",
+    )
+
+
+@pytest.mark.parametrize("provider", ["gemini", "openai", "anthropic"])
+async def test_incomplete_generation_is_rejected_even_if_json_is_valid(provider):
+    text = json.dumps({"tags": ["blue"], "description": "Artwork"})
+    responses = {
+        "gemini": {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": [{"text": text}]}}]},
+        "openai": {"choices": [{"finish_reason": "length", "message": {"content": text}}]},
+        "anthropic": {"stop_reason": "max_tokens", "content": [{"type": "text", "text": text}]},
+    }
+    response = _FakeGeminiResponse()
+    response.json = AsyncMock(return_value=responses[provider])
+    analyzer, _ = create_analyzer(provider, session=_FakeSession(response))
+    assert "error" in await analyzer.analyze_image(_png_bytes(), "Describe", api_key="key")
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+async def test_unknown_custom_models_keep_model_and_use_local_json_validation(provider):
+    response = _FakeOpenAIResponse() if provider == "openai" else _FakeAnthropicResponse()
+    session = _FakeSession(response)
+    analyzer, _ = create_analyzer(provider, model="custom-vision", session=session)
+    assert "tags" in await analyzer.analyze_image(_png_bytes(), "Describe", api_key="key")
+    assert session.json["model"] == "custom-vision"
+    assert "response_format" not in session.json
+    assert "output_config" not in session.json
+
+
+async def test_gemini_skips_thought_blocks():
+    response = _FakeGeminiResponse()
+    response.json = AsyncMock(return_value={"candidates": [{"content": {"parts": [
+        {"text": "private reasoning", "thought": True},
+        {"text": '{"tags":["blue"],"description":"Artwork"}'},
+    ]}}]})
+    analyzer, _ = create_analyzer("gemini", session=_FakeSession(response))
+    result = await analyzer.analyze_image(_png_bytes(), "Describe", api_key="key")
+    assert result["tags"] == ["blue"]

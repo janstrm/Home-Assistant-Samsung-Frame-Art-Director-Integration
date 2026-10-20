@@ -72,9 +72,9 @@ AI_PROVIDER_ANTHROPIC = "anthropic"
 
 # Default models per provider. gemini-2.0-flash is being shut down (2026-06-01),
 # so default to a current model; users can override via the AI Model option.
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
-DEFAULT_OPENAI_MODEL = "gpt-4o"
-DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-5-5"
 
 SLIDESHOW_SOURCE_FOLDER = "folder"
 SLIDESHOW_SOURCE_TAGS = "Tags"
